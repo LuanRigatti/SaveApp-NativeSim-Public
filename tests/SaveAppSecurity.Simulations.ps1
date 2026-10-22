@@ -24,6 +24,13 @@ function Invoke-GitChecked {
   if ($LASTEXITCODE -ne 0) { throw "Test fixture git command failed: git $($Arguments -join ' ') $result" }
 }
 
+function Invoke-GitOutputChecked {
+  param([string]$Root,[string[]]$Arguments)
+  $result = & git -C $Root @Arguments 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Test fixture git command failed: git $($Arguments -join ' ') $result" }
+  return @($result | ForEach-Object { "$_" })
+}
+
 function Invoke-ScaffoldOnly {
   param([string]$Node,[string]$InitFile,[string]$Root)
   $code = @'
@@ -98,6 +105,64 @@ try {
   Assert-True (Test-SaveAppGitHubRemote -RemoteUrls @('https://github.com/LuanRigatti/SaveApp.git') -ExpectedRepository 'LuanRigatti/SaveApp') 'remote validator accepts the exact SaveApp GitHub URL'
   Assert-True (-not (Test-SaveAppGitHubRemote -RemoteUrls @('https://example.invalid/github.com/LuanRigatti/SaveApp.git') -ExpectedRepository 'LuanRigatti/SaveApp')) 'remote validator rejects a URL that merely ends in the authorized repository path'
   Assert-True (-not (Test-SaveAppGitHubRemote -RemoteUrls @('https://github.com/LuanRigatti/SaveApp.git','https://github.com/other/target.git') -ExpectedRepository 'LuanRigatti/SaveApp')) 'remote validator rejects multiple configured destinations'
+
+  $mirrorAllowedFiles = @('README.md','app.config.js')
+  $mirrorAllowedDirectories = @('src','docs')
+  $stagedGitFixture = Join-Path $tempRoot 'staged-path-fixture'
+  New-Item -ItemType Directory -Path (Join-Path $stagedGitFixture 'src') -Force | Out-Null
+  [IO.File]::WriteAllText((Join-Path $stagedGitFixture 'README.md'),'base readme',[Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $stagedGitFixture 'src\one.ts'),'one',[Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $stagedGitFixture 'src\two.ts'),'two',[Text.UTF8Encoding]::new($false))
+  Invoke-GitChecked $stagedGitFixture @('init','-b','main')
+  Invoke-GitChecked $stagedGitFixture @('config','user.email','saveapp-security-tests@example.invalid')
+  Invoke-GitChecked $stagedGitFixture @('config','user.name','SaveApp Security Tests')
+  Invoke-GitChecked $stagedGitFixture @('add','-A')
+  Invoke-GitChecked $stagedGitFixture @('commit','-m','temporary staged path fixture')
+
+  $emptyGitOutput = Invoke-GitOutputChecked $stagedGitFixture @('diff','--cached','--name-only')
+  $emptyStagedResult = Get-SaveAppMirrorStagedPathResult -GitOutput $emptyGitOutput `
+    -AllowedFiles $mirrorAllowedFiles -AllowedDirectories $mirrorAllowedDirectories
+  Assert-True ($emptyStagedResult.Paths -is [string[]] -and $emptyStagedResult.Paths.Length -eq 0 -and
+    -not $emptyStagedResult.HasChanges) 'an up-to-date Git mirror produces an empty string array and no-change result under StrictMode Latest'
+
+  [IO.File]::WriteAllText((Join-Path $stagedGitFixture 'src\one.ts'),'one changed',[Text.UTF8Encoding]::new($false))
+  Invoke-GitChecked $stagedGitFixture @('add','--','src/one.ts')
+  $singleGitOutput = Invoke-GitOutputChecked $stagedGitFixture @('diff','--cached','--name-only')
+  $singleStagedResult = Get-SaveAppMirrorStagedPathResult -GitOutput $singleGitOutput `
+    -AllowedFiles $mirrorAllowedFiles -AllowedDirectories $mirrorAllowedDirectories
+  Assert-True ($singleStagedResult.Paths -is [string[]] -and $singleStagedResult.Paths.Length -eq 1 -and
+    $singleStagedResult.Paths[0] -ceq 'src/one.ts' -and $singleStagedResult.HasChanges) 'one staged path remains a one-item collection and is recognized as a mirror change'
+
+  Invoke-GitChecked $stagedGitFixture @('commit','-m','temporary single staged path')
+  [IO.File]::WriteAllText((Join-Path $stagedGitFixture 'README.md'),'changed readme',[Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText((Join-Path $stagedGitFixture 'src\two.ts'),'two changed',[Text.UTF8Encoding]::new($false))
+  Invoke-GitChecked $stagedGitFixture @('add','--','README.md','src/two.ts')
+  $multipleGitOutput = Invoke-GitOutputChecked $stagedGitFixture @('diff','--cached','--name-only')
+  $multipleStagedResult = Get-SaveAppMirrorStagedPathResult -GitOutput $multipleGitOutput `
+    -AllowedFiles $mirrorAllowedFiles -AllowedDirectories $mirrorAllowedDirectories
+  Assert-True ($multipleStagedResult.Paths -is [string[]] -and $multipleStagedResult.Paths.Length -eq 2 -and
+    $multipleStagedResult.Paths[0] -ceq 'README.md' -and $multipleStagedResult.Paths[1] -ceq 'src/two.ts' -and
+    $multipleStagedResult.HasChanges) 'multiple staged paths remain an ordered collection and are recognized as mirror changes'
+
+  New-Item -ItemType Directory -Path (Join-Path $stagedGitFixture 'private') -Force | Out-Null
+  [IO.File]::WriteAllText((Join-Path $stagedGitFixture 'private\secret.txt'),'blocked',[Text.UTF8Encoding]::new($false))
+  Invoke-GitChecked $stagedGitFixture @('add','--','private/secret.txt')
+  $outsideAllowlistGitOutput = Invoke-GitOutputChecked $stagedGitFixture @('diff','--cached','--name-only')
+  Assert-Refused {
+    Get-SaveAppMirrorStagedPathResult -GitOutput $outsideAllowlistGitOutput `
+      -AllowedFiles $mirrorAllowedFiles -AllowedDirectories $mirrorAllowedDirectories
+  } 'staged paths outside the configured mirror allowlist are rejected'
+
+  $mirrorScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\mirror-saveapp.ps1') -Raw
+  $noChangeGateIndex = $mirrorScript.IndexOf('if (-not $stagedPathResult.HasChanges)',[StringComparison]::Ordinal)
+  $noChangeReturnIndex = if ($noChangeGateIndex -ge 0) {
+    $mirrorScript.IndexOf('return',$noChangeGateIndex,[StringComparison]::Ordinal)
+  } else { -1 }
+  $mirrorCommitIndex = $mirrorScript.IndexOf('& git -C $destinationRoot @commitArgs',[StringComparison]::Ordinal)
+  $mirrorPushIndex = $mirrorScript.IndexOf('& git -C $destinationRoot push --set-upstream origin main',[StringComparison]::Ordinal)
+  Assert-True ($noChangeGateIndex -ge 0 -and $noChangeReturnIndex -gt $noChangeGateIndex -and
+    $mirrorCommitIndex -gt $noChangeReturnIndex -and $mirrorPushIndex -gt $noChangeReturnIndex) 'an up-to-date mirror returns before any commit or push command'
+
   $baseStatement = 'The ' + ('Star' + 'ter') + ' UI template was used only as the initial base for this independent SaveApp snapshot.'
   $baseStatementVariant = $baseStatement.TrimEnd('.') + '!'
   Assert-True (Assert-SaveAppSafeContent -RelativePath 'docs/current-state.md' -Content $baseStatement) 'the exact static provenance sentence is allowed only in its designated documentation path'

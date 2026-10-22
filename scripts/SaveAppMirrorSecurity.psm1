@@ -70,6 +70,53 @@ function Test-SaveAppGitHubRemote {
   return $allowedUrls -contains $RemoteUrls[0].Trim()
 }
 
+function Test-SaveAppMirrorAllowedRelativePath {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$RelativePath,
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AllowedFiles,
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AllowedDirectories
+  )
+
+  $path = $RelativePath.Replace('\','/')
+  if ($AllowedFiles -contains $path) { return $true }
+  foreach ($directory in $AllowedDirectories) {
+    if ($path.StartsWith($directory + '/',[StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+function Get-SaveAppMirrorStagedPathResult {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][AllowEmptyCollection()][object[]]$GitOutput,
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AllowedFiles,
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AllowedDirectories,
+    [AllowEmptyCollection()][string[]]$AdditionalAllowedPaths = @()
+  )
+
+  $paths = [Collections.Generic.List[string]]::new()
+  if ($null -ne $GitOutput) {
+    foreach ($entry in $GitOutput) {
+      if ($null -eq $entry) { throw 'Git returned a null staged path.' }
+      $relativePath = ([string]$entry).Replace('\','/')
+      if ([string]::IsNullOrWhiteSpace($relativePath)) { throw 'Git returned an empty staged path.' }
+      $isAllowed = Test-SaveAppMirrorAllowedRelativePath -RelativePath $relativePath `
+        -AllowedFiles $AllowedFiles -AllowedDirectories $AllowedDirectories
+      if (-not $isAllowed -and $AdditionalAllowedPaths -notcontains $relativePath) {
+        throw "Staged path is outside the mirror allowlist: $relativePath"
+      }
+      $paths.Add($relativePath)
+    }
+  }
+
+  $pathArray = [string[]]$paths.ToArray()
+  return [pscustomobject]@{
+    Paths = $pathArray
+    HasChanges = ($pathArray.Length -gt 0)
+  }
+}
+
 function Get-SaveAppRelativeSegments {
   param([Parameter(Mandatory)][string]$RelativePath)
 
@@ -288,4 +335,4 @@ function Write-SaveAppProvenance {
   }
 }
 
-Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance
+Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Test-SaveAppMirrorAllowedRelativePath,Get-SaveAppMirrorStagedPathResult,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance

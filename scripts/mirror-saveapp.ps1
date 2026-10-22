@@ -45,12 +45,8 @@ function Get-RelativePath {
 }
 function Test-AllowedRelativePath {
   param([string]$RelativePath)
-  $path = $RelativePath.Replace('\','/')
-  if ($allowedFiles -contains $path) { return $true }
-  foreach ($directory in $allowedDirectories) {
-    if ($path.StartsWith($directory + '/',[StringComparison]::OrdinalIgnoreCase)) { return $true }
-  }
-  return $false
+  return Test-SaveAppMirrorAllowedRelativePath -RelativePath $RelativePath `
+    -AllowedFiles $allowedFiles -AllowedDirectories $allowedDirectories
 }
 function Get-CandidateFiles {
   $result = [Collections.Generic.List[string]]::new()
@@ -162,7 +158,7 @@ if ($destinationLive.Split()[0] -ne $destinationHead) {
   throw 'Public mirror local main must exactly match live origin/main before mirroring.'
 }
 
-$candidates = Get-CandidateFiles
+$candidates = @(Get-CandidateFiles)
 if ($candidates.Count -lt 1) { throw 'The mirror allowlist produced no files.' }
 Assert-SafeFiles $sourceRoot $candidates
 $expectedProvenance = @(
@@ -220,7 +216,12 @@ $stagePaths = @($candidates + $stalePaths | Sort-Object -Unique | ForEach-Object
 if ($LASTEXITCODE -ne 0) { throw 'Could not stage the exact allowlist.' }
 & git -C $destinationRoot diff --cached --check
 if ($LASTEXITCODE -ne 0) { throw 'Staged mirror diff failed git diff --check.' }
-$stagedPaths = Invoke-Git $destinationRoot @('diff','--cached','--name-only')
+$stagedPathResult = Get-SaveAppMirrorStagedPathResult `
+  -GitOutput (Invoke-Git $destinationRoot @('diff','--cached','--name-only')) `
+  -AllowedFiles $allowedFiles `
+  -AllowedDirectories $allowedDirectories `
+  -AdditionalAllowedPaths @('.nativesim-source')
+$stagedPaths = $stagedPathResult.Paths
 foreach ($relative in $stagedPaths) {
   $normalized = $relative.Replace('\','/')
   if (-not (Test-AllowedRelativePath $normalized) -and $normalized -ne '.nativesim-source') {
@@ -249,7 +250,7 @@ if (-not $Publish) {
   Write-Output 'Preview only: no commit or push was performed.'
   return
 }
-if (-not $stagedPaths.Count) {
+if (-not $stagedPathResult.HasChanges) {
   Write-Output 'The public mirror already matches this source snapshot; no commit or push is needed.'
   return
 }
