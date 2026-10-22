@@ -1,0 +1,75 @@
+name: EAS Simulator build
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Simulator-only EAS profile
+        type: choice
+        options:
+          - development-simulator
+          - preview-simulator
+        default: preview-simulator
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  eas-build:
+    name: Request a separately configured SaveApp EAS build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out SaveApp
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Install SaveApp dependencies
+        run: npm ci
+
+      - name: Require a SaveApp-owned EAS project
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+          SAVEAPP_EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          test -n "$EXPO_TOKEN" || { echo "::error::Add a SaveApp-owned EXPO_TOKEN Actions secret"; exit 1; }
+          test -n "$EAS_PROJECT_ID" || { echo "::error::Create and link a separate SaveApp EAS project, then set EAS_PROJECT_ID"; exit 1; }
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { getConfig } = require('expo/config');
+          const profile = JSON.parse(fs.readFileSync('eas.json', 'utf8')).build[process.env.PROFILE];
+          const config = getConfig(process.cwd(), { isPublic: true }).exp;
+          const id = config.extra?.eas?.projectId;
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(process.env.EAS_PROJECT_ID)) throw new Error('EAS_PROJECT_ID must be a UUID');
+          if (id !== process.env.EAS_PROJECT_ID) throw new Error('Resolved app config is not linked to the supplied SaveApp EAS project');
+          if (config.ios?.bundleIdentifier !== 'com.luanrigatti.saveapp') throw new Error('Unexpected iOS bundle identifier');
+          if (profile?.ios?.simulator !== true) throw new Error('Only Simulator profiles are allowed');
+          NODE
+
+      - name: Request the selected Simulator build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+          SAVEAPP_EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          npm install --global eas-cli@17.1.0
+          eas project:info --non-interactive
+          eas build --platform ios --profile "$PROFILE" --non-interactive --wait --json > eas-build.json
+          cat eas-build.json
+
+      - name: Keep EAS result metadata
+        if: always() && hashFiles('eas-build.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: saveapp-eas-build-metadata-${{ github.run_id }}
+          path: eas-build.json
+          retention-days: 7

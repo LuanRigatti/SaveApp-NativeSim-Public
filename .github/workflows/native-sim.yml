@@ -1,0 +1,299 @@
+# native-sim-template-version: 18
+# SaveApp streaming Simulator workflow. An auth gate protects the public tunnel.
+name: native-sim
+run-name: native-sim ${{ inputs.session }} · ${{ inputs.configuration }} · ${{ inputs.minutes }}m
+
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: Session identifier used to correlate the local NativeSim CLI
+        required: true
+      gate_token:
+        description: One-time stream access key supplied by NativeSim
+        required: true
+      minutes:
+        description: Stream duration, up to 350 minutes
+        default: "120"
+      device:
+        description: iOS Simulator device
+        default: iPhone 17 Pro
+      mode:
+        description: Only build mode is supported
+        default: build
+      configuration:
+        description: Xcode build configuration
+        type: choice
+        options:
+          - release
+        default: release
+        required: true
+      app_url:
+        description: Reserved for NativeSim CLI compatibility
+        default: ""
+      app_release_asset:
+        description: Reserved for NativeSim CLI compatibility
+        default: ""
+      transport:
+        description: HTTP/MJPEG streaming is used
+        default: http
+      codec:
+        description: Stream codec
+        default: mjpeg
+      max_dimension:
+        description: Maximum stream dimension in pixels
+        default: "900"
+      video_fps:
+        description: Stream frame rate
+        default: "30"
+      video_quality:
+        description: MJPEG quality from 0.05 to 1
+        default: "0.7"
+      export_app:
+        description: Export unsigned Simulator app as a tar.gz artifact
+        default: "true"
+      agent_device:
+        description: Remote interaction proxy is not enabled
+        default: "false"
+      agent_device_version:
+        description: Reserved for NativeSim CLI compatibility
+        default: 0.20.1
+      scheme:
+        description: Xcode scheme
+        default: SaveApp
+      cache:
+        description: Reserved for NativeSim CLI compatibility
+        default: "false"
+      runner:
+        description: Validated macOS runner
+        default: macos-26
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: native-sim-${{ inputs.session }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    name: Build and stream SaveApp
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    env:
+      PREVIEW_PORT: "3200"
+      GATE_PORT: "3199"
+      STATUS_CONTEXT: native-sim/${{ inputs.session }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the exact public mirror commit
+        uses: actions/checkout@v4
+
+      - name: Mask stream access key
+        run: |
+          set -euo pipefail
+          NATIVE_SIM_GATE_TOKEN="$(jq -er '.inputs.gate_token | strings | select(test("^[A-Za-z0-9_-]{32}$"))' "$GITHUB_EVENT_PATH")"
+          printf '::add-mask::%s\n' "$NATIVE_SIM_GATE_TOKEN"
+          echo "NATIVE_SIM_GATE_TOKEN=$NATIVE_SIM_GATE_TOKEN" >> "$GITHUB_ENV"
+          unset NATIVE_SIM_GATE_TOKEN
+
+      - name: Validate SaveApp NativeSim inputs
+        env:
+          MODE: ${{ inputs.mode }}
+          TRANSPORT: ${{ inputs.transport }}
+          AGENT_DEVICE: ${{ inputs.agent_device }}
+          RUNNER_LABEL: ${{ inputs.runner }}
+          SESSION_MINUTES: ${{ inputs.minutes }}
+        run: |
+          set -euo pipefail
+          test "$MODE" = "build" || { echo "::error::Only mode=build is supported"; exit 1; }
+          test "$TRANSPORT" = "http" || { echo "::error::Only HTTP streaming is configured"; exit 1; }
+          test "$AGENT_DEVICE" != "true" || { echo "::error::agent-device proxy is not enabled in SaveApp"; exit 1; }
+          test "$RUNNER_LABEL" = "macos-26" || { echo "::error::Use the validated arm64 macos-26 runner"; exit 1; }
+          test "$SESSION_MINUTES" -ge 1
+          test "$SESSION_MINUTES" -le 350
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Boot iOS Simulator
+        id: simulator
+        env:
+          DEVICE_NAME: ${{ inputs.device }}
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available | grep -F "$DEVICE_NAME (" | head -1 | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/' || true)
+          if [ -z "$UDID" ]; then
+            echo "::warning::Requested device unavailable; selecting the newest available iPhone"
+            UDID=$(xcrun simctl list devices available | grep -E '^\s+iPhone' | tail -1 | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          fi
+          test -n "$UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Start Simulator streaming server
+        env:
+          MAX_DIMENSION: ${{ inputs.max_dimension }}
+          VIDEO_FPS: ${{ inputs.video_fps }}
+          VIDEO_QUALITY: ${{ inputs.video_quality }}
+          STREAM_CODEC: ${{ inputs.codec }}
+        run: |
+          set -euo pipefail
+          nohup npx --yes @expo/serve-sim@0.5.0 \
+            --quiet \
+            --allow-any-host-when-insecure \
+            --port "$PREVIEW_PORT" \
+            --max-dimension "$MAX_DIMENSION" \
+            --video-fps "$VIDEO_FPS" \
+            --codec "$STREAM_CODEC" \
+            --mjpeg-fps "$VIDEO_FPS" \
+            --mjpeg-quality "$VIDEO_QUALITY" \
+            > serve-sim.log 2>&1 &
+          disown
+          for _ in $(seq 1 90); do
+            if curl -fsS "http://127.0.0.1:$PREVIEW_PORT/readyz" >/dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          cat serve-sim.log || true
+          exit 1
+
+      - name: Start authenticated stream gate
+        run: |
+          set -euo pipefail
+          NATIVE_SIM_TARGET_PORT="$PREVIEW_PORT" NATIVE_SIM_GATE_PORT="$GATE_PORT" \
+            nohup node .github/native-sim/gate.cjs > gate.log 2>&1 &
+          disown
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://127.0.0.1:$GATE_PORT/__native-sim/healthz" && exit 0
+            sleep 1
+          done
+          cat gate.log
+          exit 1
+
+      - name: Open tunnel and publish protected status
+        id: tunnel
+        run: |
+          set -euo pipefail
+          curl -fsSL -o cloudflared.tgz \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz
+          tar -xzf cloudflared.tgz
+          chmod +x cloudflared
+          nohup ./cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$GATE_PORT" \
+            --logfile cloudflared.log > /dev/null 2>&1 &
+          disown
+          TUNNEL=""
+          for _ in $(seq 1 60); do
+            TUNNEL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' cloudflared.log 2>/dev/null | head -1 || true)
+            [ -n "$TUNNEL" ] && break
+            sleep 2
+          done
+          [ -n "$TUNNEL" ] || { tail -50 cloudflared.log; exit 1; }
+          echo "bare_url=$TUNNEL" >> "$GITHUB_OUTPUT"
+          echo "NATIVE_SIM_BARE_URL=$TUNNEL" >> "$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success \
+            -f "context=$STATUS_CONTEXT" \
+            -f "target_url=$TUNNEL" \
+            -f "description=Simulator stream is starting"
+          {
+            echo "## SaveApp Simulator"
+            echo
+            echo "The authenticated Simulator stream is available through NativeSim."
+            echo "The access key is not included in this status."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate iOS project and install CocoaPods
+        run: |
+          npx expo prebuild --platform ios --no-install
+          npx pod-install ios
+
+      - name: Build unsigned Simulator app
+        env:
+          UDID: ${{ steps.simulator.outputs.udid }}
+          SCHEME: ${{ inputs.scheme }}
+        run: |
+          set -euo pipefail
+          WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace' | head -1)
+          test -n "$WORKSPACE"
+          DERIVED_DATA="build/native-sim-derived-data"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -quiet \
+            build
+          APP=$(find "$DERIVED_DATA/Build/Products/Release-iphonesimulator" -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$APP"
+          mkdir -p build/native-sim-app
+          cp -R "$APP" build/native-sim-app/
+
+      - name: Export the .app archive
+        if: inputs.export_app == 'true'
+        run: |
+          set -euo pipefail
+          APP=$(find build/native-sim-app -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$APP"
+          tar -C build/native-sim-app -czf "build/$(basename "$APP").tar.gz" "$(basename "$APP")"
+          ls -lh build/*.app.tar.gz
+
+      - name: Upload Simulator archive
+        if: inputs.export_app == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-sim-app-${{ inputs.session }}
+          path: build/*.app.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Install and launch SaveApp
+        env:
+          UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          APP=$(find build/native-sim-app -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$APP"
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" com.luanrigatti.saveapp
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success \
+            -f "context=$STATUS_CONTEXT" \
+            -f "target_url=$NATIVE_SIM_BARE_URL" \
+            -f "description=SaveApp is running in iOS Simulator"
+
+      - name: Keep the stream available
+        env:
+          SESSION_MINUTES: ${{ inputs.minutes }}
+        run: |
+          set -euo pipefail
+          END=$(( $(date +%s) + SESSION_MINUTES * 60 ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            curl -fsS -o /dev/null "http://127.0.0.1:$PREVIEW_PORT/healthz"
+            sleep 15
+          done
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success \
+            -f "context=$STATUS_CONTEXT" \
+            -f "target_url=$NATIVE_SIM_BARE_URL" \
+            -f "description=Simulator session finished"
+
+      - name: Mark failed session
+        if: failure()
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=failure \
+            -f "context=$STATUS_CONTEXT" \
+            -f "description=SaveApp NativeSim session failed" || true

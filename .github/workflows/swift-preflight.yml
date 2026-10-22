@@ -1,0 +1,74 @@
+name: Swift Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-preflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Verify SaveApp iOS native modules and patches
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Report toolchain
+        run: |
+          node --version
+          npm --version
+          xcodebuild -version
+          ruby --version
+          pod --version
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Check Expo SDK compatibility
+        run: |
+          npx expo install --check
+          npx expo-doctor
+
+      - name: Verify TypeScript, lint, tests, and native contracts
+        run: |
+          npm run typecheck
+          npm run lint
+          npm test -- --runInBand
+          node scripts/verify-saveapp-native.js
+
+      - name: Generate iOS project and install CocoaPods
+        run: |
+          npx expo prebuild --platform ios --no-install
+          npx pod-install ios
+
+      - name: Check generated native project and patches
+        run: |
+          test -f ios/SaveApp.xcworkspace/contents.xcworkspacedata
+          grep -q 'StarterToolbarMorphExperimentVariant' ios/SaveApp/Info.plist
+          grep -q 'ignoresSafeArea(.container, edges: .bottom)' node_modules/@expo/ui/ios/BottomSheetView.swift
+          grep -q 'react-native-screens' package.json
+
+      - name: Compile the Simulator app without signing
+        run: |
+          xcodebuild \
+            -workspace ios/SaveApp.xcworkspace \
+            -scheme SaveApp \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            -quiet \
+            build
