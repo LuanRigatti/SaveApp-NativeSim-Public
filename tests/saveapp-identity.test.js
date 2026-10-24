@@ -24,9 +24,9 @@ describe('SaveApp identity and template boundary', () => {
     const rootPackage = lockfile.packages[''];
     expect(rootPackage.dependencies).toEqual(packageJson.dependencies);
     expect(rootPackage.devDependencies).toEqual(packageJson.devDependencies);
-    expect(packageJson.dependencies.expo).toBe('~58.0.12');
+    expect(packageJson.dependencies.expo).toBe('~58.0.19');
     expect(packageJson.dependencies['react-native-screens']).toBe('4.30.0');
-    expect(packageJson.dependencies['@expo/ui']).toBe('~58.0.19');
+    expect(packageJson.dependencies['@expo/ui']).toBe('~58.0.23');
   });
 
   test('has no business service dependencies', () => {

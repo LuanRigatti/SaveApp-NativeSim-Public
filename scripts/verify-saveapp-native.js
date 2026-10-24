@@ -15,9 +15,9 @@ const prohibitedDependencies = [
 ];
 
 const expectedVersions = {
-  expo: '~58.0.12',
+  expo: '~58.0.19',
   'react-native-screens': '4.30.0',
-  '@expo/ui': '~58.0.19',
+  '@expo/ui': '~58.0.23',
 };
 
 function fail(message) {

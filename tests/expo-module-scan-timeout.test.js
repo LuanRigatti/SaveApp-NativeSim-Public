@@ -73,7 +73,7 @@ describe("Expo module scan timeout patch", () => {
   });
 
   test("fails closed when the installed Expo Autolinking version changes", () => {
-    writeScannerFixtures("58.0.15");
+    writeScannerFixtures("58.0.14");
 
     expect(() => applyPatch(projectRoot)).toThrow(
       `Expected expo-modules-autolinking ${EXPECTED_AUTOLINKING_VERSION}`,

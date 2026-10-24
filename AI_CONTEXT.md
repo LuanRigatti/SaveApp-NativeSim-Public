@@ -41,7 +41,7 @@ Correção da descrição acima: o gesto vertical do Native Stack é fallback pa
 
 ## Runtime e navegação
 
-As versões declaradas em `package.json` são Expo SDK 58 (`expo ~58.0.12`), React Native `0.88.0`, React `19.3.0`, TypeScript `~6.0.3`, Expo Router `~58.0.25`, `@expo/ui ~58.0.19` e `react-native-screens 4.30.0`. O `package-lock.json` registra as resoluções e integridades instaladas; não as altere sem solicitação no escopo.
+As versões declaradas em `package.json` são Expo SDK 58 (`expo ~58.0.19`), React Native `0.88.0`, React `19.3.0`, TypeScript `~6.0.3`, Expo Router `~58.0.26`, `@expo/ui ~58.0.23`, `expo-dev-client ~58.0.15`, `expo-file-system ~58.0.11`, `expo-font ~58.0.10`, `expo-glass-effect ~58.0.5`, `expo-image ~58.0.17`, `expo-sqlite ~58.0.14` e `react-native-screens 4.30.0`. O `package-lock.json` registra as resoluções e integridades instaladas; mantenha-o sincronizado em atualizações autorizadas.
 
 - Expo Router usa `expo-router/native-tabs` estável.
 - Native Stack e `Stack.Toolbar` mantêm a navegação e os controles de toolbar nativos.
@@ -65,8 +65,8 @@ Esses componentes formam a base visual e nativa funcional. As telas demonstrativ
 ## Contratos nativos e de segurança
 
 - `plugins/withStarterToolbarSync.js` e a chave plist `StarterToolbarMorphExperimentVariant` são identificadores internos de compatibilidade. Os anchors do plugin dependem de `react-native-screens 4.30.0`; não renomeie nem remova esses identificadores sem uma mudança explicitamente solicitada e validada.
-- `scripts/patch-expo-ui-bottom-sheet.js` ajusta a área segura inferior do Bottom Sheet de `@expo/ui 58.0.19`.
-- `scripts/patch-expo-module-scan-timeout.js` ajusta o scanner Apple de `expo-modules-autolinking 58.0.14` e falha se a versão ou o anchor esperado mudar.
+- `scripts/patch-expo-ui-bottom-sheet.js` ajusta a área segura inferior do Bottom Sheet de `@expo/ui 58.0.23`.
+- `scripts/patch-expo-module-scan-timeout.js` ajusta o scanner Apple de `expo-modules-autolinking 58.0.15` e falha se a versão ou o anchor esperado mudar.
 - `.github/native-sim/gate.cjs` e `.github/workflows/native-sim.yml` mantêm um contrato auditado; o workflow usa o template 18 e a normalização aprovada do token.
 - Simulações locais usam fixtures e GitHub/CLI simulados; não iniciam `native-sim up`, workflows remotos nem publicação do espelho.
 - O launcher cria um clone temporário no SHA público exato e direciona o push para um sink local; não deve publicar alterações na fonte privada.
