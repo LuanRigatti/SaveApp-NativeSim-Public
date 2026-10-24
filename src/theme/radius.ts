@@ -3,6 +3,7 @@ export const radius = {
   md: 12,
   lg: 16,
   card: 20,
+  linkCard: 32,
   xl: 22,
   pill: 999,
 } as const;

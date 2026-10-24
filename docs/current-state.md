@@ -1,54 +1,121 @@
 # Estado atual — SaveApp
 
-## Snapshot e escopo
+## Produto e estágio
 
-SaveApp é um app independente de demonstração de UI em React Native, Expo SDK 58 e TypeScript. Não possui login, rede de dados, banco remoto, persistência de conteúdo ou funcionalidade para salvar fotos, links e textos.
+A base visual Starter foi usada somente como ponto de partida para este SaveApp independente.
 
-The Starter UI template was used only as the initial base for this independent SaveApp snapshot.
+SaveApp é independente e sua migração para identidade e repositórios próprios está concluída. O projeto está na fase de desenvolvimento funcional: o usuário define os recursos gradualmente. Não presuma funcionalidades futuras.
 
-The provided clean snapshot SHA is `2c02d426611b83b913ae7297a929d0d6d845dd9d`.
+O app possui quatro abas — Home, Coleções, Buscar e Ajustes — exibidas somente por ícones, com nomes acessíveis para leitores de tela, além das rotas de detalhe existentes. Home mostra “Salvo” como título grande de 36 pt (token `largeTitle` de 34 pt mais 2 pt) e como título compacto no tamanho atual; o menu nativo “+” permanece na toolbar. “Adicionar imagens” abre o seletor de imagens estáticas do sistema; “Adicionar vídeos” abre o seletor de vídeos em modo Passthrough no iOS; “Adicionar arquivos” permanece sem ação. Fotos são copiadas para `Documents/photos`; vídeos e suas miniaturas JPEG persistentes ficam em pastas próprias dentro de `Documents/videos`. Os metadados ficam no SQLite local `saveapp-photos.db`, com IDs estáveis, tipo explícito, caminho relativo, dimensões, data, MIME e, para vídeos, duração e caminho da miniatura. A migração acrescenta colunas à tabela existente `photos` com `ALTER TABLE`, atribui `photo` por padrão às linhas antigas e não recria nem limpa o banco.
 
-O diretório de trabalho contém o snapshot exato informado e não possui `.git`. Nenhum workflow, publicação, build nativo ou sessão foi iniciado durante esta implementação.
+Home mistura fotos e vídeos na mesma FlashList masonry de duas colunas, ordenada por data de importação e ID, mantendo proporções, espaçamentos e cantos existentes. As células mostram miniaturas estáticas e não montam players; vídeos têm ícone de reprodução e duração discreta. Um toque abre fotos e vídeos com `Link.AppleZoom` no iOS 18 ou posterior; a rota de vídeo marca seu contêiner como `Link.AppleZoomTarget` e mantém a miniatura JPEG persistente sobre o player até o primeiro frame ser renderizado. O vídeo continua em uma rota própria com `expo-video`, controles nativos e imagem inteira. Em versões anteriores do iOS e outras plataformas, o vídeo mantém a transição vertical do Native Stack; o caminho de preview contextual não modal dos vídeos permanece no fallback padrão documentado pelo Expo. Pressionar qualquer mídia usa `Link.Preview`, `Link.Menu` e `Link.MenuAction`; fotos exibem “Apagar imagem” e vídeos “Apagar vídeo”. A confirmação remove somente a cópia do SaveApp e seus metadados, preservando o original na fototeca. O preview de foto mantém dimensões finitas; células continuam sem `Host`, `RNHostView` ou `matchContents`. A flag `NATIVE_PHOTO_CONTEXT_MENU_ENABLED` permite voltar ao Link direto. No iOS 18+, a rota de fotos usa `fullScreenModal`, requisito documentado pelo Expo para combinar `Link.Preview` e Zoom Transition; toque simples e promoção do preview mantêm o mesmo destino e Apple Zoom. A documentação Expo também alerta para possíveis glitches de zoom em telas com header; o player mantém o header nativo preto e a toolbar X para preservar os controles e Safe Areas existentes. Leituras da galeria não removem arquivos ou linhas SQLite automaticamente. Cancelamentos e falhas parciais de importação não registram mídias incompletas.
 
-## Identidade e destinos
+Na importação de vídeos, a miniatura aguarda o player atingir `readyToPlay` antes de chamar `generateThumbnailsAsync`; a duração usada para solicitar o frame é convertida para segundos pelo player. Quando o seletor não entrega dimensões ou duração válidas, o fluxo tenta recuperar os dados do player e da miniatura; uma duração ainda desconhecida fica nula no registro e não invalida o vídeo. Falhas parciais continuam isoladas por item e são apresentadas ao usuário com mensagens genéricas, sem logs técnicos de diagnóstico.
+
+O usuário confirmou no iPhone a importação, a exibição e a reprodução de vídeos, além dos controles nativos, das Safe Areas e do botão X. O player desativa a apresentação fullscreen interna redundante. O header nativo preto reserva a área superior antes do VideoView; SafeAreaView aplica somente os insets inferior e laterais. `useFocusEffect` pausa o player ao perder foco e `useVideoPlayer` libera seus recursos ao desmontar a rota. A abertura Apple Zoom de fotos e vídeos foi aprovada no iPhone; o dismiss interativo foi testado e mostrou comportamento inconsistente. O cancelamento do gesto e a convivência simultânea com os controles do player ainda precisam ser verificados. Coleções mostra somente o título grande “Coleções”, seguindo o mesmo padrão visual nativo de Ajustes. Buscar mostra somente o título grande. Ajustes apresenta somente o título grande, sem opções de aparência; a rota de detalhe mantém conteúdo demonstrativo sem controles de tema. Links e textos agora são salvos localmente e aparecem misturados à mídia na Home.
+
+O tema é exclusivamente automático: `ThemeProvider` deriva Light/Dark de `useColorScheme`, que acompanha alterações de aparência do iOS; `app.config.js` mantém `userInterfaceStyle: 'automatic'`. O tema inicial vem diretamente do sistema, sem aguardar preferências armazenadas. A antiga chave `@saveapp/theme-mode` é removida isoladamente como limpeza best-effort e nunca é consultada; outras preferências AsyncStorage, incluindo o modo de visualização da Home, permanecem intactas. O usuário testou e aprovou no iPhone o acompanhamento automático do tema, incluindo a alternância Light/Dark conforme o sistema.
+
+No iOS, após a confirmação e a exclusão persistente bem-sucedida, a Home usa a animação de layout da FlashList v2 para suavizar a opacidade da mídia removida e o reposicionamento masonry (260 ms). O recurso respeita o ajuste de movimento reduzido do sistema exposto pelo `ThemeProvider`; cancelamentos e falhas não animam nem removem a mídia da galeria. Nas demais plataformas, a remoção segue sem LayoutAnimation.
+
+## Links, textos e agrupamento diário — 23 de outubro de 2026
+
+O menu nativo `+` mantém as ações existentes de imagens/vídeos e adiciona “Adicionar link” e “Adicionar texto”; “Adicionar arquivos” continua sem ação. Compositores usam o `NativeSheet` compartilhado, com fallback em Expo Go. Links validam e normalizam HTTP/HTTPS, evitam duplicação e tentam ler Open Graph, Twitter Cards, título HTML e favicon no próprio site. Requisições não usam serviço externo, limitam redirects, tempo e bytes; falhas de extração ou de download da imagem mantêm um card de domínio e título. A imagem que foi baixada é copiada para `Documents/home-content/link-previews`; a Home usa o caminho local e não requisita uma imagem remota durante a rolagem. Textos e metadados de links ficam offline no mesmo banco SQLite `saveapp-photos.db`.
+
+O schema novo `saved_content` guarda links e textos com IDs próprios, tipo, timestamp, URL normalizada, metadados opcionais e texto integral. A migração versão 1 é idempotente e transacional, cria uma tabela nova e índices; não modifica a tabela `photos`, os registros de mídia, nem seus arquivos. A Home combina os dois catálogos tipados, ordena do mais recente para o mais antigo e calcula os dias no fuso local. Cards de link usam `GlassView` nativo regular atrás do título e domínio, com fallback sólido quando o Glass não está disponível ou a transparência reduzida está ativada. A prévia local permanece no topo; o raio é 32 pt. O toque simples tem escala sutil de 0,98, highlight discreto na borda e haptic leve. Textos mostram um trecho e abrem a leitura integral. Toque longo oferece ação destrutiva nativa e confirmação; cancelamento não altera dados.
+
+O menu nativo de visualização aparece apenas na Home, ao lado do menu `+`, com as opções `Maiores`, `Menores`, `Lista` e `Lista compacta`. AsyncStorage guarda a preferência em `@saveapp/home-view-mode`; sem preferência anterior, o padrão permanece `Maiores` (masonry de duas colunas), e os valores salvos anteriores continuam válidos. `Menores` usa três colunas masonry e os dois modos de lista usam uma coluna horizontal. `Lista` tem linhas sem superfície externa, com 96 pt de altura e miniaturas de 72 pt; `Lista compacta` tem linhas de 76 pt na escala de fonte padrão e miniaturas de 52 pt. Fotos, vídeos e previews de links usam raio de 14 pt com clipping correspondente nos dois modos. A altura compacta aumenta com Dynamic Type. O usuário confirmou a aparência dos modos de lista no iPhone. Fotos e vídeos mantêm miniaturas, menus e Apple Zoom, links mantêm título/domínio e preview opcional, e textos não recebem miniatura artificial. Os modos usam os mesmos itens, IDs estáveis, ordenação cronológica e agrupamento por dia. Separadores ocupam o span de todas as colunas (`1`, `2` ou `3`) e `optimizeItemArrangement={false}` permanece ativo. Ao trocar de modo, a FlashList é remontada com chave controlada e tenta restaurar o deslocamento vertical após desenhar conteúdo. A configuração dos dois menus solicita fundo nativo compartilhado com `separateBackground={false}`.
+
+No modo `Lista`, as linhas de fotos, vídeos, links e textos ficam diretamente sobre o fundo da Home, sem superfície externa; a aparência foi aprovada pelo usuário no iPhone. A altura é 96 pt, as miniaturas quadradas medem 72 pt e usam raio de 14 pt com clipping explícito. `Lista compacta` usa 76 pt de altura na escala de fonte padrão e miniaturas de 52 pt; fotos, vídeos e previews de links mantêm o mesmo raio de 14 pt com clipping correspondente. A altura cresce quando Dynamic Type exige mais espaço. Títulos de links e trechos de texto permanecem limitados a duas linhas; textos continuam sem miniatura artificial. Maiores e Menores não foram alterados.
+
+Nas linhas de links de `Lista` e `Lista compacta`, a apresentação local identifica conservadoramente Instagram, X/Twitter, YouTube (`youtube.com` e `youtu.be`) e TikTok pelo hostname da URL salva. Um rótulo discreto mostra a origem; o título/autor e o subtítulo usam somente o título e a descrição já persistidos, com remoção de sufixos de marca conhecidos e truncamento curto. Domínios não reconhecidos mantêm título e descrição originais, com o domínio como rótulo amigável. Não são adicionados ícones grandes, requisições de rede ou metadados; a prévia, a abertura e a exclusão dos links permanecem iguais. Maiores e Menores não foram alterados. O usuário aprovou esse refinamento visual no iPhone.
+
+O salvamento de links foi testado e aprovado pelo usuário no iPhone, incluindo a conclusão da janela e a apresentação de fallback quando a prévia não está disponível. O timeout interno de metadados e falhas de rede, resposta HTTP ou cache são opcionais: o SaveApp mantém a URL original e grava título derivado do endereço, domínio e imagem ausente quando necessário. Cancelamento explícito permanece distinto de timeout; erros reais da persistência são apresentados e permitem retry. O envio único, a atualização do provider e o fechamento após sucesso têm cobertura automatizada. A validação de leitura detalhada, exclusão, prévias offline, virada do dia, grupos masonry e coexistência de todas as interações continua separada e não deve ser inferida desse teste.
+
+### Nomes e renomeação de fotos — 23 de outubro de 2026
+
+Nos modos `Lista` e `Lista compacta`, o título personalizado ou o nome-base automático (`Foto` ou `Captura de tela`) aparece na primeira linha. A segunda linha usa tipografia secundária e mostra `Hoje, HH:mm`, `Ontem, HH:mm` ou `dd/MM, HH:mm`, calculados do `created_at` persistido com calendário e horário locais do dispositivo. A data permanece independente do título editável e não altera timestamps ou ordenação. A classificação de novas imagens no iOS tenta consultar `MediaSubtype.SCREENSHOT` do `PHAsset` usando o `assetId` retornado pelo ImagePicker e `expo-media-library`; essa consulta só é tentada quando a permissão de leitura já está concedida e não solicita acesso. Se o ID, a permissão existente ou os metadados não permitirem a consulta, somente um filename com rótulo explícito (`Screenshot`, `Screen Shot` ou `Captura de tela`) serve como fallback. Extensão, resolução, proporção e conteúdo visual não são usados. Uma falha de classificação nunca impede a cópia e o registro da foto. Fotos antigas mantêm os valores já gravados em `is_screenshot` (ou o default `0`) sem classificação retrospectiva presumida; elas recebem a apresentação de duas linhas com seu timestamp existente.
+
+O menu contextual nativo das fotos inclui `Renomear` com SF Symbol `pencil`, além da ação existente `Apagar imagem`. No iOS, `Alert.prompt` apresenta somente o título personalizado ou automático, sem data/hora, e aceita até 100 caracteres Unicode após trim das extremidades. `Cancelar` não persiste; salvar vazio grava `NULL` e volta ao nome automático. O título personalizado fica em `photos.custom_title`, associado ao ID da foto. A migration aditiva também acrescenta `is_screenshot` com default `0`; títulos legados ficam nulos. A migration não recria tabela, não toca nos arquivos e mantém datas, caminhos, IDs e ordenação. A atualização SQLite usa parâmetros e a galeria atualiza o estado somente após confirmar a persistência. `expo-media-library` (SDK 58) está incluído no Expo Go; em um Development Build próprio, o módulo precisa estar incluído no binário. A classificação é best-effort e não altera o fluxo do seletor nem pede uma permissão adicional. Testes automatizados cobrem subtipo nativo, fallback de filename e indisponibilidade de acesso/metadados. O usuário confirmou no iPhone a identificação de uma captura de tela, o layout em duas linhas e a persistência do nome personalizado após reiniciar o app.
+
+### Preview nativo dos links — 23 de outubro de 2026
+
+No iOS, a galeria usa `Link.Preview` com conteúdo local do link salvo: imagem persistida, título, descrição opcional e domínio. A implementação instalada do Expo Router `~58.0.25` não envia um `Link.Preview` customizado ao preview nativo quando o `href` é um endereço externo. Para exibir os dados offline sem buscar o site durante o toque longo, o preview aponta à rota local `/links/[id]`. Um toque simples no card impede a navegação local e abre o URL original com `Linking.openURL`; tocar no preview promove a tela de detalhes local, que oferece `Abrir link` e o retorno nativo do Stack. O menu contextual mantém somente “Apagar link”, destrutivo, com a confirmação e a exclusão SQLite/cache existentes. O mesmo `Link.Preview` acompanha os três modos da galeria; não foram alterados providers, esquema SQLite, metadados nem cache.
+
+Esta integração tem validação estática e automatizada; ainda precisa ser testada no iPhone/Expo Go SDK 58 para confirmar a apresentação customizada do preview, abertura do site por toque simples, promoção do preview e retorno, menu e exclusão nos três modos.
+
+## Dismiss interativo do Apple Zoom — 23 de outubro de 2026
+
+No iPhone, o usuário confirmou a abertura aprovada do Apple Zoom, mas relatou comportamento inconsistente ao fechar: alguns arrastos acompanham o dedo e retornam à miniatura; outros concluem apenas com a animação automática. A configuração do SaveApp mantém `gestureEnabled: true`; no iOS 18 ou posterior, o código não força a transição vertical do Native Stack, e as rotas de visualização não adicionam reconhecedores próprios de gesto. O botão X do vídeo é o único caminho explícito de `router.back()`.
+
+Há uma hipótese upstream forte para Expo Go e Development Builds: o `expo-dev-menu@58.0.11` instalado contém o reconhecedor de long press de três dedos e o swizzle de `UIWindow.gestureRecognizers`. A [issue Expo #43253](https://github.com/expo/expo/issues/43253) relata o mesmo sintoma em Expo Go e Dev Client, e o [PR #43338](https://github.com/expo/expo/pull/43338), que propõe alterar esse interceptor, continua aberto. A issue reproduzida usa SDK 55 preview; a presença do mesmo padrão no pacote local 58.0.11 dá suporte à hipótese, mas não confirma isoladamente a causa no binário do Expo Go instalado nem em runtime no SaveApp. O podspec local de `expo-dev-client@58.0.14` inclui `expo-dev-menu` somente na configuração CocoaPods Debug; isso sugere que um Release iOS sem tooling de desenvolvimento não teria esse interceptor, mas não garante que o dismiss funcionará. O `eas.json` atual oferece apenas perfis de Simulator, portanto não há perfil de Release para iPhone configurado neste repositório. A documentação do Expo também alerta para possíveis glitches de zoom quando a rota tem header: isso pode ser relevante à rota de vídeo, que mantém header nativo, mas não explica sozinho o mesmo sintoma na rota de foto, cujo header está oculto. A transição iniciada pelo preview contextual para uma rota não modal usa o fallback padrão; distinguir esse caminho do toque simples direto. Nenhuma alteração de código ou dependência foi feita para contornar o comportamento.
+
+## Identidade, repositórios e direção
 
 - Nome exibido: `SaveApp`.
 - Slug e URL scheme: `saveapp`.
 - Bundle ID iOS e package Android: `com.luanrigatti.saveapp`.
-- Fonte privada planejada: `C:\Projetos\SaveApp`, `LuanRigatti/SaveApp`, branch `main`, visibilidade privada.
-- Espelho planejado: `C:\Projetos\SaveApp-NativeSim-Public`, `LuanRigatti/SaveApp-NativeSim-Public`, branch `main`, visibilidade pública.
-- O espelho é unidirecional, filtrado por allowlist e nunca recebe alterações de volta à fonte.
-- `.nativesim-source` é gerado no espelho para o SHA privado exato e não deve existir na fonte privada.
-- O script de mirror não inicializa Git, não cria repositórios e recusa `main` remoto vazio. Depois dos checks locais, o responsável deve inicializar o repositório público com commit raiz vazio antes da primeira publicação.
+- Fonte privada: `C:\Projetos\SaveApp`, `LuanRigatti/SaveApp`, branch `main`, repositório privado.
+- Espelho público: `C:\Projetos\SaveApp-NativeSim-Public`, `LuanRigatti/SaveApp-NativeSim-Public`, branch `main`, repositório público.
+- Os dois repositórios foram criados, configurados e publicados. A fonte privada é a fonte da verdade; o espelho serve aos testes NativeSim e só recebe snapshots filtrados da fonte privada. Nunca copie alterações do espelho de volta.
+- O espelho usa allowlist, verificações de conteúdo e proveniência do SHA privado exato em `.nativesim-source`. Esse arquivo não pertence à fonte privada.
+- SHA e Run IDs de validações abaixo são registros históricos, não identificadores da versão atual do projeto.
 
-## SDK e dependências
+## Stack e estado funcional
 
-O projeto permanece em Expo SDK 58. O nome do pacote raiz é `saveapp`; as versões, URLs resolvidas e integridades de dependências permanecem iguais às do snapshot informado.
+As versões declaradas em `package.json` são Expo SDK 58 (`expo ~58.0.12`), React Native `0.88.0`, React `19.3.0`, TypeScript `~6.0.3`, Expo Router `~58.0.25`, `@expo/ui ~58.0.19` e `react-native-screens 4.30.0`. A biblioteca local de mídia usa `expo-image-picker ~58.0.10`, `expo-file-system ~58.0.10`, `expo-sqlite ~58.0.13`, `expo-image ~58.0.16`, `expo-image-manipulator ~58.0.15`, `expo-video ~58.0.12` e `@shopify/flash-list 2.3.2`. O lockfile mantém as versões resolvidas e suas integridades.
 
-NativeTabs usa o módulo estável `expo-router/native-tabs`. Native Stack, Stack.Toolbar e as adaptações nativas mantêm os contratos existentes.
+O projeto usa Expo Router NativeTabs estável, Native Stack, `Stack.Toolbar`, SwiftUI e `@expo/ui`, Liquid Glass com fallbacks, SF Symbols, Bottom Sheets nativos, `ProgressiveCollapsibleScreen`, Progressive Blur, animações, gestos e componentes reutilizáveis. A base visual oferece temas claro e escuro. Os componentes dão suporte funcional à experiência atual; a camada demonstrativa pode mudar conforme requisitos novos.
 
-## Telas demonstrativas
+O workflow EAS é manual, separado dos fluxos de validação NativeSim e limitado aos perfis iOS Simulator. Exige um projeto EAS próprio do SaveApp e credenciais configuradas no ambiente de execução. Nenhum workflow EAS fez parte da validação registrada abaixo.
 
-O app contém quatro abas — Início, Coleções, Buscar e Ajustes — e uma rota de detalhe. Os textos e cartões são fictícios. A busca opera sobre lista local. Não há fluxo de persistência ou captura de conteúdo.
+## Primeira validação real em iOS Simulator
 
-## Workflows e skills
+Em 22 de outubro de 2026, o commit privado de origem `d3af411b4cd6901876f51a13354d34c382ecdc1b` foi espelhado com proveniência para o commit público `a6e4f2f8111df00266f02439df98be86a8dd4391`, que passou pela primeira validação real documentada:
 
-Os workflows são manuais por `workflow_dispatch`:
+| Etapa | Registro | Resultado |
+| --- | --- | --- |
+| Swift Preflight | Run `39848406909` | Workflow concluído com sucesso para `main` e para o SHA público acima; compilação iOS Debug e verificações do Preflight aprovadas. |
+| NativeSim Release | Run `39851549776`, sessão `3f6a05e1` | Build iOS Release, exportação do app, upload do artifact e instalação/abertura no Simulator concluídos com sucesso. O passo que mantinha o stream ativo foi cancelado; por isso o run completo aparece como `cancelled`, embora as etapas de build e entrega do app tenham passado. |
+| Verificação visual | Teste do usuário no Simulator iOS | O usuário abriu e testou o app, confirmando a interface equivalente à base Starter. |
+| Scanner ExpoModulesMacros | Execução Release acima | O funcionamento do scanner foi confirmado nessa execução. |
 
-- `swift-preflight.yml`: valida dependências, Expo, TypeScript, ESLint, Jest e contratos; sua execução remota também gera e compila o projeto iOS.
-- `native-sim.yml`: compatível com a CLI instalada (template 18), exige gate, usa scheme SaveApp, exporta o mesmo `.app` construído e retém o artifact por sete dias.
-- `eas-build.yml`: workflow independente, perfis somente Simulator e projeto EAS SaveApp explicitamente configurado.
+O artifact `SaveApp.app.tar.gz`, associado à sessão `3f6a05e1`, foi baixado e teve sua integridade validada. SHA-256: `3b32333a9c65657878236f13b4b0008a399f1f7f65a37eb00f993bd6f08c1e50`.
 
-As quatro skills são `mirror-saveapp`, `saveapp-swift-preflight`, `saveapp-nativesim` e `saveapp-simulator-archive`. Swift Preflight é aceito apenas para o SHA público exato. NativeSim recusa execuções duplicadas, dura 120 minutos por padrão e apresenta os links antes de qualquer download de artifact. A recuperação posterior seleciona uma build existente com export/upload concluídos.
+Esta validação comprova a execução e a inspeção visual no iOS Simulator para aquele commit. Não comprova funcionamento em iPhone físico, publicação ou aprovação na App Store, nem representa automaticamente a versão atual depois de alterações posteriores. O artifact e os identificadores são uma referência funcional histórica.
 
-## Identificadores compatíveis preservados
+## Workflows e skills operacionais
 
-- `plugins/withStarterToolbarSync.js` remains byte-for-byte unchanged because its native patch anchors are still required.
-- `StarterToolbarMorphExperimentVariant` remains an internal plist key required by that plugin. This and the plugin filename are compatibility identifiers only.
-- The two protected patch scripts also retain their historical log prefixes as compatibility-only diagnostics.
-- Os scripts `scripts/patch-expo-ui-bottom-sheet.js` e `scripts/patch-expo-module-scan-timeout.js`, seus markers de versão/âncora e `tests/expo-module-scan-timeout.test.js` mantêm os contratos nativos. O teste conserva o basename, mas suas referências de diretório temporário e do mirror usam nomes SaveApp.
-- The source statement above is static documentation in this file. Security tests verify that previous paths and repositories do not appear in operational targets.
+Todos os workflows deste repositório são manuais (`workflow_dispatch`). As skills abaixo descrevem operações separadas; a existência delas não autoriza sua execução sem pedido explícito.
 
-## Evidência e limites
+| Skill | Papel e limites |
+| --- | --- |
+| `$mirror-saveapp` | Executa as simulações de segurança locais e prepara uma revisão staged da allowlist para o espelho. A publicação é uma etapa explícita, unidirecional e fast-forward; valida repositórios, branch, limpeza, visibilidade, scanner, caminhos, proveniência e igualdade remota. |
+| `$saveapp-swift-preflight` | Inspeciona ou executa Swift Preflight no espelho público limpo e sincronizado, para um SHA exato. Reutiliza apenas execução compatível com o repositório, workflow, evento, branch e SHA; NativeSim depende do sucesso para o mesmo SHA. |
+| `$saveapp-nativesim` | Fluxo principal: valida e publica o snapshot filtrado quando necessário, verifica ou executa Preflight para o SHA público exato, valida a CLI e inicia uma sessão iPhone 17 Pro. A duração padrão é 120 minutos; valores solicitados de 1 a 350 minutos são aceitos. A CLI entrega os links verificados e para antes de esperar pelo artifact, enquanto o workflow remoto continua. |
+| `$saveapp-simulator-archive` | Localiza um run NativeSim existente que tenha build, exportação e upload bem-sucedidos e baixa o artifact correspondente sem iniciar outra sessão, workflow ou compilação. Verifica o `.app.tar.gz`; a retenção configurada é de sete dias, sujeita a um limite menor da organização. |
 
-A validação autorizada é local e estática. Ela não comprova compilação de Xcode, aparência em Simulator ou comportamento em iPhone. Resultados de instalação, tipos, lint, testes, contratos, segurança e parsers serão registrados após a execução.
+No fluxo NativeSim, `--export` entrega o mesmo `.app` da build como `SaveApp.app.tar.gz`, anexado ao run para download posterior. A sessão usa um gate de acesso; nunca registre, salve, reconstrua nem compartilhe a URL autenticada do stream ou sua chave. O run pode continuar ativo depois da entrega inicial dos links.
+
+## Identificadores internos de compatibilidade
+
+- `plugins/withStarterToolbarSync.js` e a chave plist `StarterToolbarMorphExperimentVariant` são nomes internos preservados para o plugin e seus anchors nativos; não são a identidade visível do produto.
+- O plugin depende de `react-native-screens 4.30.0`.
+- `scripts/patch-expo-ui-bottom-sheet.js` mantém o ajuste de área segura para `@expo/ui 58.0.19`.
+- `scripts/patch-expo-module-scan-timeout.js` mantém versão, anchors e prefixos históricos de log para `expo-modules-autolinking 58.0.14`.
+- `tests/expo-module-scan-timeout.test.js` mantém seu basename de compatibilidade; suas referências operacionais usam SaveApp.
+- `.github/native-sim/gate.cjs` e `.github/workflows/native-sim.yml` são compatíveis com o template NativeSim 18 e com a normalização auditada do token.
+
+Preserve esses contratos durante mudanças funcionais e visuais. Uma alteração necessária precisa estar no escopo explicitamente solicitado e passar por validação apropriada.
+
+## Segurança e evidência
+
+As proteções atuais incluem espelho unidirecional com allowlist, scanners de segredos e referências bloqueadas, validação de caminhos contra links e escapes, checagem de proveniência, exigência de árvore limpa e push fast-forward. Preservar essas barreiras; não copiar `.env`, credenciais, certificados, dados pessoais, builds ou histórico privado para o espelho. Requisitos funcionais futuros podem incluir capacidades antes ausentes, mas serviços externos e credenciais dependem de autorização explícita e nunca devem ser expostos no código, documentação ou logs.
+
+Relate separadamente checagens estáticas, conclusão de workflows remotos, Simulator e iPhone físico. A validação histórica acima é evidência de Simulator para um SHA específico, não evidência de dispositivo físico.
+
+## Saída da visualização de fotos — 23 de outubro de 2026
+
+A rota `photos/[id]` mantém o header oculto e mostra um botão X acessível de 50 pt, posicionado pelos insets da safe area. Em iOS 26+, usa SwiftUI Button `large` com estilo Glass se Expo UI estiver registrado no runtime (documentado como incluído no Expo Go SDK 58); caso contrário, a superfície de fallback usa `GlassView` regular e mantém a ação React Native. `useVisualCapabilities()` usa superfície sólida quando Liquid Glass não está disponível ou Reduzir Transparência está ativo. O fechamento idempotente continua chamando `router.back()` com histórico e substituindo pela Home (`/`) como fallback.
+
+A rota usa `useIsPreview()` para manter a renderização em contexto de preview passiva: mostra somente a imagem e não monta o ScrollView de zoom, `Stack.Screen` dinâmico, controles de fechar ou hook de dismiss. A tela completa é montada quando a rota deixa o contexto de preview. Isso isola a apresentação nativa do preview das atualizações de zoom e navegação. Como `Link.Preview` também prefetcha a rota, o callback de rolagem ignora eventos enquanto a tela não está focada. As opções dinâmicas do Native Stack usam objeto memoizado, e o callback só altera o estado ao cruzar o limiar efetivo de zoom. No visualizador completo, o `ScrollView` nativo do React Native no iOS permite pinça entre 1× e 4×; a proporção da `expo-image` não muda, o conteúdo fica centralizado no tamanho original e pode ser arrastado quando ampliado. O `Link.AppleZoomTarget` continua envolvendo a imagem dentro do único conteúdo do ScrollView. No iOS 18+, `photos/[id]` usa `fullScreenModal`, conforme o requisito Expo para `Link.Preview` com Zoom Transition; a abertura por toque simples e a promoção do preview continuam apontando à mesma rota. O usuário confirmou no iPhone a promoção do preview para a foto completa. Acima de 1,02×, `gestureEnabled` do Native Stack desativa o dismiss, e o enabler nativo do Expo Router usa essa opção para bloquear a transição Zoom interativa. `usePreventZoomTransitionDismissal` não é chamado porque não tem efeito em apresentações modais. A inconsistência relatada no gesto de dismiss interativo continua documentada na seção correspondente.

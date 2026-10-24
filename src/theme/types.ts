@@ -10,8 +10,7 @@ import type { Sizes } from './sizes';
 import type { Spacing } from './spacing';
 import type { Typography } from './typography';
 
-export type ThemeMode = 'system' | 'light' | 'dark';
-export type ResolvedThemeMode = Exclude<ThemeMode, 'system'>;
+export type ResolvedThemeMode = 'light' | 'dark';
 
 export type AppTheme = {
   colors: ThemeColors;
@@ -29,9 +28,6 @@ export type AppTheme = {
 
 export type ThemeContextValue = {
   theme: AppTheme;
-  mode: ThemeMode;
   resolvedMode: ResolvedThemeMode;
-  isReady: boolean;
   reduceMotionEnabled: boolean;
-  setMode: (mode: ThemeMode) => void;
 };

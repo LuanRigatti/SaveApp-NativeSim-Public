@@ -33,7 +33,7 @@ export type { ThemeColors } from './colors';
 export type { IconName, IconTokens } from './icons';
 export type { Layout } from './layout';
 export type { Opacities } from './opacities';
-export type { AppTheme, ResolvedThemeMode, ThemeContextValue, ThemeMode } from './types';
+export type { AppTheme, ResolvedThemeMode, ThemeContextValue } from './types';
 export type { Animations } from './animations';
 export type { Borders } from './borders';
 export type { Fonts } from './fonts';

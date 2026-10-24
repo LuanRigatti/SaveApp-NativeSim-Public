@@ -1,47 +1,50 @@
 # Instruções para agentes — SaveApp
 
-## Escopo
+## Produto e escopo
 
-SaveApp é um aplicativo demonstrativo de interface baseado em Expo SDK 58. Ele mostra navegação e controles nativos; ainda não implementa salvar fotos, links ou textos. Não acrescente autenticação, serviços externos, lógica comercial, dados pessoais ou credenciais.
+SaveApp é um aplicativo independente em Expo SDK 58 cuja migração para repositórios próprios está concluída. A Home importa, armazena e exibe fotos e vídeos localmente, além de links e textos persistidos no SQLite. O restante do app inclui telas demonstrativas. Novas capacidades podem evoluir conforme requisitos solicitados; não invente ou antecipe requisitos futuros.
 
-A fonte privada é `C:\Projetos\SaveApp`, `LuanRigatti/SaveApp`, branch `main`, visibilidade privada. O espelho filtrado é `C:\Projetos\SaveApp-NativeSim-Public`, `LuanRigatti/SaveApp-NativeSim-Public`, branch `main`, visibilidade pública. A direção é sempre privada para pública; nunca receba alterações do espelho.
+A ausência atual de autenticação, sincronização em nuvem ou de outras funcionalidades além das já implementadas descreve o estado existente, não uma proibição permanente. Implemente somente o que for solicitado. Serviços externos, autenticação e credenciais exigem autorização explícita. Mantenha segredos fora do código, documentação, logs e do espelho público.
 
-## Arquitetura
+## Limites de repositório e publicação
 
-- Antes de mudanças relevantes, consulte `docs/current-state.md`, `AI_CONTEXT.md` e `docs/design-system.md`.
-- Antes de alterar APIs Expo, consulte a documentação versionada do Expo SDK 58.
-- Preserve Expo Router NativeTabs estável, Native Stack, Stack.Toolbar, o plugin de sincronização de toolbar e seu marcador plist compatível; os nomes internos protegidos estão documentados em `docs/current-state.md`.
-- Preserve `@expo/ui`/SwiftUI, Liquid Glass, ProgressiveCollapsibleScreen, Progressive Blur e fallbacks.
-- Preserve SDK 58 e todas as versões resolvidas e integridades do lockfile.
-- Componentes visuais não devem depender de login, rede ou serviços externos.
+- Trabalhe no projeto privado `C:\Projetos\SaveApp`, repositório `LuanRigatti/SaveApp`, branch `main`. Ele é a fonte da verdade.
+- O espelho de testes é `C:\Projetos\SaveApp-NativeSim-Public`, repositório `LuanRigatti/SaveApp-NativeSim-Public`, branch `main`. Só opere nele durante o fluxo de espelhamento ou NativeSim solicitado pelo usuário.
+- A direção é sempre privada para pública. Nunca copie ou integre mudanças do espelho à fonte privada.
+- Não modifique outros projetos, repositórios ou checkouts; não reutilize suas dependências, identidade, ativos, dados ou lógica no SaveApp.
+- Não copie `.env`, credenciais, certificados, dados pessoais, builds ou histórico privado para o espelho. Preserve allowlist, scanners, validação de caminhos, proveniência exata, exigência de árvore limpa e push fast-forward. Nunca use force push.
+- Não faça commit ou push sem autorização explícita. Não publique o espelho sem autorização específica para esse fluxo.
 
-## Validação local
+## Arquitetura e design
 
-Após alterações, execute as verificações locais pertinentes:
+- Antes de mudanças relevantes, leia por inteiro `docs/current-state.md`, `AI_CONTEXT.md` e `docs/design-system.md`.
+- Antes de alterar APIs Expo, consulte a documentação correspondente ao SDK 58.
+- Preserve Expo Router NativeTabs estável, Native Stack, `Stack.Toolbar`, o plugin de sincronização de toolbar e seus anchors e marcador plist compatíveis.
+- Preserve SwiftUI e `@expo/ui`, Liquid Glass, SF Symbols, `ProgressiveCollapsibleScreen`, Progressive Blur, Bottom Sheets, animações, gestos e fallbacks.
+- `plugins/withStarterToolbarSync.js`, `StarterToolbarMorphExperimentVariant`, os scripts de patch, seus anchors/markers e os nomes de teste compatíveis são contratos internos. Só os altere quando a solicitação incluir essa mudança e houver validação apropriada.
+- Preserve Expo SDK 58 e as versões resolvidas e integridades registradas em `package-lock.json`. Mudanças de SDK, dependências, configuração nativa, scripts ou workflows precisam estar explicitamente no escopo.
+- Telas demonstrativas podem evoluir para os requisitos do produto. Use o design system e os componentes compartilhados; não acrescente comportamento fora do pedido nem reescreva componentes nativos sem necessidade do requisito.
 
-```powershell
-npm ci
-npm run typecheck
-npm run lint
-npm test -- --runInBand
-npx expo install --check
-npx expo-doctor
-node scripts/verify-saveapp-native.js
-Invoke-Pester -Path .\tests\SaveAppSecurity.Tests.ps1
-```
+## Segurança e integrações
 
-Mudanças nativas exigem o workflow Swift Preflight somente após solicitação explícita. Não inicie workflow, EAS, prebuild local, Xcode build ou NativeSim sem pedido explícito. Checagens estáticas não comprovam comportamento em Simulator ou iPhone.
+- Trate dados e permissões conforme o recurso solicitado e preserve as proteções já existentes nos scripts, workflows, scanner e gate NativeSim.
+- Não inclua segredos ou dados pessoais em arquivos versionados, mensagens de log ou publicações. Quando um requisito autorizado depender de credencial, use o mecanismo seguro correspondente ao ambiente e mantenha-a fora do repositório.
+- Não introduza autenticação, rede, serviços externos ou dados remotos sem pedido explícito. Essa regra controla autorização e escopo; não impede futuras funcionalidades que o usuário solicitar.
 
-## Espelho e operações
+## Validação
 
-- Use `$mirror-saveapp` para revisão independente e `$saveapp-nativesim` somente quando o usuário pedir o fluxo completo.
-- `scripts/mirror-saveapp.ps1` publica somente nos destinos fixos SaveApp, com allowlist, scanners, proveniência do SHA de origem e push normal fast-forward.
-- Nunca use force push. Não copie `.env`, credenciais, certificados, dados pessoais, builds ou histórico privado.
-- `.nativesim-source` é criado no espelho a partir do SHA privado exato; não mantenha proveniência estática no código privado.
-- O script recusa um `main` remoto público vazio. Depois que as verificações locais terminarem, o responsável deve inicializar o repositório público com um commit raiz vazio antes da publicação.
-- Todos os workflows são `workflow_dispatch` manuais. Swift Preflight deve passar para o SHA público exato; NativeSim exporta o mesmo `.app` que foi construído e mantém o artifact por sete dias.
-- NativeSim dura 120 minutos por padrão. Nunca grave ou reconstrua a URL autenticada do stream ou sua chave.
+Depois de mudanças de código, execute as validações locais pertinentes, como typecheck, lint, testes direcionados, verificação de dependências, Expo Doctor, contratos nativos e testes de segurança.
 
-## Evidência
+Para mudanças exclusivamente documentais, confira o conteúdo, confirme que somente os documentos autorizados mudaram e rode `git diff --check`; não execute uma suíte de testes sem necessidade.
 
-Relate separadamente validação estática, workflow remoto, Simulator e iPhone. Não apresente testes locais como prova de compilação nativa ou comportamento visual.
+Não inicie workflows remotos, Swift Preflight, EAS, prebuild local, Xcode build ou NativeSim sem solicitação explícita. Mudanças nativas requerem Swift Preflight somente após essa autorização. Checagens estáticas não comprovam compilação ou aparência em Simulator/iPhone.
+
+## Skills e evidências
+
+- `$mirror-saveapp` prepara e revisa o espelhamento; publique somente quando o usuário autorizar essa etapa.
+- `$saveapp-swift-preflight` executa ou inspeciona Preflight do SHA público exato quando solicitado.
+- `$saveapp-nativesim` conduz o fluxo completo de espelhamento, Preflight e sessão Simulator quando solicitado.
+- `$saveapp-simulator-archive` recupera um artifact de uma execução existente, sem iniciar outro build.
+- Consulte `docs/current-state.md` para o histórico da primeira validação iOS Simulator. Trate SHAs, Run IDs e checksums registrados como evidência histórica; não como a versão corrente.
+- Relate separadamente resultados estáticos, workflow remoto, Simulator e iPhone físico. Não declare teste em dispositivo ou publicação na App Store sem evidência correspondente.
+- Atualize a documentação quando uma mudança autorizada alterar arquitetura, funcionalidades implementadas, estado ou design.

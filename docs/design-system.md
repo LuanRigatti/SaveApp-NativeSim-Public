@@ -1,12 +1,12 @@
 # Design system do SaveApp
 
-## Princípios
+## Papel da base visual
 
-SaveApp usa uma paleta demonstrativa independente azul/índigo. Os componentes preservam interações nativas e padrões visuais reutilizáveis, sem conteúdo empresarial, dados pessoais ou serviços remotos.
+O design system e os componentes nativos formam a base visual funcional do SaveApp validada em iOS Simulator. Parte das telas atuais permanece demonstrativa e pode evoluir conforme requisitos funcionais e visuais definidos pelo usuário. Não presuma novas funções nem crie uma identidade visual diferente sem solicitação.
 
-Use os tokens do ThemeProvider para cor, tipografia, espaçamento, raio, borda, sombra, animação e tamanho. Evite valores avulsos quando um token representar o mesmo papel.
+A identidade atual usa uma paleta independente azul/índigo, com tokens semânticos para superfícies, hierarquia de texto, marca, foco e estados. Componentes devem consumir os tokens do `ThemeProvider` para cor, tipografia, espaçamento, raio, borda, sombra, animação e tamanho; evite valores avulsos quando já houver um token para o mesmo papel.
 
-## Tokens de tema
+## Tokens e temas
 
 - `background`, `backgroundSecondary`, `surface`, `surfaceElevated` e `surfaceMuted` definem superfícies.
 - `textPrimary`, `textSecondary`, `textTertiary` e `textDisabled` definem hierarquia textual.
@@ -15,23 +15,49 @@ Use os tokens do ThemeProvider para cor, tipografia, espaçamento, raio, borda, 
 - `glassSurface` e `glassBorder` servem aos fallbacks translúcidos.
 - `darkModeCardSurface` e `darkModeInsetSurface` diferenciam cartões e áreas inseridas no tema escuro.
 
-Light e Dark derivam do ThemeProvider e seguem a aparência do sistema por padrão. A escolha manual é armazenada localmente sob `@saveapp/theme-mode`.
+`ThemeProvider` deriva Light e Dark exclusivamente de `useColorScheme`, acompanhando alterações do sistema em tempo real; `app.config.js` usa `userInterfaceStyle: 'automatic'`. Não há seletor manual nem override salvo. A antiga chave `@saveapp/theme-mode` é removida isoladamente, sem limpar outras preferências locais. Os componentes continuam consumindo o tema resolvido e as opções de acessibilidade de movimento reduzido fornecidas pelo provider. O comportamento automático foi testado e aprovado pelo usuário no iPhone.
 
-## Navegação e títulos
+## Navegação, toolbar e títulos
 
-NativeTabs e Native Stack controlam transições e gestos. Stack.Toolbar hospeda controles nativos. ProgressiveCollapsibleScreen mantém alinhados o título grande, o título compacto, a interpolação durante o scroll e o blur do cabeçalho.
+Expo Router NativeTabs estável e Native Stack controlam navegação, transições e gestos. `Stack.Toolbar` hospeda controles nativos. `ProgressiveCollapsibleScreen` mantém alinhados título grande, título compacto, interpolação durante o scroll e blur do cabeçalho.
 
-Não sobreponha controles React Native interativos aos controles SwiftUI. Não restrinja animações nativas com clipping ou frames artificiais.
+A tab bar exibe somente os ícones nativos; os rótulos ficam ocultos visualmente e os nomes acessíveis permanecem disponíveis para leitores de tela. Preserve os ícones e o estado ativo nativos, incluindo a cor de seleção, e deixe o próprio `NativeTabs` distribuir e alinhar os itens.
 
-## Materiais e controles
+Preserve os controles nativos já validados. Não sobreponha controles React Native interativos aos controles SwiftUI nem restrinja animações nativas com clipping ou frames artificiais. SF Symbols são usados no iOS, com fallbacks para os outros runtimes.
 
-- Liquid Glass vem de expo-glass-effect e `@expo/ui` quando disponível.
-- expo-blur fornece fallback visual quando Liquid Glass não está disponível.
-- NativeSheet usa BottomSheet SwiftUI em Development Build iOS, detents configuráveis e drag indicator visível; o fallback usa Gesture Handler e Reanimated.
-- NativeCardContextMenu usa ContextMenu nativo no iOS.
-- NativeButton usa Button SwiftUI para manter estado pressionado, haptics e aparência do sistema.
-- ProgressiveBlur usa APIs públicas Expo de blur, gradiente e máscara.
+## Materiais, componentes e movimento
 
-## Demonstração
+- Liquid Glass usa `expo-glass-effect` e `@expo/ui` quando disponíveis; `expo-blur` oferece fallback visual.
+- `NativeSheet` usa Bottom Sheet SwiftUI em Development Build iOS, com detents configuráveis e indicador de arraste; o fallback usa Gesture Handler e Reanimated.
+- `NativeCardContextMenu` usa Context Menu nativo no iOS.
+- `NativeButton` usa Button SwiftUI para estados pressionados, haptics e aparência do sistema, com fallback multiplataforma.
+- `NativeHomeToolbarActions` mantém ações SwiftUI integradas à `Stack.Toolbar`.
+- `ProgressiveBlur` combina APIs públicas Expo de blur, gradiente e máscara.
+- Animações, gestos, haptics e fallbacks fazem parte da experiência demonstrativa validada; mudanças devem seguir os requisitos específicos do usuário.
+- No iOS, a remoção de mídia na FlashList v2 usa `prepareForLayoutAnimationRender()` e uma única `LayoutAnimation` de 260 ms para fade da célula e reposicionamento masonry. O ajuste de movimento reduzido do `ThemeProvider` desativa a animação; não há wrapper visual adicional nas células. Nas outras plataformas, a remoção não anima; a FlashList documenta `LayoutAnimation` como experimental no Android.
 
-Início, Coleções, Buscar e Ajustes usam textos e cartões fictícios. A tela de detalhe valida navegação, toolbar e swipe-back. O design atual não implementa persistência de fotos, links ou textos.
+## Aplicação nas telas
+
+### Saída da visualização de fotos
+
+A foto em tela cheia mantém o header oculto para preservar o Apple Zoom. Um X fica numa camada própria na safe area, fora do elemento de destino da imagem. Em iOS 26+, usa SwiftUI Button `large` com estilo Glass quando o módulo está disponível no runtime; `GlassView` regular com ação React Native é o fallback se o módulo faltar. `useVisualCapabilities()` respeita disponibilidade do efeito e Reduzir Transparência, usando superfície sólida quando necessário. O botão circular de 50 pt tem rótulo acessível “Fechar foto”; o Host e o frame SwiftUI usam as mesmas dimensões para não limitar o controle. O retorno é idempotente: `router.back()` com histórico válido ou substituição pela Home como fallback.
+
+`useIsPreview()` mantém a rota contextual em uma apresentação passiva, somente com a imagem; zoom, `Stack.Screen`, controle X e dismiss ficam fora dessa árvore. Como o Expo Router também prefetcha a rota durante o toque longo, o callback de scroll ignora eventos enquanto a tela não estiver focada. Ao entrar na rota completa, o `ScrollView` nativo do iOS permite zoom de 1× a 4×, centralização em escala original e pan ao ampliar. `Link.AppleZoomTarget` continua aplicado à imagem dentro do conteúdo único do ScrollView. As opções do Stack/dismiss são memoizadas e o estado é atualizado somente ao cruzar o limiar de zoom. No iOS 18+, a rota `photos/[id]` usa `presentation: 'fullScreenModal'`, como exige a documentação Expo para `Link.Preview` com Zoom Transition; toque simples e promoção da prévia usam o mesmo destino, com consistência visual confirmada pelo usuário no iPhone. Acima de 1,02×, `gestureEnabled` desativa o dismiss e também informa o enabler nativo do Expo Router para bloquear a transição Zoom interativa. `usePreventZoomTransitionDismissal` não é usado nessa rota porque não tem efeito em apresentações modais.
+
+Home exibe “Salvo” no título grande, usando o token `largeTitle` com aumento local de 2 pt (34 → 36 pt); o título compacto também exibe “Salvo” e mantém o tamanho original. O menu nativo “+” permanece na toolbar. “Adicionar imagens” abre o seletor de imagens estáticas; “Adicionar vídeos” abre um seletor independente de vídeos com Passthrough no iOS; “Adicionar arquivos” continua sem ação. O armazenamento privado persistente mantém fotos em `Documents/photos` e vídeos com suas miniaturas JPEG em `Documents/videos`. Os metadados de ambos os tipos ficam na tabela SQLite existente, cuja migração apenas acrescenta colunas e preserva as linhas e arquivos anteriores.
+
+A galeria combina fotos e vídeos em uma FlashList masonry de duas colunas, ordenada pela data de importação e pelo ID. Proporção, margens, espaçamento e cantos da composição existente são preservados. Células exibem somente imagens estáticas; vídeos recebem ícone Play central e duração discreta, sem montar players durante a rolagem. `expo-video` gera a miniatura uma vez na importação; ela é convertida para JPEG e copiada para armazenamento persistente, sem salvar URI temporária ou imagem nativa compartilhada no banco.
+
+Toque simples abre fotos e vídeos com `Link.AppleZoom` no iOS 18 ou posterior. A rota de vídeo marca o contêiner do player como `Link.AppleZoomTarget` e mantém a miniatura JPEG sobre o `VideoView` até `onFirstFrameRender`; o player permanece em rota dedicada, com controles AVKit, proporção inteira, fundo escuro e fullscreen interno desativado. Em iOS anterior ao 18 e nas outras plataformas, o vídeo mantém a transição vertical do Native Stack. O header nativo preto reserva a região superior antes do vídeo; `SafeAreaView` aplica somente os insets inferior e laterais. A toolbar mantém o botão acessível `xmark` e o status bar usa ícones claros; o player pausa ao perder foco e é liberado quando a rota desmonta. Pressão longa usa `Link.Preview`, `Link.Menu` e `Link.MenuAction`, com miniatura estática para vídeo e ação destrutiva adequada ao tipo de mídia. A confirmação e a persistência compensada removem somente a cópia local e os metadados, preservando o original na fototeca. A integração continua sem `Host`, `RNHostView` ou `matchContents` nas células. A flag `NATIVE_PHOTO_CONTEXT_MENU_ENABLED` restaura o Link direto. Para vídeos, cuja rota permanece não modal, tocar na prévia contextual segue a transição padrão documentada pelo Expo; fotos usam apresentação modal no iOS 18+ para suportar a transição Zoom nesse caminho. A Expo alerta para possíveis glitches de zoom em telas com header, mantido aqui para preservar a toolbar nativa e as Safe Areas. Leituras não excluem arquivos nem metadados automaticamente. O usuário confirmou importação, abertura Apple Zoom, controles nativos, Safe Areas e botão X no iPhone; o dismiss interativo foi inconsistente e segue em investigação. Coleções e Ajustes exibem somente seus títulos grandes nativos, sem conteúdo adicional; Buscar também mostra somente o título grande. O tema segue exclusivamente o iOS.
+
+No iPhone, a abertura Apple Zoom está aprovada, mas o usuário observou dismiss interativo inconsistente nas fotos e nos vídeos. Nenhum gesto concorrente foi encontrado nas telas do SaveApp; há uma hipótese upstream envolvendo o interceptor de toque do menu de desenvolvimento, ainda sem comprovação no binário específico ou em Release. Não substituir o dismiss nativo por gestos ou animações da aplicação. Evidências, ressalvas sobre header/preview e plano de validação estão em `docs/current-state.md`.
+
+A Home também apresenta links e textos no mesmo mural. Cards de links usam `GlassView` nativo regular atrás do título e domínio, com superfície sólida como fallback quando necessário. A imagem local permanece nítida no topo em proporção 16:9; o card usa `radius.linkCard` de 32 pt e mantém título em destaque, domínio secundário e layout compacto sem imagem. O toque simples recebe highlight discreto na borda, escala 0,98 com spring responsivo e haptic leve; movimento reduzido desativa a animação. A flag local `LINK_CARD_LIQUID_GLASS_ENABLED` controla somente o material dos cards de links. Cards de texto usam a superfície do tema, tipografia de leitura e altura limitada nas grades; a rota de leitura preserva o texto completo e suas quebras. O seletor de visualização da Home mantém quatro modos: `Maiores` (masonry de duas colunas), `Menores` (masonry de três colunas) e `Lista` (linhas horizontais de 96 pt) e `Lista compacta` (linhas horizontais de 76 pt na escala padrão). Preferência local fica em AsyncStorage, com `Maiores` como padrão inicial. Mantenha IDs e ordenação estáveis, separadores de dia full-width e as interações nativas em todos os modos. Compositores utilizam o `NativeSheet` compartilhado e controles existentes; mantenha Light/Dark e o comportamento de fallback.
+
+No toque longo de links em iOS, `Link.Preview` apresenta um painel nativo com superfície do tema, imagem local quando disponível e título, descrição opcional e domínio. A imagem ocupa o topo em 16:9; sem imagem, o conteúdo não reserva espaço vazio. Os previews usam radius e tipografia do design system, sem Glass duplicado ou requisições de rede. Como o Expo Router 58 não monta preview customizado para `href` externo, o native preview usa `/links/[id]`; toque simples ainda abre o URL original via sistema, e tocar no painel abre uma tela local com ação explícita `Abrir link` e retorno pelo header nativo. “Apagar link” permanece como a única ação contextual e reutiliza a confirmação existente. Não adicione wrappers Host às células FlashList.
+
+No modo `Lista`, fotos, vídeos, links e textos usam linhas horizontais sem superfície externa e ficam diretamente sobre o fundo da Home. A aparência dos modos de lista foi aprovada pelo usuário no iPhone. As linhas têm 96 pt de altura; miniaturas quadradas de 72 pt usam raio de 14 pt e clipping explícito. `Lista compacta` usa linhas de 76 pt na escala de fonte padrão, miniaturas de 52 pt e espaçamento menor. Todas as miniaturas com imagem (fotos, vídeos e previews de links) usam o mesmo raio de 14 pt e clipping correspondente. A altura compacta aumenta com Dynamic Type para manter espaço legível. Em fotos, o título personalizado ou automático ocupa a primeira linha e a data/hora local de salvamento fica abaixo, em tipografia secundária igual à hierarquia de informações de links; as linhas mantêm alinhamento à esquerda e não incorporam o timestamp ao título. Essa apresentação em duas linhas e a identificação da captura de tela foram confirmadas pelo usuário no iPhone. Links usam um rótulo de origem discreto e título/subtítulo curtos derivados somente dos metadados já salvos. A fonte é reconhecida por hostname para Instagram, X/Twitter, YouTube e TikTok; outros domínios preservam o fallback genérico e não exibem ícone grande. Em ambos os modos de lista, o título do link fica em uma linha e a informação secundária em até uma linha; `Lista compacta` usa a tipografia menor existente. Títulos e textos continuam limitados a duas linhas quando aplicável; textos salvos não recebem miniatura artificial. Os modos Maiores e Menores mantêm seus layouts masonry e não são afetados.
+
+O usuário aprovou no iPhone a hierarquia refinada dos links em `Lista` e `Lista compacta`: origem de plataforma em texto pequeno, título conciso e informação secundária truncada, sem ícone grande. Instagram, X/Twitter, YouTube e TikTok são identificados pelo domínio; outros sites mantêm a apresentação genérica. A origem visual não busca rede nem altera os metadados persistidos.
+
+Ao atender novos requisitos, use os tokens e componentes compartilhados e mantenha Light/Dark, Liquid Glass, navegação nativa, Bottom Sheets, Progressive Blur e fallbacks compatíveis. Modifique componentes compartilhados quando o requisito pedir uma mudança neles; não os reescreva incidentalmente ao evoluir uma tela.

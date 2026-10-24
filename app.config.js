@@ -41,6 +41,14 @@ module.exports = {
     plugins: [
       'expo-router',
       [
+        'expo-image-picker',
+        {
+          photosPermission: 'O SaveApp acessa fotos e vídeos selecionados para salvá-los na galeria local do app.',
+          cameraPermission: false,
+          microphonePermission: false,
+        },
+      ],
+      [
         'expo-splash-screen',
         {
           backgroundColor: '#F7F8FC',

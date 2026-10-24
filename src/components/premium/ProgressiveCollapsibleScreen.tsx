@@ -5,6 +5,8 @@ import {
   Platform,
   StyleSheet,
   View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type ScrollViewInstance,
   type ScrollViewProps,
   type StyleProp,
@@ -19,6 +21,8 @@ import Animated, {
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
+  runOnUI,
+  type SharedValue,
 } from 'react-native-reanimated';
 import { easeGradient } from 'react-native-easing-gradient';
 
@@ -33,6 +37,11 @@ const FIXED_HEADER_PADDING_TOP = 60;
 const SMALL_HEADER_TITLE_LINE_HEIGHT = 20;
 const SMALL_HEADER_TITLE_FONT_SIZE = 17;
 const NATIVE_HEADER_PIPELINE_RAISE = 28;
+function setSharedScrollOffset(sharedValue: SharedValue<number>, offset: number) {
+  'worklet';
+  sharedValue.value = offset;
+}
+
 const AnimatedBlurView =
   typeof Animated.createAnimatedComponent === 'function'
     ? Animated.createAnimatedComponent(BlurView)
@@ -48,9 +57,18 @@ export type ProgressiveCollapsibleScreenProps = {
   largeTitleContainerStyle?: StyleProp<ViewStyle>;
   nativeHeader?: boolean;
   nativeTabRoot?: boolean;
+  renderScrollableContent?: (props: ProgressiveCollapsibleScrollContentProps) => ReactNode;
   scrollRef?: Ref<ScrollViewInstance>;
   scrollContentContainerStyle?: StyleProp<ViewStyle>;
   scrollViewProps?: Omit<ScrollViewProps, 'contentContainerStyle' | 'onScroll' | 'ref' | 'style'>;
+};
+
+export type ProgressiveCollapsibleScrollContentProps = {
+  contentContainerStyle: StyleProp<ViewStyle>;
+  contentGap: number;
+  largeTitle: ReactNode;
+  onScroll: NonNullable<ScrollViewProps['onScroll']>;
+  showsVerticalScrollIndicator: boolean;
 };
 
 export function ProgressiveCollapsibleScreen({
@@ -64,6 +82,7 @@ export function ProgressiveCollapsibleScreen({
   largeTitleContainerStyle,
   nativeHeader = false,
   nativeTabRoot = false,
+  renderScrollableContent,
   scrollRef,
   scrollContentContainerStyle,
   scrollViewProps,
@@ -73,6 +92,12 @@ export function ProgressiveCollapsibleScreen({
   const [compactTitleActive, setCompactTitleActive] = useState(false);
   const scrollY = useSharedValue(0);
   const isDarkMode = resolvedMode === 'dark';
+  const onListScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      runOnUI(setSharedScrollOffset)(scrollY, event.nativeEvent.contentOffset.y);
+    },
+    [scrollY],
+  );
   const opaqueGradientColor = isDarkMode ? 'rgba(0,0,0,0.99)' : 'rgba(255,255,255,0.99)';
   const solidGradientColor = isDarkMode ? 'black' : 'white';
   const { colors, locations } = easeGradient({
@@ -85,7 +110,7 @@ export function ProgressiveCollapsibleScreen({
 
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
-      scrollY.value = event.contentOffset.y;
+      setSharedScrollOffset(scrollY, event.contentOffset.y);
     },
   });
 
@@ -190,6 +215,27 @@ export function ProgressiveCollapsibleScreen({
       style={StyleSheet.absoluteFill}
     />
   );
+  const largeTitleElement = (
+    <Animated.View
+      accessibilityElementsHidden={compactTitleAccessibilityManaged && compactTitleActive}
+      importantForAccessibility={
+        compactTitleAccessibilityManaged && compactTitleActive ? 'no-hide-descendants' : 'auto'
+      }
+      style={[styles.largeTitle, largeTitleContainerStyle, largeTitleStyle]}
+    >
+      {largeTitle}
+    </Animated.View>
+  );
+  const contentContainerStyle = [
+    styles.scrollContent,
+    {
+      paddingHorizontal: theme.layout.screenHorizontalPadding,
+      paddingTop: contentTopOffset,
+      paddingBottom: Math.max(100, insets.bottom + theme.spacing.lg),
+    },
+    scrollContentContainerStyle,
+  ];
+  const showsVerticalScrollIndicator = scrollViewProps?.showsVerticalScrollIndicator ?? false;
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -231,41 +277,33 @@ export function ProgressiveCollapsibleScreen({
           {fixedHeaderContent}
           {fixedHeaderBlur}
         </Animated.View>
-        <Animated.ScrollView
-          {...scrollViewProps}
-          alwaysBounceVertical={Platform.OS === 'ios'}
-          automaticallyAdjustContentInsets={false}
-          contentInsetAdjustmentBehavior="never"
-          ref={scrollRef}
-          scrollEventThrottle={16}
-          onScroll={onScroll}
-          style={styles.scrollView}
-          contentContainerStyle={[
-            styles.scrollContent,
-            {
-              paddingHorizontal: theme.layout.screenHorizontalPadding,
-              paddingTop: contentTopOffset,
-              paddingBottom: Math.max(100, insets.bottom + theme.spacing.lg),
-            },
-            scrollContentContainerStyle,
-          ]}
-          showsVerticalScrollIndicator={scrollViewProps?.showsVerticalScrollIndicator ?? false}
-        >
-          <View style={[styles.content, { gap: contentGap ?? theme.spacing.lg }]}>
-            <Animated.View
-              accessibilityElementsHidden={compactTitleAccessibilityManaged && compactTitleActive}
-              importantForAccessibility={
-                compactTitleAccessibilityManaged && compactTitleActive
-                  ? 'no-hide-descendants'
-                  : 'auto'
-              }
-              style={[styles.largeTitle, largeTitleContainerStyle, largeTitleStyle]}
-            >
-              {largeTitle}
-            </Animated.View>
-            {children}
-          </View>
-        </Animated.ScrollView>
+        {renderScrollableContent ? (
+          renderScrollableContent({
+            contentContainerStyle,
+            contentGap: contentGap ?? theme.spacing.lg,
+            largeTitle: largeTitleElement,
+            onScroll: onListScroll,
+            showsVerticalScrollIndicator,
+          })
+        ) : (
+          <Animated.ScrollView
+            {...scrollViewProps}
+            alwaysBounceVertical={Platform.OS === 'ios'}
+            automaticallyAdjustContentInsets={false}
+            contentInsetAdjustmentBehavior="never"
+            ref={scrollRef}
+            scrollEventThrottle={16}
+            onScroll={onScroll}
+            style={styles.scrollView}
+            contentContainerStyle={contentContainerStyle}
+            showsVerticalScrollIndicator={showsVerticalScrollIndicator}
+          >
+            <View style={[styles.content, { gap: contentGap ?? theme.spacing.lg }]}>
+              {largeTitleElement}
+              {children}
+            </View>
+          </Animated.ScrollView>
+        )}
       </View>
       {fixedContent ? (
         <View pointerEvents="box-none" style={styles.fixedContent}>

@@ -1,11 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
 import { Text, View } from 'react-native';
 
-import { AppearanceSheet } from '@/components/demo/AppearanceSheet';
-import { DemoToolbar } from '@/components/demo/DemoToolbar';
-import { NativeButton, NativeCardContextMenu } from '@/components/native';
 import { PremiumCard, ProgressiveCollapsibleScreen } from '@/components/premium';
 import { useAppSafeAreaInsets } from '@/providers';
 import { useAppTheme } from '@/theme';
@@ -14,7 +10,6 @@ export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { theme } = useAppTheme();
   const insets = useAppSafeAreaInsets();
-  const [appearanceVisible, setAppearanceVisible] = useState(false);
 
   return (
     <>
@@ -28,7 +23,6 @@ export default function DetailScreen() {
           headerTransparent: true,
         }}
       />
-      <DemoToolbar onOpenAppearance={() => setAppearanceVisible(true)} />
       <View style={{ backgroundColor: theme.colors.background, flex: 1 }}>
         <ProgressiveCollapsibleScreen
           compactTitle="Demonstração"
@@ -56,74 +50,38 @@ export default function DetailScreen() {
           }}
         >
           <View style={{ gap: theme.spacing.lg, paddingHorizontal: theme.layout.screenHorizontalPadding }}>
-            <NativeCardContextMenu
-              actions={[
-                {
-                  id: 'appearance',
-                  title: 'Abrir aparência',
-                  systemImage: 'circle.lefthalf.filled',
-                  onPress: () => setAppearanceVisible(true),
-                },
-              ]}
-              title="Exemplo de contexto"
-            >
-              <PremiumCard>
-                <View
-                  style={{
-                    borderRadius: theme.radius.card,
-                    height: 200,
-                    overflow: 'hidden',
-                  }}
-                >
-                  <LinearGradient
-                    colors={['#168A75', '#315AE8', '#785BD7']}
-                    end={{ x: 1, y: 1 }}
-                    start={{ x: 0, y: 0 }}
-                    style={{ flex: 1, justifyContent: 'flex-end', padding: theme.spacing.lg }}
-                  >
-                    <Text style={[theme.typography.title2, { color: '#FFFFFF' }]}>
-                      {id ?? 'visual-system'}
-                    </Text>
-                  </LinearGradient>
-                </View>
-                <Text
-                  style={[
-                    theme.typography.body,
-                    { color: theme.colors.textSecondary, marginTop: theme.spacing.md },
-                  ]}
-                >
-                  A navegação usa push/pop do sistema. No iOS, deslize desde a borda esquerda para
-                  voltar e observe a toolbar acompanhar a transição.
-                </Text>
-              </PremiumCard>
-            </NativeCardContextMenu>
-
             <PremiumCard>
-              <Text style={[theme.typography.title3, { color: theme.colors.textPrimary }]}>
-                Controles do sistema
-              </Text>
+              <View
+                style={{
+                  borderRadius: theme.radius.card,
+                  height: 200,
+                  overflow: 'hidden',
+                }}
+              >
+                <LinearGradient
+                  colors={['#168A75', '#315AE8', '#785BD7']}
+                  end={{ x: 1, y: 1 }}
+                  start={{ x: 0, y: 0 }}
+                  style={{ flex: 1, justifyContent: 'flex-end', padding: theme.spacing.lg }}
+                >
+                  <Text style={[theme.typography.title2, { color: '#FFFFFF' }]}>
+                    {id ?? 'visual-system'}
+                  </Text>
+                </LinearGradient>
+              </View>
               <Text
                 style={[
                   theme.typography.body,
-                  { color: theme.colors.textSecondary, marginTop: theme.spacing.xs },
+                  { color: theme.colors.textSecondary, marginTop: theme.spacing.md },
                 ]}
               >
-                O botão abaixo usa SwiftUI no Development Build e um fallback em Expo Go, Android e Web.
+                A navegação usa push/pop do sistema. No iOS, deslize desde a borda esquerda para
+                voltar e observe a toolbar acompanhar a transição.
               </Text>
-              <NativeButton
-                accessibilityLabel="Abrir painel de aparência"
-                fallbackIcon="sunny-outline"
-                haptic="light"
-                label="Abrir Bottom Sheet"
-                onPress={() => setAppearanceVisible(true)}
-                systemImage="sun.max"
-                variant="primary"
-              />
             </PremiumCard>
           </View>
         </ProgressiveCollapsibleScreen>
       </View>
-      <AppearanceSheet onVisibleChange={setAppearanceVisible} visible={appearanceVisible} />
     </>
   );
 }
