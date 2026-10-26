@@ -16,73 +16,19 @@ if ($sourceRoot -ne $expectedSource -or $destinationRoot -ne $expectedDestinatio
 Import-Module (Join-Path $PSScriptRoot 'SaveAppMirrorSecurity.psm1') -Force -DisableNameChecking -ErrorAction Stop
 $sourceRoot = Assert-SaveAppMirrorRoot -Root $sourceRoot
 $destinationRoot = Assert-SaveAppMirrorRoot -Root $destinationRoot
-
-$allowedFiles = @(
-  'README.md','AI_CONTEXT.md','AGENTS.md','.gitignore',
-  'app.config.js','babel.config.js','eas.json','eslint.config.js','expo-env.d.ts',
-  'index.ts','jest.config.js','metro.config.js','package.json','package-lock.json','tsconfig.json',
-  'modules/document-thumbnailing/package.json','modules/document-thumbnailing/expo-module.config.json',
-  'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec',
-  'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift',
-  'modules/document-thumbnailing/src/index.ts',
-  'modules/clipboard-url-detection/package.json','modules/clipboard-url-detection/expo-module.config.json',
-  'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec',
-  'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
-  'modules/clipboard-url-detection/src/index.ts',
-  'plugins/withStarterToolbarSync.js',
-  'scripts/patch-expo-ui-bottom-sheet.js','scripts/patch-expo-module-scan-timeout.js',
-  'scripts/verify-saveapp-native.js',
-  'scripts/create-saveapp-provisional-icon.ps1',
-  'scripts/mirror-saveapp.ps1','scripts/Invoke-SaveAppSwiftPreflight.ps1',
-  'scripts/Start-SaveAppNativeSim.ps1','scripts/Download-SaveAppSimulatorArchive.ps1',
-  'scripts/SaveAppMirrorSecurity.psm1','scripts/SaveAppNativeSimCliGuard.psm1',
-  '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
-  '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs'
-)
-$allowedDirectories = @('assets','src','docs','.agents/skills','tests')
+$mirrorAllowlist = Get-SaveAppMirrorAllowlist
+$allowedFiles = $mirrorAllowlist.AllowedFiles
+$allowedDirectories = $mirrorAllowlist.AllowedDirectories
 function Invoke-Git {
   param([string]$Repository,[string[]]$GitArguments)
   $result = & git -C $Repository @GitArguments 2>&1
   if ($LASTEXITCODE -ne 0) { throw "git $($GitArguments -join ' ') failed in $Repository : $result" }
   return @($result | ForEach-Object { "$_" })
 }
-function Get-RelativePath {
-  param([string]$Base,[string]$FullPath)
-  return [IO.Path]::GetRelativePath($Base,$FullPath).Replace('\','/')
-}
 function Test-AllowedRelativePath {
   param([string]$RelativePath)
   return Test-SaveAppMirrorAllowedRelativePath -RelativePath $RelativePath `
     -AllowedFiles $allowedFiles -AllowedDirectories $allowedDirectories
-}
-function Get-CandidateFiles {
-  $result = [Collections.Generic.List[string]]::new()
-  foreach ($relative in $allowedFiles) {
-    if ($relative -eq '.nativesim-source') { continue }
-    $path = Resolve-SaveAppMirrorPath -Base $sourceRoot -RelativePath $relative -ExpectedType File -AllowMissingLeaf
-    if ($null -ne $path) { $result.Add($relative) }
-  }
-  foreach ($relativeDirectory in $allowedDirectories) {
-    $path = Resolve-SaveAppMirrorPath -Base $sourceRoot -RelativePath $relativeDirectory -ExpectedType Directory -AllowMissingLeaf
-    if ($null -eq $path) { continue }
-    $pending = [Collections.Generic.Stack[string]]::new()
-    $pending.Push($relativeDirectory)
-    while ($pending.Count -gt 0) {
-      $currentRelative = $pending.Pop()
-      $currentPath = Resolve-SaveAppMirrorPath -Base $sourceRoot -RelativePath $currentRelative -ExpectedType Directory
-      foreach ($item in Get-ChildItem -LiteralPath $currentPath -Force -ErrorAction Stop) {
-        $itemRelative = Get-RelativePath -Base $sourceRoot -FullPath $item.FullName
-        $expectedType = if ($item.PSIsContainer) { 'Directory' } else { 'File' }
-        $null = Resolve-SaveAppMirrorPath -Base $sourceRoot -RelativePath $itemRelative -ExpectedType $expectedType
-        if ($item.PSIsContainer) {
-          $pending.Push($itemRelative)
-        } else {
-          $result.Add($itemRelative)
-        }
-      }
-    }
-  }
-  return @($result | Sort-Object -Unique)
 }
 function Assert-SafeFiles {
   param([string]$Base,[string[]]$RelativePaths)
@@ -165,7 +111,8 @@ if ($destinationLive.Split()[0] -ne $destinationHead) {
   throw 'Public mirror local main must exactly match live origin/main before mirroring.'
 }
 
-$candidates = @(Get-CandidateFiles)
+$candidates = @(Get-SaveAppMirrorCandidateFiles -SourceRoot $sourceRoot `
+  -AllowedFiles $allowedFiles -AllowedDirectories $allowedDirectories)
 if ($candidates.Count -lt 1) { throw 'The mirror allowlist produced no files.' }
 Assert-SafeFiles $sourceRoot $candidates
 $expectedProvenance = @(
@@ -194,6 +141,17 @@ if ($hasStagedPreview) {
     throw 'Staged preview provenance does not match the current private source commit.'
   }
 }
+
+$snapshotValidatorPath = Resolve-SaveAppMirrorPath -Base $sourceRoot `
+  -RelativePath 'scripts/Test-SaveAppMirrorSnapshot.ps1' -ExpectedType File
+Write-Output 'Running the full sanitized-snapshot gate before writing to or staging the public mirror.'
+& pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $snapshotValidatorPath `
+  -SourceRoot $sourceRoot -SourceCommit $sourceSha
+if ($LASTEXITCODE -ne 0) {
+  throw 'The exact local mirror snapshot failed validation; public mirror files were not copied or staged, and no commit, push, Preflight, or NativeSim was started.'
+}
+Write-Output 'The exact allowlisted local mirror snapshot passed dependency, application, Expo, and security validation.'
+
 foreach ($relative in $candidates) {
   $null = Copy-SaveAppMirrorFile -SourceRoot $sourceRoot -MirrorRoot $destinationRoot -RelativePath $relative
 }

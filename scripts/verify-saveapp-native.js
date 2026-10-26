@@ -147,6 +147,48 @@ if (!fs.existsSync(simulatorBuildSettingsVerifierPath)) {
   }
 }
 
+const mirrorSecurityPath = path.join(root, 'scripts', 'SaveAppMirrorSecurity.psm1');
+const mirrorScriptPath = path.join(root, 'scripts', 'mirror-saveapp.ps1');
+const snapshotGatePath = path.join(root, 'scripts', 'Test-SaveAppMirrorSnapshot.ps1');
+if (!fs.existsSync(mirrorSecurityPath) || !fs.existsSync(mirrorScriptPath) || !fs.existsSync(snapshotGatePath)) {
+  fail('the shared mirror allowlist, publisher, or local snapshot gate is missing');
+} else {
+  const mirrorSecuritySource = fs.readFileSync(mirrorSecurityPath, 'utf8');
+  const mirrorScriptSource = fs.readFileSync(mirrorScriptPath, 'utf8');
+  const snapshotGateSource = fs.readFileSync(snapshotGatePath, 'utf8');
+  const requiredMirrorDependencies = [
+    "'scripts/verify-saveapp-simulator-build-settings.js'",
+    "'scripts/Test-SaveAppMirrorSnapshot.ps1'",
+    "'scripts/SaveAppMirrorSecurity.psm1'",
+    "'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec'",
+    "'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec'",
+  ];
+  if (requiredMirrorDependencies.some((marker) => !mirrorSecuritySource.includes(marker))) {
+    fail('the exact mirror allowlist omits a required NativeSim helper or local module dependency');
+  }
+  if (
+    mirrorSecuritySource.includes("$allowedDirectories = @('scripts'") ||
+    mirrorSecuritySource.includes("$allowedDirectories = @('modules'")
+  ) {
+    fail('the mirror allowlist must not recursively include sensitive scripts or modules directories');
+  }
+  const snapshotGateIndex = mirrorScriptSource.indexOf('Test-SaveAppMirrorSnapshot.ps1');
+  const publicCopyIndex = mirrorScriptSource.indexOf(
+    'Copy-SaveAppMirrorFile -SourceRoot $sourceRoot -MirrorRoot $destinationRoot',
+  );
+  const publicStageIndex = mirrorScriptSource.indexOf('git -C $destinationRoot add');
+  const publicPushIndex = mirrorScriptSource.indexOf('push --set-upstream origin main');
+  if (
+    !snapshotGateSource.includes('Required mirror dependency is absent') ||
+    snapshotGateIndex < 0 ||
+    publicCopyIndex <= snapshotGateIndex ||
+    publicStageIndex <= snapshotGateIndex ||
+    publicPushIndex <= snapshotGateIndex
+  ) {
+    fail('the complete isolated mirror snapshot gate must run before public copy, staging, or push');
+  }
+}
+
 const autolinkingCli = path.join(
   root,
   'node_modules',

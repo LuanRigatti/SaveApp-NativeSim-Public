@@ -95,14 +95,18 @@ describe("Expo module scan timeout patch", () => {
       path.join(__dirname, "..", "scripts", "mirror-saveapp.ps1"),
       "utf8",
     );
-    const allowedDirectories = mirrorScript.match(
+    const mirrorSecurity = fs.readFileSync(
+      path.join(__dirname, "..", "scripts", "SaveAppMirrorSecurity.psm1"),
+      "utf8",
+    );
+    const allowedDirectories = mirrorSecurity.match(
       /\$allowedDirectories\s*=\s*@\(([^)]*)\)/,
     )?.[1];
 
     expect(rootPackage.scripts.postinstall).toContain(
       "scripts/patch-expo-module-scan-timeout.js",
     );
-    expect(mirrorScript).toContain(
+    expect(mirrorSecurity).toContain(
       "'scripts/patch-expo-module-scan-timeout.js'",
     );
     expect(allowedDirectories).not.toContain("scripts");

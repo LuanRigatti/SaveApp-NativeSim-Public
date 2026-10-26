@@ -154,11 +154,13 @@ try {
   } 'staged paths outside the configured mirror allowlist are rejected'
 
   $mirrorScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\mirror-saveapp.ps1') -Raw
-  $allowedFilesMatch = [regex]::Match($mirrorScript,'(?ms)\$allowedFiles\s*=\s*@\((?<entries>.*?)\)')
-  $allowedDirectoriesMatch = [regex]::Match($mirrorScript,'(?ms)\$allowedDirectories\s*=\s*@\((?<entries>.*?)\)')
-  Assert-True ($allowedFilesMatch.Success -and $allowedDirectoriesMatch.Success) 'mirror snapshot file and directory allowlists remain explicit'
-  $productionAllowedFiles = @([regex]::Matches($allowedFilesMatch.Groups['entries'].Value,'\x27([^\x27]+)\x27') | ForEach-Object { $_.Groups[1].Value })
-  $productionAllowedDirectories = @([regex]::Matches($allowedDirectoriesMatch.Groups['entries'].Value,'\x27([^\x27]+)\x27') | ForEach-Object { $_.Groups[1].Value })
+  $snapshotValidator = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Test-SaveAppMirrorSnapshot.ps1') -Raw
+  $productionAllowlist = Get-SaveAppMirrorAllowlist
+  $productionAllowedFiles = $productionAllowlist.AllowedFiles
+  $productionAllowedDirectories = $productionAllowlist.AllowedDirectories
+  Assert-True ($productionAllowedFiles -contains 'scripts/verify-saveapp-simulator-build-settings.js' -and
+    $productionAllowedFiles -contains 'scripts/Test-SaveAppMirrorSnapshot.ps1' -and
+    $productionAllowedDirectories -notcontains 'scripts' -and $productionAllowedDirectories -notcontains 'modules') 'mirror path policy explicitly includes the simulator build-settings helper and snapshot gate without broadening sensitive directories'
   $documentThumbnailModuleFiles = @(
     'modules/document-thumbnailing/package.json',
     'modules/document-thumbnailing/expo-module.config.json',
@@ -177,6 +179,40 @@ try {
   Assert-True ($productionAllowedDirectories -notcontains 'modules' -and
     $productionAllowedDirectories -notcontains 'modules/document-thumbnailing' -and
     $productionAllowedDirectories -notcontains 'modules/clipboard-url-detection') 'the mirror does not recursively allow modules or either local module directory'
+  $productionCandidates = @(Get-SaveAppMirrorCandidateFiles -SourceRoot $repositoryRoot `
+    -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories)
+  Assert-True ($productionCandidates -contains 'scripts/verify-saveapp-simulator-build-settings.js' -and
+    $productionCandidates -contains 'scripts/Test-SaveAppMirrorSnapshot.ps1') 'the exact production candidate set contains the helper and pre-publication snapshot gate'
+
+  $incompleteSnapshot = Join-Path $tempRoot 'incomplete-mirror-snapshot'
+  $incompleteManifestPath = Join-Path $tempRoot 'incomplete-mirror-manifest.json'
+  New-Item -ItemType Directory -Path $incompleteSnapshot -Force | Out-Null
+  $incompleteEntries = foreach ($relative in $productionCandidates | Where-Object { $_ -ne 'scripts/verify-saveapp-simulator-build-settings.js' }) {
+    $fullPath = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $relative -ExpectedType File
+    [pscustomobject]@{ Path = $relative; Sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash }
+  }
+  $incompleteProvenance = @('source_repository=LuanRigatti/SaveApp','source_branch=main',('source_commit=' + ('b' * 40))) -join [Environment]::NewLine
+  [IO.File]::WriteAllText($incompleteManifestPath,([pscustomobject]@{
+    SourceCommit = ('b' * 40)
+    Provenance = $incompleteProvenance
+    Files = @($incompleteEntries)
+  } | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+  $pwshForGate = Get-Command pwsh.exe -ErrorAction Stop
+  $incompleteGateOutput = @(& $pwshForGate.Source -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
+    (Join-Path $repositoryRoot 'scripts\Test-SaveAppMirrorSnapshot.ps1') `
+    -SnapshotRoot $incompleteSnapshot -ManifestPath $incompleteManifestPath -ManifestOnly 2>&1)
+  $incompleteGateExit = $LASTEXITCODE
+  $incompleteGateText = ($incompleteGateOutput | ForEach-Object { "$_" }) -join [Environment]::NewLine
+  $normalizedIncompleteGateText = [regex]::Replace($incompleteGateText,'\s+',' ')
+  Assert-True ($incompleteGateExit -ne 0 -and
+    $normalizedIncompleteGateText -match 'Required mirror dependency is absent from.*scripts/verify-saveapp-simulator-build-settings\.js' -and
+    $normalizedIncompleteGateText -notmatch 'Snapshot gate: npm ci') "an omitted mandatory build-settings helper blocks the local snapshot gate before npm or publication; output: $incompleteGateText"
+  $snapshotGateIndex = $mirrorScript.IndexOf('Test-SaveAppMirrorSnapshot.ps1',[StringComparison]::Ordinal)
+  $destinationCopyIndex = $mirrorScript.IndexOf('Copy-SaveAppMirrorFile -SourceRoot $sourceRoot -MirrorRoot $destinationRoot',[StringComparison]::Ordinal)
+  $destinationStageIndex = $mirrorScript.IndexOf("git -C `$destinationRoot add",[StringComparison]::Ordinal)
+  $destinationPushIndex = $mirrorScript.IndexOf('push --set-upstream origin main',[StringComparison]::Ordinal)
+  Assert-True ($snapshotGateIndex -ge 0 -and $destinationCopyIndex -gt $snapshotGateIndex -and
+    $destinationStageIndex -gt $snapshotGateIndex -and $destinationPushIndex -gt $snapshotGateIndex) 'incomplete snapshots are rejected before any public mirror copy, staging, commit, or push'
   foreach ($moduleRelativePath in $allAllowedLocalModuleFiles) {
     Assert-True ($productionAllowedFiles -contains $moduleRelativePath) "$moduleRelativePath is included as an exact mirror allowlist entry"
     Assert-True (Test-SaveAppMirrorAllowedRelativePath -RelativePath $moduleRelativePath `
@@ -409,6 +445,12 @@ try {
   $preflight = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Invoke-SaveAppSwiftPreflight.ps1') -Raw
   $launcher = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Start-SaveAppNativeSim.ps1') -Raw
   $mirrorScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\mirror-saveapp.ps1') -Raw
+  $launcherMirrorIndex = $launcher.IndexOf('& pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $mirrorScript -Publish',[StringComparison]::Ordinal)
+  $launcherMirrorFailureIndex = $launcher.IndexOf('Sanitized SaveApp mirror did not complete successfully; Preflight and NativeSim were not started.',[StringComparison]::Ordinal)
+  $launcherPreflightIndex = $launcher.IndexOf('& $preflightScript -PassThru',[StringComparison]::Ordinal)
+  $launcherNativeStartIndex = $launcher.IndexOf('$nativeProcess.Start()',[StringComparison]::Ordinal)
+  Assert-True ($launcherMirrorIndex -ge 0 -and $launcherMirrorFailureIndex -gt $launcherMirrorIndex -and
+    $launcherPreflightIndex -gt $launcherMirrorFailureIndex -and $launcherNativeStartIndex -gt $launcherPreflightIndex) 'a failed local snapshot/mirror gate stops before Swift Preflight dispatch or NativeSim launch'
   $preflightWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github\workflows\swift-preflight.yml') -Raw
   Assert-True ($launcher.Contains('-ExpectedSha $mirrorSha') -and
     $preflight.Contains('$live.Split()[0] -ne $sha')) 'NativeSim requires Swift Preflight success for the exact public mirror SHA'

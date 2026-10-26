@@ -103,6 +103,96 @@ function Test-SaveAppMirrorBlockedName {
   return $path -match $blockedNamePattern
 }
 
+function Get-SaveAppMirrorAllowlist {
+  $allowedFiles = @(
+    'README.md','AI_CONTEXT.md','AGENTS.md','.gitignore',
+    'app.config.js','babel.config.js','eas.json','eslint.config.js','expo-env.d.ts',
+    'index.ts','jest.config.js','metro.config.js','package.json','package-lock.json','tsconfig.json',
+    'modules/document-thumbnailing/package.json','modules/document-thumbnailing/expo-module.config.json',
+    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec',
+    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift',
+    'modules/document-thumbnailing/src/index.ts',
+    'modules/clipboard-url-detection/package.json','modules/clipboard-url-detection/expo-module.config.json',
+    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec',
+    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
+    'modules/clipboard-url-detection/src/index.ts',
+    'plugins/withStarterToolbarSync.js',
+    'scripts/patch-expo-ui-bottom-sheet.js','scripts/patch-expo-module-scan-timeout.js',
+    'scripts/verify-saveapp-native.js','scripts/verify-saveapp-simulator-build-settings.js',
+    'scripts/Test-SaveAppMirrorSnapshot.ps1',
+    'scripts/create-saveapp-provisional-icon.ps1',
+    'scripts/mirror-saveapp.ps1','scripts/Invoke-SaveAppSwiftPreflight.ps1',
+    'scripts/Start-SaveAppNativeSim.ps1','scripts/Download-SaveAppSimulatorArchive.ps1',
+    'scripts/SaveAppMirrorSecurity.psm1','scripts/SaveAppNativeSimCliGuard.psm1',
+    '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
+    '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs'
+  )
+  $allowedDirectories = @('assets','src','docs','.agents/skills','tests')
+  $requiredFiles = @(
+    'scripts/SaveAppMirrorSecurity.psm1',
+    'scripts/Test-SaveAppMirrorSnapshot.ps1',
+    'scripts/verify-saveapp-simulator-build-settings.js'
+  )
+  foreach ($required in $requiredFiles) {
+    if ($allowedFiles -notcontains $required) {
+      throw "Required NativeSim mirror dependency is missing from the exact allowlist: $required"
+    }
+  }
+  foreach ($broadDirectory in @('scripts','modules','ios','android')) {
+    if ($allowedDirectories -contains $broadDirectory) {
+      throw "The NativeSim mirror allowlist must not recursively include $broadDirectory."
+    }
+  }
+  return [pscustomobject]@{
+    AllowedFiles = [string[]]$allowedFiles
+    AllowedDirectories = [string[]]$allowedDirectories
+  }
+}
+
+function Get-SaveAppMirrorCandidateFiles {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$SourceRoot,
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AllowedFiles,
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AllowedDirectories
+  )
+
+  $result = [Collections.Generic.List[string]]::new()
+  foreach ($relative in $AllowedFiles) {
+    if ($relative -eq '.nativesim-source') { continue }
+    $path = Resolve-SaveAppMirrorPath -Base $SourceRoot -RelativePath $relative -ExpectedType File -AllowMissingLeaf
+    if ($null -ne $path) { $result.Add($relative) }
+  }
+  foreach ($relativeDirectory in $AllowedDirectories) {
+    $path = Resolve-SaveAppMirrorPath -Base $SourceRoot -RelativePath $relativeDirectory -ExpectedType Directory -AllowMissingLeaf
+    if ($null -eq $path) { continue }
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($relativeDirectory)
+    while ($pending.Count -gt 0) {
+      $currentRelative = $pending.Pop()
+      $currentPath = Resolve-SaveAppMirrorPath -Base $SourceRoot -RelativePath $currentRelative -ExpectedType Directory
+      foreach ($item in Get-ChildItem -LiteralPath $currentPath -Force -ErrorAction Stop) {
+        $itemRelative = [IO.Path]::GetRelativePath($SourceRoot,$item.FullName).Replace('\','/')
+        $expectedType = if ($item.PSIsContainer) { 'Directory' } else { 'File' }
+        $null = Resolve-SaveAppMirrorPath -Base $SourceRoot -RelativePath $itemRelative -ExpectedType $expectedType
+        if ($item.PSIsContainer) {
+          $pending.Push($itemRelative)
+        } else {
+          $result.Add($itemRelative)
+        }
+      }
+    }
+  }
+  foreach ($relative in $result) {
+    if (-not (Test-SaveAppMirrorAllowedRelativePath -RelativePath $relative `
+      -AllowedFiles $AllowedFiles -AllowedDirectories $AllowedDirectories)) {
+      throw "Mirror candidate escaped the exact allowlist: $relative"
+    }
+    if (Test-SaveAppMirrorBlockedName -RelativePath $relative) { throw "Blocked mirror candidate: $relative" }
+  }
+  return @($result | Sort-Object -Unique)
+}
+
 function Get-SaveAppMirrorStagedPathResult {
   [CmdletBinding()]
   param(
@@ -352,4 +442,4 @@ function Write-SaveAppProvenance {
   }
 }
 
-Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Test-SaveAppMirrorAllowedRelativePath,Test-SaveAppMirrorBlockedName,Get-SaveAppMirrorStagedPathResult,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance
+Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Test-SaveAppMirrorAllowedRelativePath,Test-SaveAppMirrorBlockedName,Get-SaveAppMirrorAllowlist,Get-SaveAppMirrorCandidateFiles,Get-SaveAppMirrorStagedPathResult,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance

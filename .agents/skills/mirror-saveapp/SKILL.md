@@ -12,7 +12,7 @@ Use this skill for an explicit request to mirror/publish SaveApp, or an explicit
 - Private source: `C:\Projetos\SaveApp`, `LuanRigatti/SaveApp`, branch `main`.
 - Public mirror: `C:\Projetos\SaveApp-NativeSim-Public`, `LuanRigatti/SaveApp-NativeSim-Public`, branch `main`.
 - The direction is always private SaveApp to public mirror. Never copy or merge from public to private.
-- Never operate on any path other than these two fixed SaveApp folders.
+- Never operate on any other repository or checkout. The local snapshot gate may create and clean only its validated, uniquely named `C:\Projetos\SaveAppMirrorValidation-<GUID>` temporary directory beside the private source; it does not write to the public mirror.
 
 ## Publish flow
 
@@ -27,6 +27,8 @@ Invoke-Pester -Path .\tests\SaveAppSecurity.Tests.ps1
 ```
 
 Stop if the test exits unsuccessfully. Then preview the mirror:
+
+The mirror script first creates an exact snapshot from the publication allowlist and validates its hashes/provenance, performs a clean `npm ci`, runs typecheck, lint, the complete Jest suite, native contracts, Expo dependency checks, Expo Doctor, and the NativeSim security simulations. The snapshot is kept in the dedicated temporary sibling path above and removed afterward. A missing required file or failed check blocks before any public copy, staging, commit, push, Swift Preflight, or NativeSim.
 
 ```powershell
 pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\mirror-saveapp.ps1
