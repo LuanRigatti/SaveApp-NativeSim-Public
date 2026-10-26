@@ -70,6 +70,7 @@ import {
 import type { AccentColorName } from '@/theme';
 import { getAccentColorTokens } from '@/theme/colors';
 import { useSaveLinkDynamicIsland } from '@/features/dynamic-island/SaveLinkDynamicIslandProvider';
+import { createLiveActivityFailureAlert } from '@/features/dynamic-island/liveActivityFailureAlert';
 import { formatStorageBytes } from '@/features/storage/storageUsage';
 import { useStorageUsage } from '@/features/storage/useStorageUsage';
 import {
@@ -1028,13 +1029,12 @@ export default function HomeSettingsBottomSheet({
                       isOn={isSaveLinkModeEnabled}
                       onIsOnChange={(nextValue) => {
                         if (!isSaveLinkModeAvailable) return;
-                        void setSaveLinkModeEnabled(nextValue).catch(() => {
-                          Alert.alert(
-                            nextValue ? 'Não foi possível ativar' : 'Não foi possível desativar',
-                            nextValue
-                              ? 'O iOS não permitiu iniciar a Live Activity. Verifique se Atividades ao Vivo estão habilitadas.'
-                              : 'A atividade existente não pôde ser encerrada. Tente novamente.',
+                        void setSaveLinkModeEnabled(nextValue).catch((error: unknown) => {
+                          const failure = createLiveActivityFailureAlert(
+                            error,
+                            nextValue ? 'activate' : 'deactivate',
                           );
+                          Alert.alert(failure.title, failure.message);
                         });
                       }}
                       modifiers={[

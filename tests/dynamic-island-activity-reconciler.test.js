@@ -5,6 +5,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 const { createActivityReconciler } = require('../src/features/dynamic-island/activityReconciler');
 const { createOptionalNativeModuleLoader } = require('../src/features/dynamic-island/optionalNativeModuleLoader');
 const { isMatchingActivityLinkToken } = require('../src/features/dynamic-island/activityLinkAuthorization');
+const { createLiveActivityFailureAlert } = require('../src/features/dynamic-island/liveActivityFailureAlert');
 
 describe('SaveApp Live Activity lifecycle', () => {
   test('does not load the ExpoWidgets factory when the native module is absent', () => {
@@ -124,5 +125,40 @@ describe('SaveApp Live Activity lifecycle', () => {
     });
 
     await expect(reconcile(true)).rejects.toBe(expectedError);
+  });
+
+  test('shows the underlying native activation error instead of replacing it with a permission guess', () => {
+    const failure = createLiveActivityFailureAlert(
+      new Error('Failed to start live activity: Missing required entitlement'),
+      'activate',
+    );
+
+    expect(failure.title).toBe('Não foi possível ativar');
+    expect(failure.message).toContain('Missing required entitlement');
+    expect(failure.message).not.toContain('Verifique se Atividades ao Vivo estão habilitadas');
+  });
+
+  test('keeps the native error code and message in the failure details', () => {
+    const failure = createLiveActivityFailureAlert(
+      { code: 'ERR_ACTIVITY_START', message: 'ActivityKit rejected the request' },
+      'activate',
+    );
+
+    expect(failure.message).toContain('ERR_ACTIVITY_START');
+    expect(failure.message).toContain('ActivityKit rejected the request');
+  });
+
+  test('uses a safe fallback when the caught value has no readable error details', () => {
+    const failure = createLiveActivityFailureAlert(null, 'activate');
+
+    expect(failure.message).toContain('Não foi possível iniciar a Live Activity');
+    expect(failure.message).not.toContain('undefined');
+  });
+
+  test('bounds unexpectedly long native error details', () => {
+    const failure = createLiveActivityFailureAlert(new Error('x'.repeat(2_000)), 'activate');
+
+    expect(failure.message.length).toBeLessThan(800);
+    expect(failure.message.endsWith('…')).toBe(true);
   });
 });

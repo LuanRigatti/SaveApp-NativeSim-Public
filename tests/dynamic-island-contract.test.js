@@ -14,7 +14,11 @@ const layoutSource = readSource('../src/features/dynamic-island/saveLinkLiveActi
 const composerRouteSource = readSource('../src/app/links/compose.tsx');
 const clipboardHookSource = readSource('../src/features/home-content/useClipboardLinkOffer.ts');
 const swiftPreflightWorkflow = readSource('../.github/workflows/swift-preflight.yml');
+const nativeSimWorkflow = readSource('../.github/workflows/native-sim.yml');
 const nativeVerificationSource = readSource('../scripts/verify-saveapp-native.js');
+const failureAlertSource = readSource('../src/features/dynamic-island/liveActivityFailureAlert.ts');
+const expoWidgetsModuleSource = readSource('../node_modules/expo-widgets/ios/WidgetsModule.swift');
+const expoWidgetsFactorySource = readSource('../node_modules/expo-widgets/ios/LiveActivityFactory.swift');
 
 describe('SaveApp Dynamic Island link-saving mode', () => {
   test('uses Expo Widgets with the private app group and no APNs or unrelated widgets', () => {
@@ -49,6 +53,27 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(swiftPreflightWorkflow).toContain('createLiveActivity uses the generated generic WidgetLiveActivity; widgets[] is not required.');
   });
 
+  test('NativeSim ad hoc-signs the Simulator app and verifies App Group entitlements on app and extension', () => {
+    const buildStep = nativeSimWorkflow.match(
+      /- name: Build ad hoc signed Simulator app[\s\S]*?(?=\n      - name:)/,
+    )?.[0] ?? '';
+
+    expect(buildStep).toContain('-sdk iphonesimulator');
+    expect(buildStep).toContain('CODE_SIGNING_ALLOWED=YES');
+    expect(buildStep).toContain('CODE_SIGNING_REQUIRED=YES');
+    expect(buildStep).toContain('CODE_SIGN_IDENTITY=-');
+    expect(buildStep).toContain("Signature=adhoc");
+    expect(buildStep).toContain('codesign -d --entitlements :-');
+    expect(buildStep).toContain('com.apple.security.application-groups');
+    expect(buildStep).toContain('ExpoWidgetsTarget.appex');
+    expect(buildStep).toContain('NSSupportsLiveActivities');
+    expect(buildStep).toContain('ExpoWidgetsAppGroupIdentifier');
+    expect(buildStep).toContain('verify_app_group_signature "$APP" "SaveApp"');
+    expect(buildStep).toContain('verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"');
+    expect(buildStep).not.toContain('CODE_SIGNING_ALLOWED=NO');
+    expect(swiftPreflightWorkflow).toContain('CODE_SIGNING_ALLOWED=NO');
+  });
+
   test('places one native no-subtitle toggle above Personalização', () => {
     const settingsList = settingsSource.match(
       /<List modifiers=\{\[navigationTitle\('Configurações'\)[\s\S]*?<\/List>/,
@@ -59,6 +84,9 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(firstSection).not.toMatch(/subtitle|NavigationLink/);
     expect(settingsList.indexOf(firstSection)).toBeLessThan(settingsList.indexOf('<Section title="Personalização">'));
     expect(settingsSource).toContain('setSaveLinkModeEnabled(nextValue)');
+    expect(settingsSource).toContain('.catch((error: unknown) =>');
+    expect(settingsSource).toContain('createLiveActivityFailureAlert');
+    expect(failureAlertSource).toContain('Detalhe informado pelo sistema');
     expect(settingsSource).toContain(
       'disabled(!isSaveLinkModeReady || !isSaveLinkModeAvailable || isSaveLinkModeBusy)',
     );
@@ -71,6 +99,21 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(providerSource).toContain('enqueueReconcile(enabledRef.current)');
     expect(providerSource).toContain('setIsEnabled(previousEnabled)');
     expect(providerSource).not.toMatch(/setInterval|setTimeout|addPushToStartTokenListener/);
+  });
+
+  test('checks the App Group icon location before ActivityKit and preserves its native failure', () => {
+    const iconPreparationIndex = managerSource.indexOf('const iconUri = await getSharedAppIconUri();');
+    const activityStartIndex = managerSource.indexOf('activity = getActivityFactory().start({ iconUri }, url);');
+
+    expect(iconPreparationIndex).toBeGreaterThanOrEqual(0);
+    expect(activityStartIndex).toBeGreaterThan(iconPreparationIndex);
+    expect(managerSource).toContain('O compartilhamento nativo do ícone não está disponível.');
+    expect(expoWidgetsModuleSource).toContain(
+      'FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)',
+    );
+    expect(expoWidgetsFactorySource).toContain('ActivityAuthorizationInfo().areActivitiesEnabled');
+    expect(expoWidgetsFactorySource).toContain('Activity.request(');
+    expect(expoWidgetsFactorySource).toContain('StartLiveActivityException(error.localizedDescription)');
   });
 
   test('keeps the saved preference and skips reconciliation when ExpoWidgets is unavailable', () => {

@@ -57,6 +57,35 @@ for (const [relativePath, marker] of checks) {
   }
 }
 
+const nativeSimWorkflowPath = path.join(root, '.github/workflows/native-sim.yml');
+if (fs.existsSync(nativeSimWorkflowPath)) {
+  const nativeSimWorkflow = fs.readFileSync(nativeSimWorkflowPath, 'utf8');
+  const buildStep = nativeSimWorkflow.match(
+    /- name: Build ad hoc signed Simulator app[\s\S]*?(?=\n      - name:)/,
+  )?.[0] ?? '';
+  const requiredSimulatorSigningMarkers = [
+    '-sdk iphonesimulator',
+    'CODE_SIGNING_ALLOWED=YES',
+    'CODE_SIGNING_REQUIRED=YES',
+    'CODE_SIGN_IDENTITY=-',
+    "Signature=adhoc",
+    'codesign -d --entitlements :-',
+    'com.apple.security.application-groups',
+    'ExpoWidgetsTarget.appex',
+    'NSSupportsLiveActivities',
+    'ExpoWidgetsAppGroupIdentifier',
+    'verify_app_group_signature "$APP" "SaveApp"',
+    'verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"',
+  ];
+  if (
+    !buildStep ||
+    buildStep.includes('CODE_SIGNING_ALLOWED=NO') ||
+    requiredSimulatorSigningMarkers.some((marker) => !buildStep.includes(marker))
+  ) {
+    fail('NativeSim must ad hoc-sign only the iOS Simulator build and verify the App Group entitlement on app and extension');
+  }
+}
+
 const autolinkingCli = path.join(
   root,
   'node_modules',

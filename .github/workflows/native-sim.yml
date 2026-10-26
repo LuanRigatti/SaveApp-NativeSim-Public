@@ -50,7 +50,7 @@ on:
         description: MJPEG quality from 0.05 to 1
         default: "0.7"
       export_app:
-        description: Export unsigned Simulator app as a tar.gz artifact
+        description: Export ad hoc-signed Simulator app with verified App Group entitlements
         default: "true"
       agent_device:
         description: Remote interaction proxy is not enabled
@@ -215,7 +215,7 @@ jobs:
           npx expo prebuild --platform ios --no-install
           npx pod-install ios
 
-      - name: Build unsigned Simulator app
+      - name: Build ad hoc signed Simulator app
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
           SCHEME: ${{ inputs.scheme }}
@@ -231,13 +231,54 @@ jobs:
             -sdk iphonesimulator \
             -destination "id=$UDID" \
             -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_IDENTITY=- \
             -quiet \
             build
           APP=$(find "$DERIVED_DATA/Build/Products/Release-iphonesimulator" -maxdepth 1 -name '*.app' -print -quit)
           test -n "$APP"
+          APPEX="$APP/PlugIns/ExpoWidgetsTarget.appex"
+          test -d "$APPEX" || { echo "::error::ExpoWidgetsTarget.appex is missing from the Simulator app"; exit 1; }
+
+          EXPECTED_APP_GROUP="group.com.luanrigatti.saveapp"
+          verify_app_group_signature() {
+            local bundle_path="$1"
+            local bundle_label="$2"
+            local entitlements_path="$RUNNER_TEMP/${bundle_label}-entitlements.plist"
+            local signature_details
+            local actual_app_group
+
+            codesign --verify --strict "$bundle_path"
+            signature_details="$(codesign -dv --verbose=2 "$bundle_path" 2>&1)"
+            printf '%s\n' "$signature_details" | grep -F 'Signature=adhoc' >/dev/null || {
+              echo "::error::${bundle_label} is not signed with the expected ad hoc Simulator identity"
+              exit 1
+            }
+            codesign -d --entitlements :- "$bundle_path" > "$entitlements_path" 2>/dev/null || {
+              echo "::error::Could not extract signed entitlements from ${bundle_label}"
+              exit 1
+            }
+            actual_app_group=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$entitlements_path") || {
+              echo "::error::${bundle_label} has no signed App Groups entitlement"
+              exit 1
+            }
+            test "$actual_app_group" = "$EXPECTED_APP_GROUP" || {
+              echo "::error::${bundle_label} has an unexpected signed App Group entitlement"
+              exit 1
+            }
+            echo "Verified ad hoc signature and App Group entitlement for ${bundle_label}"
+          }
+
+          APP_LIVE_ACTIVITIES=$(/usr/libexec/PlistBuddy -c 'Print :NSSupportsLiveActivities' "$APP/Info.plist")
+          APP_GROUP_INFO=$(/usr/libexec/PlistBuddy -c 'Print :ExpoWidgetsAppGroupIdentifier' "$APP/Info.plist")
+          EXTENSION_GROUP_INFO=$(/usr/libexec/PlistBuddy -c 'Print :ExpoWidgetsAppGroupIdentifier' "$APPEX/Info.plist")
+          test "$APP_LIVE_ACTIVITIES" = "true" || { echo "::error::Live Activities are not enabled in the built app plist"; exit 1; }
+          test "$APP_GROUP_INFO" = "$EXPECTED_APP_GROUP" || { echo "::error::The built app plist has an unexpected App Group"; exit 1; }
+          test "$EXTENSION_GROUP_INFO" = "$EXPECTED_APP_GROUP" || { echo "::error::The built extension plist has an unexpected App Group"; exit 1; }
+          verify_app_group_signature "$APP" "SaveApp"
+          verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"
+
           mkdir -p build/native-sim-app
           cp -R "$APP" build/native-sim-app/
 

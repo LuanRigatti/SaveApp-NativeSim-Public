@@ -177,7 +177,10 @@ function Test-SaveAppArchiveBuildSteps {
   [CmdletBinding()]
   param([object[]]$Steps = @())
 
-  foreach ($requiredName in @('Build unsigned Simulator app','Export the .app archive','Upload Simulator archive')) {
+  $buildSteps = @($Steps | Where-Object { $_.name -in @('Build ad hoc signed Simulator app','Build unsigned Simulator app') })
+  if ($buildSteps.Count -ne 1 -or $buildSteps[0].status -ne 'completed' -or $buildSteps[0].conclusion -ne 'success') { return $false }
+
+  foreach ($requiredName in @('Export the .app archive','Upload Simulator archive')) {
     $matches = @($Steps | Where-Object { $_.name -eq $requiredName })
     if ($matches.Count -ne 1 -or $matches[0].status -ne 'completed' -or $matches[0].conclusion -ne 'success') { return $false }
   }

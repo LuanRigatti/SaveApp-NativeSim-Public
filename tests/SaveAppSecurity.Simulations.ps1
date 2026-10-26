@@ -609,11 +609,17 @@ try {
   $expiredArtifact = [pscustomobject]@{ name='native-sim-app-1234abcd'; expired=$true; size_in_bytes=256 }
   Assert-True ($null -eq (Select-SaveAppArchiveArtifact -Artifacts @($expiredArtifact) -ExpectedName 'native-sim-app-1234abcd')) 'expired archive artifacts are not selected'
   $successfulArchiveSteps = @(
-    [pscustomobject]@{ name='Build unsigned Simulator app'; status='completed'; conclusion='success' },
+    [pscustomobject]@{ name='Build ad hoc signed Simulator app'; status='completed'; conclusion='success' },
     [pscustomobject]@{ name='Export the .app archive'; status='completed'; conclusion='success' },
     [pscustomobject]@{ name='Upload Simulator archive'; status='completed'; conclusion='success' }
   )
   Assert-True (Test-SaveAppArchiveBuildSteps -Steps $successfulArchiveSteps) 'archive retrieval requires successful build, export and upload steps'
+  $legacyUnsignedArchiveSteps = @(
+    [pscustomobject]@{ name='Build unsigned Simulator app'; status='completed'; conclusion='success' },
+    [pscustomobject]@{ name='Export the .app archive'; status='completed'; conclusion='success' },
+    [pscustomobject]@{ name='Upload Simulator archive'; status='completed'; conclusion='success' }
+  )
+  Assert-True (Test-SaveAppArchiveBuildSteps -Steps $legacyUnsignedArchiveSteps) 'archive retrieval remains compatible with qualifying artifacts from the previous unsigned workflow'
   $failedArchiveSteps = @($successfulArchiveSteps[0],$successfulArchiveSteps[1],([pscustomobject]@{ name='Upload Simulator archive'; status='completed'; conclusion='failure' }))
   Assert-True (-not (Test-SaveAppArchiveBuildSteps -Steps $failedArchiveSteps)) 'archive retrieval blocks an unsuccessful upload step'
 
