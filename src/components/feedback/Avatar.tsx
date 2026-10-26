@@ -44,7 +44,7 @@ export function Avatar({ name, imageUri, size = 'medium', dimension, style }: Av
           style={{ height: resolvedDimension, width: resolvedDimension }}
         />
       ) : (
-        <Text style={[theme.typography.headline, { color: theme.colors.primary }]}>{initials}</Text>
+        <Text style={[theme.typography.headline, { color: theme.colors.info }]}>{initials}</Text>
       )}
     </View>
   );

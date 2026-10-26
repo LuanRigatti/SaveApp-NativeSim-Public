@@ -12,6 +12,13 @@ export function resolveSystemThemeMode(systemScheme: ColorSchemeName | null): Re
   return systemScheme === 'dark' ? 'dark' : 'light';
 }
 
+export function resolveAppearanceMode(
+  preference: 'system' | ResolvedThemeMode,
+  systemScheme: ColorSchemeName | null,
+): ResolvedThemeMode {
+  return preference === 'system' ? resolveSystemThemeMode(systemScheme) : preference;
+}
+
 export async function clearLegacyThemePreference(storage: PreferenceStorage): Promise<void> {
   try {
     await storage.removeItem(LEGACY_THEME_MODE_STORAGE_KEY);

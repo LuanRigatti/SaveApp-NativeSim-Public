@@ -1,0 +1,124 @@
+/* global describe, expect, test, __dirname */
+
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+
+const readSource = (path) => readFileSync(join(__dirname, path), 'utf8');
+const appConfig = readSource('../app.config.js');
+const rootSource = readSource('../src/app/_layout.tsx');
+const settingsSource = readSource('../src/components/native/HomeSettingsBottomSheet.ios.tsx');
+const providerSource = readSource('../src/features/dynamic-island/SaveLinkDynamicIslandProvider.tsx');
+const managerSource = readSource('../src/features/dynamic-island/saveLinkActivityManager.ios.ts');
+const authorizationSource = readSource('../src/features/dynamic-island/activityLinkAuthorization.ts');
+const layoutSource = readSource('../src/features/dynamic-island/saveLinkLiveActivityWidget.ios.tsx');
+const composerRouteSource = readSource('../src/app/links/compose.tsx');
+const clipboardHookSource = readSource('../src/features/home-content/useClipboardLinkOffer.ts');
+const swiftPreflightWorkflow = readSource('../.github/workflows/swift-preflight.yml');
+const nativeVerificationSource = readSource('../scripts/verify-saveapp-native.js');
+
+describe('SaveApp Dynamic Island link-saving mode', () => {
+  test('uses Expo Widgets with the private app group and no APNs or unrelated widgets', () => {
+    expect(appConfig).toContain("'expo-widgets'");
+    expect(appConfig).toContain("groupIdentifier: 'group.com.luanrigatti.saveapp'");
+    expect(appConfig).toContain('enablePushNotifications: false');
+    expect(appConfig).toContain('frequentUpdates: false');
+    expect(appConfig).not.toMatch(/widgets:\s*\[/);
+    expect(nativeVerificationSource).toContain("widgetsOptions.widgets?.length");
+    expect(rootSource).toMatch(/<SaveLinkDynamicIslandProvider>[\s\S]*?<HomeSettingsSheetProvider>/);
+    expect(rootSource).toMatch(/name="links\/compose"[\s\S]*?headerShown: false[\s\S]*?presentation: 'card'/);
+  });
+
+  test('Swift Preflight checks generated Live Activity configuration and Simulator packaging', () => {
+    const prebuildIndex = swiftPreflightWorkflow.indexOf('npx expo prebuild --platform ios --no-install');
+    const generatedCheckIndex = swiftPreflightWorkflow.indexOf(
+      'Verify generated ExpoWidgets Live Activity target and App Group',
+    );
+    const compileIndex = swiftPreflightWorkflow.indexOf('Compile the Simulator app without signing');
+    const packagedCheckIndex = swiftPreflightWorkflow.indexOf(
+      'Verify Simulator build embeds ExpoWidgets target',
+    );
+
+    expect(prebuildIndex).toBeGreaterThanOrEqual(0);
+    expect(generatedCheckIndex).toBeGreaterThan(prebuildIndex);
+    expect(compileIndex).toBeGreaterThan(generatedCheckIndex);
+    expect(packagedCheckIndex).toBeGreaterThan(compileIndex);
+    expect(swiftPreflightWorkflow).toContain('NSSupportsLiveActivities');
+    expect(swiftPreflightWorkflow).toContain('com.apple.security.application-groups');
+    expect(swiftPreflightWorkflow).toContain('WidgetLiveActivity()');
+    expect(swiftPreflightWorkflow).toContain('ExpoWidgetsTarget.appex');
+    expect(swiftPreflightWorkflow).toContain('createLiveActivity uses the generated generic WidgetLiveActivity; widgets[] is not required.');
+  });
+
+  test('places one native no-subtitle toggle above Personalização', () => {
+    const settingsList = settingsSource.match(
+      /<List modifiers=\{\[navigationTitle\('Configurações'\)[\s\S]*?<\/List>/,
+    )?.[0] ?? '';
+    const firstSection = settingsList.match(/<Section>[\s\S]*?<\/Section>/)?.[0] ?? '';
+    expect(firstSection).toMatch(/<Text>Dynamic Island<\/Text>[\s\S]*?<Toggle[\s\S]*?isOn=\{isSaveLinkModeEnabled\}/);
+    expect(firstSection).toContain('onIsOnChange=');
+    expect(firstSection).not.toMatch(/subtitle|NavigationLink/);
+    expect(settingsList.indexOf(firstSection)).toBeLessThan(settingsList.indexOf('<Section title="Personalização">'));
+    expect(settingsSource).toContain('setSaveLinkModeEnabled(nextValue)');
+    expect(settingsSource).toContain(
+      'disabled(!isSaveLinkModeReady || !isSaveLinkModeAvailable || isSaveLinkModeBusy)',
+    );
+  });
+
+  test('persists the preference, reconciles on foreground, and rolls back explicit failures', () => {
+    expect(providerSource).toContain("'@saveapp/dynamic-island-link-mode-enabled-v1'");
+    expect(providerSource).toContain('AsyncStorage.setItem(PREFERENCE_KEY, String(nextEnabled))');
+    expect(providerSource).toContain("state !== 'active'");
+    expect(providerSource).toContain('enqueueReconcile(enabledRef.current)');
+    expect(providerSource).toContain('setIsEnabled(previousEnabled)');
+    expect(providerSource).not.toMatch(/setInterval|setTimeout|addPushToStartTokenListener/);
+  });
+
+  test('keeps the saved preference and skips reconciliation when ExpoWidgets is unavailable', () => {
+    expect(managerSource).toContain("createOptionalNativeModuleLoader(\n  'ExpoWidgets'");
+    expect(managerSource).toContain('requireOptionalNativeModule');
+    expect(managerSource).not.toMatch(/^import .*expo-widgets/m);
+    expect(providerSource).toContain('isSaveLinkActivityAvailable()');
+    expect(providerSource).toContain('if (nativeModuleAvailable) {');
+    expect(providerSource).toContain('await enqueueReconcile(storedEnabled)');
+    expect(providerSource).toContain('setIsEnabled(storedEnabled)');
+    expect(providerSource).toContain('if (availableRef.current) {');
+    expect(providerSource).toContain('if (!availableRef.current) throw new Error');
+    expect(settingsSource).toContain('!isSaveLinkModeAvailable || isSaveLinkModeBusy');
+    expect(settingsSource).toContain('Indisponível nesta versão. A preferência será mantida.');
+  });
+
+  test('keeps Live Activity payload free of saved URLs and reserves the sensor region', () => {
+    expect(layoutSource).toContain("'widget'");
+    expect(layoutSource).toContain('compactLeading:');
+    expect(layoutSource).toContain('compactTrailing:');
+    expect(layoutSource).toContain('minimal:');
+    expect(layoutSource).toContain('expandedLeading:');
+    expect(layoutSource).toContain('expandedTrailing:');
+    expect(layoutSource).toContain('expandedCenter: null');
+    expect(layoutSource).toContain('expandedBottom:');
+    expect(layoutSource).toContain('Salvar link');
+    expect(layoutSource).toContain('Toque para abrir');
+    expect(layoutSource).toContain('Ativo');
+    expect(layoutSource).not.toMatch(/clipboard|https?:|normalizedUrl|props\.url/i);
+    expect(managerSource).toContain("Linking.createURL('/links/compose'");
+    expect(managerSource).toContain('activityToken: token');
+    expect(managerSource).toContain('randomUUID()');
+    expect(managerSource).toContain('widgetsDirectory');
+    expect(managerSource).toContain('saveapp-live-activity-icon.png');
+    expect(managerSource).toContain('isAuthorizedSaveLinkActivityURL');
+    expect(authorizationSource).toContain('ACTIVITY_LINK_AUTHORIZATION_KEY');
+  });
+
+  test('reads clipboard only on the explicit activity deep link and opens the existing composer', () => {
+    expect(composerRouteSource).toContain("source === 'dynamic-island'");
+    expect(composerRouteSource).toContain('await isAuthorizedSaveLinkActivityURL(params.activityToken)');
+    expect(composerRouteSource).toContain('Clipboard.getUrlAsync()');
+    expect(composerRouteSource).toContain('Clipboard.getStringAsync()');
+    expect(composerRouteSource).toContain('prepareClipboardLinkCandidate');
+    expect(composerRouteSource).toContain('markClipboardLinkChangeCountHandled');
+    expect(composerRouteSource).toContain('<HomeContentComposer');
+    expect(composerRouteSource).toContain('router.replace(\'/\')');
+    expect(clipboardHookSource).toContain('lastHandledChangeCountInMemory');
+    expect(clipboardHookSource).toContain('export function markClipboardLinkChangeCountHandled');
+  });
+});

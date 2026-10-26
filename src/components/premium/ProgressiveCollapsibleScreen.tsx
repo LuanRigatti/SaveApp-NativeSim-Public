@@ -42,6 +42,16 @@ function setSharedScrollOffset(sharedValue: SharedValue<number>, offset: number)
   sharedValue.value = offset;
 }
 
+function colorWithAlpha(color: string, alpha: number): string {
+  const hex = color.match(/^#([\da-f]{6})$/i)?.[1];
+  if (!hex) return color;
+
+  const red = Number.parseInt(hex.slice(0, 2), 16);
+  const green = Number.parseInt(hex.slice(2, 4), 16);
+  const blue = Number.parseInt(hex.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
 const AnimatedBlurView =
   typeof Animated.createAnimatedComponent === 'function'
     ? Animated.createAnimatedComponent(BlurView)
@@ -53,6 +63,7 @@ export type ProgressiveCollapsibleScreenProps = {
   contentGap?: number;
   contentTopInset: number;
   fixedContent?: ReactNode;
+  fixedLargeTitleAccessory?: ReactNode;
   largeTitle: ReactNode;
   largeTitleContainerStyle?: StyleProp<ViewStyle>;
   nativeHeader?: boolean;
@@ -78,6 +89,7 @@ export function ProgressiveCollapsibleScreen({
   contentGap,
   contentTopInset,
   fixedContent,
+  fixedLargeTitleAccessory,
   largeTitle,
   largeTitleContainerStyle,
   nativeHeader = false,
@@ -98,8 +110,8 @@ export function ProgressiveCollapsibleScreen({
     },
     [scrollY],
   );
-  const opaqueGradientColor = isDarkMode ? 'rgba(0,0,0,0.99)' : 'rgba(255,255,255,0.99)';
-  const solidGradientColor = isDarkMode ? 'black' : 'white';
+  const opaqueGradientColor = colorWithAlpha(theme.colors.background, 0.99);
+  const solidGradientColor = theme.colors.background;
   const { colors, locations } = easeGradient({
     colorStops: {
       1: { color: 'transparent' },
@@ -169,19 +181,9 @@ export function ProgressiveCollapsibleScreen({
     (usesRootStackHeaderCoordinates ? NATIVE_HEADER_PIPELINE_RAISE : 0);
 
   const progressiveBlurTint = isDarkMode
-    ? Platform.OS === 'ios'
-      ? 'systemChromeMaterialDark'
-      : 'systemMaterialDark'
-    : Platform.OS === 'ios'
-      ? 'systemChromeMaterialLight'
-      : 'systemMaterialLight';
-  const fixedHeaderTint = isDarkMode
-    ? Platform.OS === 'ios'
-      ? 'dark'
-      : 'systemMaterialDark'
-    : Platform.OS === 'ios'
-      ? 'light'
-      : 'systemMaterialLight';
+    ? 'systemUltraThinMaterialDark'
+    : 'systemUltraThinMaterialLight';
+  const fixedHeaderTint = progressiveBlurTint;
   const compactTitleFontSize = SMALL_HEADER_TITLE_FONT_SIZE + (nativeTabRoot ? 1 : 0);
 
   const fixedHeaderContent = (
@@ -264,13 +266,14 @@ export function ProgressiveCollapsibleScreen({
             }
             style={StyleSheet.absoluteFill}
           >
+            <BlurView intensity={15} tint={progressiveBlurTint} style={StyleSheet.absoluteFill} />
             <LinearGradient
-              colors={
-                isDarkMode ? ['black', 'rgba(0, 0, 0, 0.2)'] : ['white', 'rgba(255, 255, 255, 0.2)']
-              }
+              colors={[
+                theme.colors.background,
+                colorWithAlpha(theme.colors.background, 0.2),
+              ]}
               style={StyleSheet.absoluteFill}
             />
-            <BlurView intensity={15} tint={progressiveBlurTint} style={StyleSheet.absoluteFill} />
           </MaskedView>
         </Animated.View>
         <Animated.View pointerEvents="none" style={[styles.fixedHeader, compactTitleStyle]}>
@@ -310,6 +313,21 @@ export function ProgressiveCollapsibleScreen({
           {fixedContent}
         </View>
       ) : null}
+      {fixedLargeTitleAccessory ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.fixedLargeTitleAccessory,
+            {
+              left: theme.layout.screenHorizontalPadding,
+              right: theme.layout.screenHorizontalPadding,
+              top: rootStackOffset + contentTopOffset,
+            },
+          ]}
+        >
+          {fixedLargeTitleAccessory}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -325,6 +343,13 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     zIndex: 20,
+  },
+  fixedLargeTitleAccessory: {
+    alignItems: 'flex-end',
+    height: 50,
+    justifyContent: 'center',
+    position: 'absolute',
+    zIndex: 21,
   },
   pipeline: {
     flex: 1,

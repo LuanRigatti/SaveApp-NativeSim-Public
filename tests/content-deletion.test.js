@@ -109,4 +109,18 @@ describe('saved link/text deletion', () => {
     finishConfirmation(false);
     await expect(firstRequest).resolves.toBe('cancelled');
   });
+
+  test('rechecks authorization after confirmation before deleting', async () => {
+    const deleteContent = jest.fn(async () => true);
+    const authorizeBeforeDelete = jest.fn(async () => false);
+
+    await expect(requestConfirmedSavedContentDeletion(8, 'link', {
+      confirm: async () => true,
+      authorizeBeforeDelete,
+      deleteContent,
+    })).resolves.toBe('cancelled');
+
+    expect(authorizeBeforeDelete).toHaveBeenCalledTimes(1);
+    expect(deleteContent).not.toHaveBeenCalled();
+  });
 });

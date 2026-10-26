@@ -22,18 +22,30 @@ export {
   typography,
 };
 export { darkTheme } from './darkTheme';
-export { darkModeCardSurface, darkModeInsetSurface, getCardSurfaceColor, getInsetSurfaceColor, getLiquidGlassTint } from './colors';
+export {
+  ACCENT_COLOR_OPTIONS,
+  ACCENT_COLOR_COLUMNS,
+  darkModeCardSurface,
+  darkModeInsetSurface,
+  getAccentColorRows,
+  getAccentColorSwatch,
+  getAccentColorSwatchForeground,
+  isAccentColorName,
+  getCardSurfaceColor,
+  getInsetSurfaceColor,
+  getLiquidGlassTint,
+} from './colors';
 export { icons } from './icons';
 export { lightTheme } from './lightTheme';
 export { ThemeProvider } from './ThemeProvider';
 export { useAppTheme } from './useAppTheme';
 export { useVisualCapabilities } from './visualCapabilities';
 export type { VisualCapabilities } from './visualCapabilities';
-export type { ThemeColors } from './colors';
+export type { AccentColorName, ThemeColors } from './colors';
 export type { IconName, IconTokens } from './icons';
 export type { Layout } from './layout';
 export type { Opacities } from './opacities';
-export type { AppTheme, ResolvedThemeMode, ThemeContextValue } from './types';
+export type { AppTheme, AppearanceMode, ResolvedThemeMode, ThemeContextValue } from './types';
 export type { Animations } from './animations';
 export type { Borders } from './borders';
 export type { Fonts } from './fonts';

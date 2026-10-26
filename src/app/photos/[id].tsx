@@ -18,6 +18,8 @@ import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import PhotoViewerCloseButton from '@/components/photos/PhotoViewerCloseButton';
+import { HomeFolderAuthorizationPrompt } from '@/features/home-folders/HomeFolderAuthorizationPrompt';
+import { useHomeFolderItemAuthorization } from '@/features/home-folders/useHomeFolderAuthorization';
 import { useLocalPhotoLibrary } from '@/features/photos/LocalPhotoLibraryProvider';
 import { createPhotoViewerCloseHandler } from '@/features/photos/photoViewerNavigation';
 import {
@@ -30,6 +32,13 @@ import { useAppTheme } from '@/theme';
 export default function PhotoViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const isPreview = useIsPreview();
+  const parsedId = Number(Array.isArray(id) ? id[0] : id);
+  const photoId = Number.isSafeInteger(parsedId) && parsedId > 0 ? parsedId : null;
+  const authorization = useHomeFolderItemAuthorization('photo', photoId);
+
+  if (!authorization.isAuthorized) {
+    return <HomeFolderAuthorizationPrompt authorization={authorization} />;
+  }
 
   return isPreview ? (
     <PhotoViewerPreviewScreen id={id} />

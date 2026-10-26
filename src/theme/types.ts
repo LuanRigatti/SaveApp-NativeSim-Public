@@ -1,6 +1,6 @@
 import type { Animations } from './animations';
 import type { Borders } from './borders';
-import type { ThemeColors } from './colors';
+import type { AccentColorName, ThemeColors } from './colors';
 import type { IconTokens } from './icons';
 import type { Layout } from './layout';
 import type { Opacities } from './opacities';
@@ -11,6 +11,7 @@ import type { Spacing } from './spacing';
 import type { Typography } from './typography';
 
 export type ResolvedThemeMode = 'light' | 'dark';
+export type AppearanceMode = 'system' | ResolvedThemeMode;
 
 export type AppTheme = {
   colors: ThemeColors;
@@ -28,6 +29,10 @@ export type AppTheme = {
 
 export type ThemeContextValue = {
   theme: AppTheme;
+  appearanceMode: AppearanceMode;
+  accentColor: AccentColorName;
+  setAppearanceMode: (mode: AppearanceMode) => void;
+  setAccentColor: (color: AccentColorName) => void;
   resolvedMode: ResolvedThemeMode;
   reduceMotionEnabled: boolean;
 };

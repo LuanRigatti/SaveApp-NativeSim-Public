@@ -1,5 +1,14 @@
 const { getLinkPreview, parseLinkPreviewHtml } = require('../src/features/home-content/linkPreview');
 
+const YOUTUBE_VIDEO_ID = 'abcDEF12345';
+
+function jsonResponse(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    headers: { 'content-type': 'application/json' },
+    status,
+  });
+}
+
 describe('local link metadata extraction', () => {
   test('reads Open Graph, Twitter, HTML title, relative image and favicon metadata', () => {
     const html = `
@@ -108,5 +117,125 @@ describe('local link metadata extraction', () => {
       imageUrl: null,
     });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    `https://www.youtube.com/watch?v=${YOUTUBE_VIDEO_ID}`,
+    `https://m.youtube.com/watch?v=${YOUTUBE_VIDEO_ID}`,
+    `https://youtu.be/${YOUTUBE_VIDEO_ID}`,
+    `https://www.youtube.com/shorts/${YOUTUBE_VIDEO_ID}`,
+    `https://youtube.com/live/${YOUTUBE_VIDEO_ID}`,
+  ])('uses YouTube oEmbed metadata for recognized video URL %s', async (url) => {
+    const fetcher = jest.fn(async () => jsonResponse({
+      title: 'A real video title',
+      author_name: 'SaveApp Channel',
+      thumbnail_url: `https://i.ytimg.com/vi/${YOUTUBE_VIDEO_ID}/hqdefault.jpg`,
+    }));
+
+    await expect(getLinkPreview(url, undefined, fetcher)).resolves.toEqual({
+      title: 'A real video title',
+      description: 'SaveApp Channel',
+      domain: new URL(url).hostname.replace(/^www\./, ''),
+      imageUrl: `https://i.ytimg.com/vi/${YOUTUBE_VIDEO_ID}/hqdefault.jpg`,
+      faviconUrl: null,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const request = new URL(fetcher.mock.calls[0][0]);
+    expect(request.origin + request.pathname).toBe('https://www.youtube.com/oembed');
+    expect(request.searchParams.get('url')).toBe(
+      `https://www.youtube.com/watch?v=${YOUTUBE_VIDEO_ID}`,
+    );
+    expect(request.searchParams.get('format')).toBe('json');
+  });
+
+  test('ignores an untrusted thumbnail host returned by YouTube oEmbed', async () => {
+    const fetcher = jest.fn(async () => jsonResponse({
+      title: 'Video title',
+      author_name: 'Channel',
+      thumbnail_url: 'https://attacker.example/thumbnail.jpg',
+    }));
+
+    await expect(getLinkPreview(
+      `https://youtu.be/${YOUTUBE_VIDEO_ID}`,
+      undefined,
+      fetcher,
+    )).resolves.toMatchObject({
+      title: 'Video title',
+      description: 'Channel',
+      imageUrl: null,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  test('falls back to a readable YouTube title when oEmbed and page metadata are unavailable', async () => {
+    const fetcher = jest.fn(async () => new Response(null, { status: 403 }));
+
+    await expect(getLinkPreview(
+      `https://www.youtube.com/watch?v=${YOUTUBE_VIDEO_ID}`,
+      undefined,
+      fetcher,
+    )).resolves.toMatchObject({
+      title: 'Vídeo do YouTube',
+      domain: 'youtube.com',
+      description: null,
+      imageUrl: null,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  test('only requests oEmbed for an exact YouTube host and a valid video ID', async () => {
+    const fetcher = jest.fn(async () => new Response(null, { status: 403 }));
+
+    await getLinkPreview(`https://youtube.example.evil/watch?v=${YOUTUBE_VIDEO_ID}`, undefined, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][0]).toBe(`https://youtube.example.evil/watch?v=${YOUTUBE_VIDEO_ID}`);
+
+    fetcher.mockClear();
+    await getLinkPreview('https://www.youtube.com/watch?v=short', undefined, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][0]).toBe('https://www.youtube.com/watch?v=short');
+  });
+
+  test('returns a YouTube fallback after the shared metadata deadline expires', async () => {
+    jest.useFakeTimers();
+    try {
+      const fetcher = jest.fn((_url, options) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('request aborted by timeout');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      }));
+      const result = getLinkPreview(
+        `https://www.youtube.com/watch?v=${YOUTUBE_VIDEO_ID}`,
+        undefined,
+        fetcher,
+      );
+
+      await jest.advanceTimersByTimeAsync(3_500);
+      await expect(result).resolves.toMatchObject({
+        title: 'Vídeo do YouTube',
+        imageUrl: null,
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('propagates explicit cancellation of the YouTube metadata request', async () => {
+    const controller = new AbortController();
+    const fetcher = jest.fn((_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        const error = new Error('request aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    }));
+    const result = getLinkPreview(`https://youtu.be/${YOUTUBE_VIDEO_ID}`, controller.signal, fetcher);
+
+    controller.abort();
+    await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

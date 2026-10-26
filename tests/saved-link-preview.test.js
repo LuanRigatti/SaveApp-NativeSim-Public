@@ -37,16 +37,20 @@ describe('saved link native preview', () => {
     expect(previewSource).not.toMatch(/imageUrl|fetch\(/);
   });
 
-  test('keeps a simple card tap opening the original URL and makes preview navigation recoverable', () => {
+  test('confirms native card taps before opening the original URL and keeps preview navigation recoverable', () => {
     expect(gallerySource).toMatch(/pathname: '\/links\/\[id\]'[\s\S]*?params: \{ id: String\(item\.id\) \}/);
-    expect(gallerySource).toMatch(/event\.preventDefault\(\);\s*void Linking\.openURL\(item\.url\)/);
-    expect(detailSource).toMatch(/Linking\.openURL\(link\.url\)/);
+    expect(gallerySource).toContain("import { confirmSavedLinkOpen } from '@/features/home-content/savedLinkOpenConfirmation';");
+    expect(gallerySource).toMatch(/event\.preventDefault\(\);\s*requestOpenLink\(\)/);
+    expect(gallerySource).toMatch(/confirmSavedLinkOpen\(async \(\) => \{\s*if \(!\(await authorizeItemForAction\('link', savedLink\.id\)\)\) return;\s*await Linking\.openURL\(savedLink\.url\)\.catch\(\(\) => undefined\);/);
+    expect(detailSource).toContain("import { confirmSavedLinkOpen } from '@/features/home-content/savedLinkOpenConfirmation';");
+    expect(detailSource).toMatch(/confirmSavedLinkOpen\(openLink\)/);
+    expect(detailSource).toMatch(/await Linking\.openURL\(link\.url\)/);
     expect(detailSource).toMatch(/Abrir link/);
     expect(detailSource).toMatch(/useLocalSavedContent\(\)/);
   });
 
   test('preserves the existing destructive link delete action', () => {
     expect(gallerySource).toMatch(/<Link\.MenuAction title="Apagar link" icon="trash" destructive onPress=\{deleteItem\} \/>/);
-    expect(gallerySource).toMatch(/requestDeleteContent\(item\.id, item\.contentType, prepareForMediaRemovalAnimation\)/);
+    expect(gallerySource).toMatch(/requestDeleteContent\([\s\S]*?item\.contentType,[\s\S]*?prepareForMediaRemovalAnimation,[\s\S]*?authorizeItemForAction\(item\.contentType, item\.id\)/);
   });
 });

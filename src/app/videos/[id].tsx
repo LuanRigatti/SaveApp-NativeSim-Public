@@ -6,12 +6,26 @@ import { StatusBar } from 'expo-status-bar';
 import { Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { HomeFolderAuthorizationPrompt } from '@/features/home-folders/HomeFolderAuthorizationPrompt';
+import { useHomeFolderItemAuthorization } from '@/features/home-folders/useHomeFolderAuthorization';
 import { useLocalPhotoLibrary } from '@/features/photos/LocalPhotoLibraryProvider';
 import { createVideoViewerCloseHandler } from '@/features/photos/videoPlayerNavigation';
 import type { SavedVideo } from '@/features/photos/photoTypes';
 
 export default function VideoViewerScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id: rawId } = useLocalSearchParams<{ id: string }>();
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
+  const parsedId = Number(id);
+  const videoId = Number.isSafeInteger(parsedId) && parsedId > 0 ? parsedId : null;
+  const authorization = useHomeFolderItemAuthorization('video', videoId);
+
+  if (!authorization.isAuthorized) {
+    return <HomeFolderAuthorizationPrompt authorization={authorization} />;
+  }
+  return <VideoViewerContent id={id ?? ''} />;
+}
+
+function VideoViewerContent({ id }: { id: string }) {
   const router = useRouter();
   const { getVideo, media } = useLocalPhotoLibrary();
   const videoId = Number(id);

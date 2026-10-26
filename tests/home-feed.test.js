@@ -1,4 +1,11 @@
-const { buildHomeGalleryEntries, formatLocalDayTitle, getLocalDayKey, sortHomeItemsChronologically } = require('../src/features/home-content/homeFeed');
+const {
+  areHomeFeedSourcesReady,
+  buildHomeGalleryEntries,
+  buildHomeGalleryEntriesWhenReady,
+  formatLocalDayTitle,
+  getLocalDayKey,
+  sortHomeItemsChronologically,
+} = require('../src/features/home-content/homeFeed');
 
 const today = new Date(2026, 9, 23, 15, 0, 0);
 const todayMorning = new Date(2026, 9, 23, 8, 0, 0).getTime();
@@ -13,6 +20,41 @@ const mixedItems = [
 ];
 
 describe('Home mixed feed day grouping', () => {
+  test('waits for media, saved content, and the persisted layout before populating a cold-start feed', () => {
+    const readyState = {
+      photoLibraryReady: true,
+      savedContentReady: true,
+      documentLibraryReady: true,
+      checklistLibraryReady: true,
+      viewModeReady: true,
+      homeFoldersReady: true,
+    };
+
+    expect(areHomeFeedSourcesReady(readyState)).toBe(true);
+    expect(
+      areHomeFeedSourcesReady({ ...readyState, photoLibraryReady: false }),
+    ).toBe(false);
+    expect(
+      areHomeFeedSourcesReady({ ...readyState, savedContentReady: false }),
+    ).toBe(false);
+    expect(
+      areHomeFeedSourcesReady({ ...readyState, documentLibraryReady: false }),
+    ).toBe(false);
+    expect(
+      areHomeFeedSourcesReady({ ...readyState, checklistLibraryReady: false }),
+    ).toBe(false);
+    expect(
+      areHomeFeedSourcesReady({ ...readyState, viewModeReady: false }),
+    ).toBe(false);
+    expect(
+      areHomeFeedSourcesReady({ ...readyState, homeFoldersReady: false }),
+    ).toBe(false);
+    expect(buildHomeGalleryEntriesWhenReady(mixedItems, today, false)).toEqual([]);
+    expect(buildHomeGalleryEntriesWhenReady(mixedItems, today, true)).toEqual(
+      buildHomeGalleryEntries(mixedItems, today),
+    );
+  });
+
   test('sorts four content kinds newest-first and inserts full-width day separators in local time', () => {
     const entries = buildHomeGalleryEntries(mixedItems, today);
 
@@ -47,5 +89,21 @@ describe('Home mixed feed day grouping', () => {
 
     expect(sorted.map((item) => item.id)).toEqual([5, 7, 2, 3]);
     expect(source).toEqual(mixedItems);
+  });
+
+  test('adds documents to the same chronological day groups with stable document IDs', () => {
+    const document = {
+      id: 9,
+      contentType: 'document',
+      createdAt: new Date(2026, 9, 23, 10).getTime(),
+      originalName: 'Relatorio.pdf',
+      extension: 'pdf',
+      sizeBytes: 1024,
+    };
+    const entries = buildHomeGalleryEntries([...mixedItems, document], today);
+
+    expect(entries[0].id).toBe('day:2026-10-23');
+    expect(entries.map((entry) => entry.id)).toContain('content:document:9');
+    expect(entries.find((entry) => entry.id === 'content:document:9').kind).toBe('content');
   });
 });

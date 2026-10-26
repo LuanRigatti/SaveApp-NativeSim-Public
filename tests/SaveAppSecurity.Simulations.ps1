@@ -154,6 +154,51 @@ try {
   } 'staged paths outside the configured mirror allowlist are rejected'
 
   $mirrorScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\mirror-saveapp.ps1') -Raw
+  $allowedFilesMatch = [regex]::Match($mirrorScript,'(?ms)\$allowedFiles\s*=\s*@\((?<entries>.*?)\)')
+  $allowedDirectoriesMatch = [regex]::Match($mirrorScript,'(?ms)\$allowedDirectories\s*=\s*@\((?<entries>.*?)\)')
+  Assert-True ($allowedFilesMatch.Success -and $allowedDirectoriesMatch.Success) 'mirror snapshot file and directory allowlists remain explicit'
+  $productionAllowedFiles = @([regex]::Matches($allowedFilesMatch.Groups['entries'].Value,'\x27([^\x27]+)\x27') | ForEach-Object { $_.Groups[1].Value })
+  $productionAllowedDirectories = @([regex]::Matches($allowedDirectoriesMatch.Groups['entries'].Value,'\x27([^\x27]+)\x27') | ForEach-Object { $_.Groups[1].Value })
+  $documentThumbnailModuleFiles = @(
+    'modules/document-thumbnailing/package.json',
+    'modules/document-thumbnailing/expo-module.config.json',
+    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec',
+    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift',
+    'modules/document-thumbnailing/src/index.ts'
+  )
+  Assert-True ($productionAllowedDirectories -notcontains 'modules' -and
+    $productionAllowedDirectories -notcontains 'modules/document-thumbnailing') 'the mirror does not recursively allow modules or its parent directory'
+  foreach ($moduleRelativePath in $documentThumbnailModuleFiles) {
+    Assert-True ($productionAllowedFiles -contains $moduleRelativePath) "$moduleRelativePath is included as an exact mirror allowlist entry"
+    Assert-True (Test-SaveAppMirrorAllowedRelativePath -RelativePath $moduleRelativePath `
+      -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) "$moduleRelativePath passes the production snapshot path policy"
+    $moduleFullPath = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $moduleRelativePath -ExpectedType File
+    $moduleContent = [IO.File]::ReadAllText($moduleFullPath)
+    Assert-True (Assert-SaveAppSafeContent -RelativePath $moduleRelativePath -Content $moduleContent) "$moduleRelativePath passes the existing content scanner"
+  }
+  $moduleSnapshot = Get-SaveAppMirrorStagedPathResult -GitOutput $documentThumbnailModuleFiles `
+    -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories
+  Assert-True ($moduleSnapshot.HasChanges -and $moduleSnapshot.Paths.Length -eq $documentThumbnailModuleFiles.Length -and
+    ($moduleSnapshot.Paths -join '|') -eq ($documentThumbnailModuleFiles -join '|')) 'the simulated mirror snapshot contains all five Quick Look module files'
+  Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec') -eq $false -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift') -eq $false) 'only the two exact iOS module sources bypass the generated ios-directory name block'
+  Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/Unapproved.swift') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/private-key.pem') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/.env.local') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'ios/Pods/SaveApp.xcodeproj')) 'unapproved iOS files, secrets, and generated native directories remain blocked'
+  foreach ($unapprovedModulePath in @(
+      'modules/document-thumbnailing/ios/Unapproved.swift',
+      'modules/document-thumbnailing/private/credentials.pem',
+      'modules/document-thumbnailing/.env.local',
+      'modules/other/Module.swift'
+    )) {
+    Assert-True (-not (Test-SaveAppMirrorAllowedRelativePath -RelativePath $unapprovedModulePath `
+      -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories)) "$unapprovedModulePath remains outside the exact module allowlist"
+  }
+  Assert-Refused {
+    Assert-SaveAppSafeContent -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift' `
+      -Content ('token=' + ('x' * 32))
+  } 'the existing credential scanner still blocks secrets inside an allowlisted Swift source path'
   $noChangeGateIndex = $mirrorScript.IndexOf('if (-not $stagedPathResult.HasChanges)',[StringComparison]::Ordinal)
   $noChangeReturnIndex = if ($noChangeGateIndex -ge 0) {
     $mirrorScript.IndexOf('return',$noChangeGateIndex,[StringComparison]::Ordinal)
@@ -298,6 +343,21 @@ try {
   $preflight = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Invoke-SaveAppSwiftPreflight.ps1') -Raw
   $launcher = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Start-SaveAppNativeSim.ps1') -Raw
   $mirrorScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\mirror-saveapp.ps1') -Raw
+  $preflightWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github\workflows\swift-preflight.yml') -Raw
+  Assert-True ($launcher.Contains('-ExpectedSha $mirrorSha') -and
+    $preflight.Contains('$live.Split()[0] -ne $sha')) 'NativeSim requires Swift Preflight success for the exact public mirror SHA'
+  $nativeVerificationIndex = $preflightWorkflow.IndexOf('node scripts/verify-saveapp-native.js',[StringComparison]::Ordinal)
+  $prebuildIndex = $preflightWorkflow.IndexOf('npx expo prebuild --platform ios --no-install',[StringComparison]::Ordinal)
+  Assert-True ($nativeVerificationIndex -ge 0 -and $prebuildIndex -gt $nativeVerificationIndex -and
+    $preflightWorkflow.Contains('CODE_SIGNING_ALLOWED=NO')) 'Swift Preflight checks SDK 58 autolinking before generating and compiling the exact public snapshot'
+  $generatedWidgetsIndex = $preflightWorkflow.IndexOf('Verify generated ExpoWidgets Live Activity target and App Group',[StringComparison]::Ordinal)
+  $compileIndex = $preflightWorkflow.IndexOf('Compile the Simulator app without signing',[StringComparison]::Ordinal)
+  $embeddedWidgetsIndex = $preflightWorkflow.IndexOf('Verify Simulator build embeds ExpoWidgets target',[StringComparison]::Ordinal)
+  Assert-True ($generatedWidgetsIndex -gt $prebuildIndex -and $compileIndex -gt $generatedWidgetsIndex -and
+    $embeddedWidgetsIndex -gt $compileIndex -and $preflightWorkflow.Contains('NSSupportsLiveActivities') -and
+    $preflightWorkflow.Contains('com.apple.security.application-groups') -and
+    $preflightWorkflow.Contains('WidgetLiveActivity()') -and
+    $preflightWorkflow.Contains('ExpoWidgetsTarget.appex')) 'Swift Preflight verifies generated Live Activity configuration and Simulator extension packaging'
   Assert-True ($mirrorScript.Contains('origin/main is empty') -and $mirrorScript.Contains('empty root commit')) 'public mirror refuses empty main until the owner bootstraps a root commit'
   $workflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github\workflows\native-sim.yml') -Raw
   $maskStepStart = $workflow.IndexOf('- name: Mask stream access key',[StringComparison]::Ordinal)

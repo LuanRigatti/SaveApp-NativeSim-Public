@@ -1,109 +1,106 @@
 import { NativeTabs } from 'expo-router/native-tabs';
-import { Stack, usePathname } from 'expo-router';
-import { useState } from 'react';
-import { Platform, View } from 'react-native';
+import { Stack, usePathname, useRouter } from 'expo-router';
+import { useCallback } from 'react';
+import { Alert, Platform, View } from 'react-native';
 
-import { HomeContentComposer, type HomeComposerKind } from '@/components/homeContent/HomeContentComposer';
-import { HomeViewModeProvider, useHomeViewMode } from '@/features/home-content/HomeViewModeProvider';
-import { useLocalPhotoLibrary } from '@/features/photos/LocalPhotoLibraryProvider';
-import { triggerTabHaptic } from '@/utils/haptics';
+import { shouldKeepHomeToolbarItemsMounted } from '@/features/home-content/homeToolbarVisibility';
+import { useHomeViewMode } from '@/features/home-content/HomeViewModeProvider';
+import { useHomeSettingsSheet } from '@/features/home-content/HomeSettingsSheetProvider';
+import { createHomeFolderToolbarMenu } from '@/features/home-folders/homeFolderToolbarMenu';
+import { getHomeFolderIdFromPathname, getHomeFolderRoute } from '@/features/home-folders/homeFolderNavigation';
+import { getFolderAuthenticationFailureMessage } from '@/features/home-folders/folderFaceIdAuthentication';
+import { getHomeFolderAccentColor } from '@/features/home-folders/homeFolderColor';
+import { useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
+import { getNativeCapabilities } from '@/platform/nativeCapabilities';
+import { useAppTheme } from '@/theme';
+import { triggerLightImpactHaptic, triggerTabHaptic } from '@/utils/haptics';
 
 export default function TabsLayout() {
-  return (
-    <HomeViewModeProvider>
-      <TabsLayoutContent />
-    </HomeViewModeProvider>
-  );
+  return <TabsLayoutContent />;
 }
 
 function TabsLayoutContent() {
-  const isHomeRoute = usePathname() === '/';
-  const { importFromPhotoLibrary, importVideosFromPhotoLibrary } = useLocalPhotoLibrary();
+  const { accentColor, resolvedMode, theme } = useAppTheme();
+  const pathname = usePathname();
+  const shouldShowHomeToolbarItems = shouldKeepHomeToolbarItemsMounted(pathname);
+  const router = useRouter();
   const { setViewMode, viewMode } = useHomeViewMode();
-  const [composerKind, setComposerKind] = useState<HomeComposerKind>(null);
+  const { authorizeFolder, folders, isFolderAuthorized, selectFolder, selectView, selection, view } = useLocalHomeFolders();
+  const { openSettingsSheet } = useHomeSettingsSheet();
+  const routeFolderId = getHomeFolderIdFromPathname(pathname);
+  const selectedHomeFolderId = selection.kind === 'folder' ? selection.folderId : null;
+  const currentFolderId = routeFolderId ?? selectedHomeFolderId;
+  const currentFolder = folders.find((folder) => folder.id === currentFolderId);
+  const folderToolbarTint = currentFolder
+    ? getHomeFolderAccentColor(currentFolder.color, accentColor, resolvedMode)
+    : theme.colors.primary;
+  const currentLabel = currentFolder?.name ?? (
+    view === 'folders' ? 'Pastas' : 'Todos'
+  );
+  const handleSettingsPress = useCallback(() => {
+    triggerLightImpactHaptic();
+    if (getNativeCapabilities().canUseNativeSwiftUI) {
+      openSettingsSheet();
+      return;
+    }
+
+    router.push('/settings-sheet-fallback');
+  }, [openSettingsSheet, router]);
+  const handleHomeViewPress = useCallback((nextView: 'all-items' | 'unfiled' | 'folders') => {
+    selectView(nextView);
+    if (routeFolderId) router.dismissTo('/');
+  }, [routeFolderId, router, selectView]);
+  const handleFolderPress = useCallback((folderId: string) => {
+    void (async () => {
+      const outcome = await authorizeFolder(folderId);
+      if (outcome !== 'authenticated' || !isFolderAuthorized(folderId)) {
+        if (outcome === 'unavailable' || outcome === 'failed') {
+          Alert.alert('Pasta protegida', getFolderAuthenticationFailureMessage(outcome));
+        }
+        return;
+      }
+      if (routeFolderId) {
+        router.replace(getHomeFolderRoute(folderId));
+        return;
+      }
+      selectFolder(folderId);
+    })();
+  }, [authorizeFolder, isFolderAuthorized, routeFolderId, router, selectFolder]);
 
   return (
     <View collapsable={false} style={{ flex: 1 }}>
       {Platform.OS === 'ios' ? (
         <>
           <Stack.Toolbar placement="left">
-            <Stack.Toolbar.Spacer width={0} />
+            <Stack.Toolbar.Button
+              accessibilityLabel="Configurações"
+              hidden={!shouldShowHomeToolbarItems}
+              icon="gearshape"
+              onPress={handleSettingsPress}
+            />
           </Stack.Toolbar>
           <Stack.Toolbar placement="right">
             <Stack.Toolbar.Spacer width={0} />
-            <Stack.Toolbar.Menu
-              accessibilityLabel="Modo de visualização"
-              hidden={!isHomeRoute}
-              icon="square.grid.2x2"
-              separateBackground={false}
-            >
-              <Stack.Toolbar.MenuAction
-                icon="square.grid.2x2"
-                isOn={viewMode === 'large'}
-                onPress={() => setViewMode('large')}
-              >
-                Maiores
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction
-                icon="square.grid.3x3"
-                isOn={viewMode === 'small'}
-                onPress={() => setViewMode('small')}
-              >
-                Menores
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction
-                icon="list.bullet"
-                isOn={viewMode === 'list'}
-                onPress={() => setViewMode('list')}
-              >
-                Lista
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction
-                icon="list.bullet.rectangle"
-                isOn={viewMode === 'compact-list'}
-                onPress={() => setViewMode('compact-list')}
-              >
-                Lista compacta
-              </Stack.Toolbar.MenuAction>
-            </Stack.Toolbar.Menu>
-            <Stack.Toolbar.Menu
-              accessibilityLabel="Adicionar"
-              hidden={!isHomeRoute}
-              icon="plus"
-              separateBackground={false}
-            >
-              <Stack.Toolbar.MenuAction
-                icon="photo"
-                onPress={() => void importFromPhotoLibrary()}
-              >
-                Adicionar imagens
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction
-                icon="video"
-                onPress={() => void importVideosFromPhotoLibrary()}
-              >
-                Adicionar vídeos
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon="link" onPress={() => setComposerKind('link')}>
-                Adicionar link
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction
-                icon="text.alignleft"
-                onPress={() => setComposerKind('text')}
-              >
-                Adicionar texto
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon="doc" onPress={() => {}}>
-                Adicionar arquivos
-              </Stack.Toolbar.MenuAction>
-            </Stack.Toolbar.Menu>
+            {createHomeFolderToolbarMenu({
+              currentFolderId,
+              currentLabel,
+              folders,
+              hidden: !shouldShowHomeToolbarItems,
+              tintColor: folderToolbarTint,
+              onOpenFolder: handleFolderPress,
+              onSelectHomeView: handleHomeViewPress,
+              onSelectViewMode: setViewMode,
+              view,
+              viewMode,
+            })}
           </Stack.Toolbar>
         </>
       ) : null}
       <NativeTabs
+        hidden={Platform.OS === 'ios'}
         labelVisibilityMode="unlabeled"
         screenListeners={{ tabPress: () => triggerTabHaptic() }}
-        tintColor="#315AE8"
+        tintColor={theme.colors.primary}
       >
         <NativeTabs.Trigger name="index" accessibilityLabel="Início">
           <NativeTabs.Trigger.Icon sf={{ default: 'house', selected: 'house.fill' }} md={{ default: 'home', selected: 'home_filled' }} />
@@ -122,7 +119,6 @@ function TabsLayoutContent() {
           <NativeTabs.Trigger.Label hidden>Ajustes</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
       </NativeTabs>
-      <HomeContentComposer kind={composerKind} onClose={() => setComposerKind(null)} />
     </View>
   );
 }

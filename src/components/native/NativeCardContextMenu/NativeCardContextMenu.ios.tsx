@@ -1,6 +1,6 @@
 import { Button, ContextMenu, Host, RNHostView, Section } from '@expo/ui/swift-ui';
 import { disabled as disabledModifier } from '@expo/ui/swift-ui/modifiers';
-import type { StyleProp, ViewStyle } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { NativeCardContextMenuProps } from './NativeCardContextMenu.types';
 
@@ -11,6 +11,7 @@ export default function NativeCardContextMenu({
   preview,
   style,
   title,
+  triggerContentWidth,
 }: NativeCardContextMenuProps) {
   const actionButtons = actions.map((action) => (
     <Button
@@ -22,12 +23,16 @@ export default function NativeCardContextMenu({
       systemImage={action.systemImage}
     />
   ));
+  const triggerContent = Number.isFinite(triggerContentWidth) && (triggerContentWidth ?? 0) > 0
+    ? <View style={{ minWidth: 0, width: triggerContentWidth }}>{children}</View>
+    : <>{children}</>;
+
   return (
     <Host ignoreSafeArea="all" matchContents={matchContents} style={style as StyleProp<ViewStyle>}>
       <ContextMenu>
         <ContextMenu.Trigger>
-          <RNHostView matchContents>
-            <>{children}</>
+          <RNHostView matchContents={matchContents}>
+            {triggerContent}
           </RNHostView>
         </ContextMenu.Trigger>
         {preview ? (

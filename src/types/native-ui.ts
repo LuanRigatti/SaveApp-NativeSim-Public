@@ -235,6 +235,7 @@ export type NativeRuntimeEnvironment = 'expo-go' | 'development-build' | 'web';
 export type NativeCapabilities = {
   environment: NativeRuntimeEnvironment;
   canUseExpoUI: boolean;
+  canUseNativeSwiftUI: boolean;
   canUseNativeMenu: boolean;
   canUseNativeSheet: boolean;
   canUseNativePicker: boolean;

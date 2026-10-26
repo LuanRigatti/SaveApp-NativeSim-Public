@@ -53,22 +53,94 @@ jobs:
           npx expo prebuild --platform ios --no-install
           npx pod-install ios
 
-      - name: Check generated native project and patches
+      - name: Verify generated ExpoWidgets Live Activity target and App Group
         run: |
+          set -euo pipefail
+          PROJECT=ios/SaveApp.xcodeproj/project.pbxproj
+          APP_INFO=ios/SaveApp/Info.plist
+          APP_ENTITLEMENTS=ios/SaveApp/SaveApp.entitlements
+          WIDGET_INFO=ios/ExpoWidgetsTarget/Info.plist
+          WIDGET_ENTITLEMENTS=ios/ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements
+          WIDGET_SOURCE=ios/ExpoWidgetsTarget/index.swift
+          APP_GROUP=group.com.luanrigatti.saveapp
+
           test -f ios/SaveApp.xcworkspace/contents.xcworkspacedata
           grep -q 'StarterToolbarMorphExperimentVariant' ios/SaveApp/Info.plist
           grep -q 'ignoresSafeArea(.container, edges: .bottom)' node_modules/@expo/ui/ios/BottomSheetView.swift
           grep -q 'react-native-screens' package.json
+          grep -q 'ExpoWidgetsTarget' "$PROJECT"
+          grep -q 'com.apple.product-type.app-extension' "$PROJECT"
+          grep -q 'ExpoWidgetsTarget.appex' "$PROJECT"
+          grep -q 'WidgetLiveActivity()' "$WIDGET_SOURCE"
+
+          for plist in "$APP_INFO" "$APP_ENTITLEMENTS" "$WIDGET_INFO" "$WIDGET_ENTITLEMENTS"; do
+            test -f "$plist"
+            plutil -lint "$plist"
+          done
+
+          assert_plist_value() {
+            local plist="$1"
+            local key_path="$2"
+            local expected="$3"
+            local actual
+            actual=$(/usr/libexec/PlistBuddy -c "Print :$key_path" "$plist")
+            test "$actual" = "$expected" || {
+              echo "::error::Unexpected $key_path in $plist: $actual"
+              exit 1
+            }
+          }
+
+          assert_app_group_entitlement() {
+            local plist="$1"
+            /usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups' "$plist" \
+              | grep -Fq "$APP_GROUP"
+          }
+
+          assert_plist_value "$APP_INFO" NSSupportsLiveActivities true
+          assert_plist_value "$APP_INFO" NSSupportsLiveActivitiesFrequentUpdates false
+          assert_plist_value "$APP_INFO" ExpoWidgetsAppGroupIdentifier "$APP_GROUP"
+          assert_plist_value "$WIDGET_INFO" ExpoWidgetsAppGroupIdentifier "$APP_GROUP"
+          assert_plist_value "$WIDGET_INFO" NSExtension:NSExtensionPointIdentifier com.apple.widgetkit-extension
+          assert_app_group_entitlement "$APP_ENTITLEMENTS"
+          assert_app_group_entitlement "$WIDGET_ENTITLEMENTS"
+
+          # createLiveActivity uses the generated generic WidgetLiveActivity; widgets[] is not required.
 
       - name: Compile the Simulator app without signing
         run: |
+          set -euo pipefail
+          DERIVED_DATA="$RUNNER_TEMP/saveapp-swift-preflight-derived-data"
           xcodebuild \
             -workspace ios/SaveApp.xcworkspace \
             -scheme SaveApp \
             -configuration Debug \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$DERIVED_DATA" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             -quiet \
             build
+
+      - name: Verify Simulator build embeds ExpoWidgets target
+        run: |
+          set -euo pipefail
+          DERIVED_DATA="$RUNNER_TEMP/saveapp-swift-preflight-derived-data"
+          APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/SaveApp.app"
+          EXTENSION="$APP/PlugIns/ExpoWidgetsTarget.appex"
+          test -d "$APP"
+          test -d "$EXTENSION"
+          assert_bundle_value() {
+            local plist="$1"
+            local key_path="$2"
+            local expected="$3"
+            local actual
+            actual=$(/usr/libexec/PlistBuddy -c "Print :$key_path" "$plist")
+            test "$actual" = "$expected" || {
+              echo "::error::Unexpected $key_path in $plist: $actual"
+              exit 1
+            }
+          }
+          assert_bundle_value "$APP/Info.plist" CFBundleIdentifier com.luanrigatti.saveapp
+          assert_bundle_value "$EXTENSION/Info.plist" CFBundleIdentifier com.luanrigatti.saveapp.ExpoWidgetsTarget
+          assert_bundle_value "$EXTENSION/Info.plist" NSExtension:NSExtensionPointIdentifier com.apple.widgetkit-extension

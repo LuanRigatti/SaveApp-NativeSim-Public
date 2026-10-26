@@ -1,4 +1,6 @@
 import type { SavedMedia } from '@/features/photos/photoTypes';
+import type { SavedDocument } from '@/features/documents/documentTypes';
+import type { SavedChecklistSummary } from './checklistTypes';
 
 export type SavedLink = {
   id: number;
@@ -24,7 +26,7 @@ export type SavedText = {
 };
 
 export type SavedHomeContent = SavedLink | SavedText;
-export type SavedHomeItem = SavedMedia | SavedHomeContent;
+export type SavedHomeItem = SavedMedia | SavedHomeContent | SavedDocument | SavedChecklistSummary;
 
 export type HomeGalleryEntry =
   | { kind: 'day-separator'; id: string; dayKey: string; title: string }

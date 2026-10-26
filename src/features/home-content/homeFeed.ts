@@ -74,6 +74,36 @@ export function buildHomeGalleryEntries(
   return entries;
 }
 
+export type HomeFeedStartupState = {
+  photoLibraryReady: boolean;
+  savedContentReady: boolean;
+  documentLibraryReady: boolean;
+  checklistLibraryReady: boolean;
+  viewModeReady: boolean;
+  homeFoldersReady: boolean;
+};
+
+export function areHomeFeedSourcesReady(startupState: HomeFeedStartupState): boolean {
+  return (
+    startupState.photoLibraryReady &&
+    startupState.savedContentReady &&
+    startupState.documentLibraryReady &&
+    startupState.checklistLibraryReady &&
+    startupState.viewModeReady &&
+    startupState.homeFoldersReady
+  );
+}
+
+export function buildHomeGalleryEntriesWhenReady(
+  items: readonly SavedHomeItem[],
+  now: Date,
+  isReady: boolean,
+): HomeGalleryEntry[] {
+  if (!isReady) return [];
+
+  return buildHomeGalleryEntries(items, now);
+}
+
 export function mergeSavedHomeItems(
   media: readonly SavedMedia[],
   contents: readonly Exclude<SavedHomeItem, SavedMedia>[],

@@ -16,6 +16,7 @@ export type NativeCardContextMenuProps = {
   preview?: ReactNode;
   actions: readonly NativeCardContextMenuAction[];
   matchContents?: boolean | { vertical?: boolean; horizontal?: boolean };
+  triggerContentWidth?: number;
   style?: StyleProp<ViewStyle>;
   title?: string;
   cornerRadius?: number;

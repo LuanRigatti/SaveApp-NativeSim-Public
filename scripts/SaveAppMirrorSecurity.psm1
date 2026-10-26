@@ -86,6 +86,21 @@ function Test-SaveAppMirrorAllowedRelativePath {
   return $false
 }
 
+function Test-SaveAppMirrorBlockedName {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$RelativePath)
+
+  $path = $RelativePath.Replace('\','/')
+  $approvedModuleIosFiles = @(
+    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec',
+    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift'
+  )
+  if ($approvedModuleIosFiles -contains $path) { return $false }
+
+  $blockedNamePattern = '(?i)(^|/)\.env($|\.)|(^|/)(node_modules|\.expo|\.git|ios|android|build|dist|artifacts)(/|$)|(^|/)(GoogleService-[^/]*|.*\.(p8|p12|pfx|pem|key|jks|keystore|mobileprovision|provisionprofile))$|(^|/).*(secret|credential|private-key).*$'
+  return $path -match $blockedNamePattern
+}
+
 function Get-SaveAppMirrorStagedPathResult {
   [CmdletBinding()]
   param(
@@ -335,4 +350,4 @@ function Write-SaveAppProvenance {
   }
 }
 
-Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Test-SaveAppMirrorAllowedRelativePath,Get-SaveAppMirrorStagedPathResult,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance
+Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Test-SaveAppMirrorAllowedRelativePath,Test-SaveAppMirrorBlockedName,Get-SaveAppMirrorStagedPathResult,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance

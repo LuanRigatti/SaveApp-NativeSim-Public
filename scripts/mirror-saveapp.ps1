@@ -21,6 +21,10 @@ $allowedFiles = @(
   'README.md','AI_CONTEXT.md','AGENTS.md','.gitignore',
   'app.config.js','babel.config.js','eas.json','eslint.config.js','expo-env.d.ts',
   'index.ts','jest.config.js','metro.config.js','package.json','package-lock.json','tsconfig.json',
+  'modules/document-thumbnailing/package.json','modules/document-thumbnailing/expo-module.config.json',
+  'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec',
+  'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift',
+  'modules/document-thumbnailing/src/index.ts',
   'plugins/withStarterToolbarSync.js',
   'scripts/patch-expo-ui-bottom-sheet.js','scripts/patch-expo-module-scan-timeout.js',
   'scripts/verify-saveapp-native.js',
@@ -32,7 +36,6 @@ $allowedFiles = @(
   '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs'
 )
 $allowedDirectories = @('assets','src','docs','.agents/skills','tests')
-$blockedNamePattern = '(?i)(^|/)\.env($|\.)|(^|/)(node_modules|\.expo|\.git|ios|android|build|dist|artifacts)(/|$)|(^|/)(GoogleService-[^/]*|.*\.(p8|p12|pfx|pem|key|jks|keystore|mobileprovision|provisionprofile))$|(^|/).*(secret|credential|private-key).*$'
 function Invoke-Git {
   param([string]$Repository,[string[]]$GitArguments)
   $result = & git -C $Repository @GitArguments 2>&1
@@ -84,7 +87,7 @@ function Assert-SafeFiles {
     if (-not (Test-AllowedRelativePath $normalized) -and $normalized -ne '.nativesim-source') {
       throw "File is outside the publication allowlist: $normalized"
     }
-    if ($normalized -match $blockedNamePattern) { throw "Blocked file name: $normalized" }
+    if (Test-SaveAppMirrorBlockedName -RelativePath $normalized) { throw "Blocked file name: $normalized" }
     $fullPath = Resolve-SaveAppMirrorPath -Base $Base -RelativePath $normalized -ExpectedType File -AllowMissingLeaf
     if ($null -eq $fullPath) { continue }
     if ([IO.Path]::GetExtension($fullPath) -in @('.png','.jpg','.jpeg','.webp','.pdf','.zip','.tar','.gz')) { continue }

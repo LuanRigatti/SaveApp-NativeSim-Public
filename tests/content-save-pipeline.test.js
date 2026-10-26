@@ -77,7 +77,9 @@ describe('saved content write pipelines', () => {
 
   test.each([
     ['https://www.instagram.com/p/example/', 'instagram.com', 'example'],
-    ['https://youtu.be/example123', 'youtu.be', 'example123'],
+    ['https://youtu.be/abcDEF12345', 'youtu.be', 'abcDEF12345'],
+    ['https://www.youtube.com/watch?v=abcDEF12345', 'youtube.com', 'Vídeo do YouTube'],
+    ['https://x.com/creator/status/12345', 'x.com', '12345'],
     ['https://example.com/story/important-report', 'example.com', 'important report'],
   ])('persists %s with URL-derived fallback when no preview metadata exists', async (url, domain, title) => {
     const adapter = makeLinkAdapter({
@@ -205,5 +207,33 @@ describe('saved content write pipelines', () => {
 
     await expect(pendingSave).rejects.toMatchObject({ name: 'AbortError' });
     expect(adapter.deleteInsertedText).toHaveBeenCalledWith(23);
+  });
+
+  test('caches a YouTube oEmbed thumbnail while preserving the saved URL', async () => {
+    const originalUrl = 'https://youtu.be/abcDEF12345?si=shared-link';
+    const thumbnailUrl = 'https://i.ytimg.com/vi/abcDEF12345/hqdefault.jpg';
+    const adapter = makeLinkAdapter({
+      getPreview: jest.fn(async () => ({
+        title: 'A real video',
+        description: 'Channel name',
+        domain: 'youtu.be',
+        imageUrl: thumbnailUrl,
+        faviconUrl: null,
+      })),
+    });
+
+    await expect(saveLinkWithPreview(originalUrl, adapter)).resolves.toMatchObject({
+      url: originalUrl,
+      normalizedUrl: originalUrl,
+      title: 'A real video',
+      description: 'Channel name',
+    });
+    expect(adapter.cachePreview).toHaveBeenCalledWith(thumbnailUrl, undefined);
+    expect(adapter.insertLink).toHaveBeenCalledWith(expect.objectContaining({
+      url: originalUrl,
+      normalizedUrl: originalUrl,
+      imageUrl: thumbnailUrl,
+      preview: expect.objectContaining({ relativePath: 'home-content/link-previews/preview-1.jpg' }),
+    }));
   });
 });

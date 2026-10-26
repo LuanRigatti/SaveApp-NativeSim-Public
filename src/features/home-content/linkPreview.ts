@@ -1,6 +1,7 @@
 import { fetch as expoFetch } from 'expo/fetch';
 
 import { canFetchLinkPreview, fallbackLinkTitle, normalizeWebLink } from './linkValidation';
+import { parseYouTubeVideoLink, readableYouTubeFallbackTitle } from './youtubeVideoLink';
 
 export type LinkPreviewMetadata = {
   title: string;
@@ -20,8 +21,16 @@ type LinkPreviewFetcher = typeof expoFetch;
 
 const MAX_HTML_BYTES = 512 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_OEMBED_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 3_500;
 const MAX_REDIRECTS = 4;
+const YOUTUBE_OEMBED_ENDPOINT = 'https://www.youtube.com/oembed';
+const YOUTUBE_THUMBNAIL_HOSTS = new Set(['i.ytimg.com', 'img.youtube.com']);
+
+type SafeResponseOptions = {
+  timeoutMs?: number;
+  maxRedirects?: number;
+};
 
 function createAbortError(): Error {
   const error = new Error('The request was cancelled.');
@@ -164,6 +173,7 @@ async function withSafeResponse<T>(
   fetcher: LinkPreviewFetcher,
   accept: string,
   readResponse: (response: Response, responseUrl: string) => Promise<T>,
+  options: SafeResponseOptions = {},
 ): Promise<T> {
   if (!canFetchLinkPreview(inputUrl)) {
     throw new Error('Preview requests are not allowed for this host.');
@@ -178,7 +188,13 @@ async function withSafeResponse<T>(
     throw createAbortError();
   }
   signal?.addEventListener('abort', onAbort, { once: true });
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  if (timeoutMs <= 0) {
+    signal?.removeEventListener('abort', onAbort);
+    throw createTimeoutError();
+  }
+  const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     while (true) {
@@ -196,7 +212,7 @@ async function withSafeResponse<T>(
       if (isRedirect(response.status)) {
         const location = response.headers.get('location');
         await response.body?.cancel();
-        if (!location || redirects >= MAX_REDIRECTS) {
+        if (!location || redirects >= maxRedirects) {
           throw new Error('The preview redirect limit was reached.');
         }
 
@@ -270,6 +286,104 @@ async function readBoundedHtml(response: Response): Promise<string> {
   }
 }
 
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+  if (contentType !== 'application/json' && !contentType?.endsWith('+json')) {
+    await response.body?.cancel();
+    throw new Error('The oEmbed service did not return JSON.');
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('The oEmbed response has no readable body.');
+
+  const decoder = new TextDecoder();
+  let body = '';
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_OEMBED_BYTES) {
+        await reader.cancel();
+        throw new Error('The oEmbed response exceeds the size limit.');
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+
+  return JSON.parse(body) as unknown;
+}
+
+function isTrustedYouTubeThumbnail(url: string | null): url is string {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' &&
+      parsed.username.length === 0 &&
+      parsed.password.length === 0 &&
+      parsed.port.length === 0 &&
+      YOUTUBE_THUMBNAIL_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function parseYouTubeOEmbedMetadata(value: unknown, videoUrl: string): LinkPreviewMetadata | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const title = typeof record.title === 'string' ? cleanMetadataText(record.title, 180) : null;
+  const author = typeof record.author_name === 'string' ? cleanMetadataText(record.author_name, 120) : null;
+  const thumbnail = typeof record.thumbnail_url === 'string'
+    ? resolveHttpUrl(record.thumbnail_url, YOUTUBE_OEMBED_ENDPOINT)
+    : null;
+  const imageUrl = isTrustedYouTubeThumbnail(thumbnail) ? thumbnail : null;
+
+  if (!title && !author && !imageUrl) return null;
+
+  const fallback = fallbackMetadata(videoUrl);
+  return {
+    title: readableYouTubeFallbackTitle(title ?? fallback.title, videoUrl),
+    description: author,
+    domain: fallback.domain,
+    imageUrl,
+    faviconUrl: null,
+  };
+}
+
+async function getYouTubeOEmbedPreview(
+  videoUrl: string,
+  signal: AbortSignal | undefined,
+  fetcher: LinkPreviewFetcher,
+  timeoutMs: number,
+): Promise<LinkPreviewMetadata | null> {
+  const video = parseYouTubeVideoLink(videoUrl);
+  if (!video) return null;
+
+  const endpoint = new URL(YOUTUBE_OEMBED_ENDPOINT);
+  endpoint.searchParams.set('url', video.canonicalUrl);
+  endpoint.searchParams.set('format', 'json');
+  const value = await withSafeResponse(
+    endpoint.href,
+    signal,
+    fetcher,
+    'application/json',
+    readBoundedJson,
+    { timeoutMs },
+  );
+  return parseYouTubeOEmbedMetadata(value, videoUrl);
+}
+
+function applyYouTubeFallbackTitle(metadata: LinkPreviewMetadata, url: string): LinkPreviewMetadata {
+  const video = parseYouTubeVideoLink(url);
+  return video
+    ? { ...metadata, title: readableYouTubeFallbackTitle(metadata.title, video.canonicalUrl) }
+    : metadata;
+}
+
 export async function getLinkPreview(
   url: string,
   signal?: AbortSignal,
@@ -280,20 +394,34 @@ export async function getLinkPreview(
     return fallback;
   }
 
+  const startedAt = Date.now();
+  const remainingTimeout = () => Math.max(0, REQUEST_TIMEOUT_MS - (Date.now() - startedAt));
+
+  if (parseYouTubeVideoLink(url)) {
+    try {
+      const youtubePreview = await getYouTubeOEmbedPreview(url, signal, fetcher, remainingTimeout());
+      if (youtubePreview) return youtubePreview;
+    } catch {
+      if (signal?.aborted) throw createAbortError();
+    }
+  }
+
   try {
-    return await withSafeResponse(
+    const htmlPreview = await withSafeResponse(
       url,
       signal,
       fetcher,
       'text/html,application/xhtml+xml;q=0.9',
       async (response, responseUrl) =>
         parseLinkPreviewHtml(await readBoundedHtml(response), responseUrl),
+      { timeoutMs: remainingTimeout() },
     );
+    return applyYouTubeFallbackTitle(htmlPreview, url);
   } catch {
     if (signal?.aborted) {
       throw createAbortError();
     }
-    return fallback;
+    return applyYouTubeFallbackTitle(fallback, url);
   }
 }
 

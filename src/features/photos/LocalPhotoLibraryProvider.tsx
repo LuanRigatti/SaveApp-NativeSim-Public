@@ -13,8 +13,6 @@ import {
 } from 'react';
 
 import {
-  deleteSavedPhoto,
-  deleteSavedMedia,
   getSavedVideo,
   getSavedPhoto,
   importSelectedPhotos,
@@ -36,16 +34,19 @@ import {
   resolvePhotoScreenshotClassification,
 } from './photoScreenshotDetection';
 import type { PhotoImportAsset, SavedMedia, SavedPhoto, SavedVideo, VideoImportAsset } from './photoTypes';
+import { moveSavedItemToRecentlyDeleted } from '@/features/home-trash/trashLibrary';
 
 type PhotoLibraryContextValue = {
   media: SavedMedia[];
   isReady: boolean;
+  refresh: () => Promise<void>;
   importFromPhotoLibrary: () => Promise<void>;
   importVideosFromPhotoLibrary: () => Promise<void>;
   requestDeleteMedia: (
     id: number,
     mediaType: 'photo' | 'video',
     prepareForRemovalAnimation?: () => void,
+    authorizeBeforeDelete?: () => Promise<boolean>,
   ) => void;
   requestRenamePhoto: (photo: SavedPhoto) => void;
   getPhoto: (id: number) => Promise<SavedPhoto | null>;
@@ -72,6 +73,11 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
     }
 
     return initializationRef.current;
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setMedia(await listSavedMedia());
+    setIsReady(true);
   }, []);
 
   useEffect(() => {
@@ -226,6 +232,7 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
     id: number,
     mediaType: 'photo' | 'video',
     prepareForRemovalAnimation?: () => void,
+    authorizeBeforeDelete?: () => Promise<boolean>,
   ) => {
     void requestConfirmedPhotoDeletion(id, {
       confirm: () =>
@@ -240,14 +247,14 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
           };
 
           Alert.alert(
-            mediaType === 'video' ? 'Apagar vídeo?' : 'Apagar imagem?',
+            'Mover para Apagados recentemente?',
             mediaType === 'video'
-              ? 'O vídeo será removido somente do SaveApp. O original continuará na galeria do iPhone.'
-              : 'A imagem será removida somente do SaveApp. A foto original continuará na galeria do iPhone.',
+              ? 'O vídeo ficará disponível para restauração por 30 dias. O original continuará na galeria do iPhone.'
+              : 'A imagem ficará disponível para restauração por 30 dias. A foto original continuará na galeria do iPhone.',
             [
               { text: 'Cancelar', style: 'cancel', onPress: () => finish(false) },
               {
-                text: mediaType === 'video' ? 'Apagar vídeo' : 'Apagar imagem',
+                text: 'Mover para apagados',
                 style: 'destructive',
                 onPress: () => finish(true),
               },
@@ -255,7 +262,8 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
             { cancelable: true, onDismiss: () => finish(false) },
           );
         }),
-      deletePhoto: () => (mediaType === 'video' ? deleteSavedMedia(id) : deleteSavedPhoto(id)),
+      authorizeBeforeDelete,
+      deletePhoto: () => moveSavedItemToRecentlyDeleted(mediaType, id),
       onDeleted: () => {
         prepareForRemovalAnimation?.();
         setMedia((current) => removeSavedMediaById(current, id));
@@ -309,6 +317,7 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
     () => ({
       media,
       isReady,
+      refresh,
       importFromPhotoLibrary,
       importVideosFromPhotoLibrary,
       requestDeleteMedia,
@@ -325,6 +334,7 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
       media,
       requestDeleteMedia,
       requestRenamePhoto,
+      refresh,
     ],
   );
 

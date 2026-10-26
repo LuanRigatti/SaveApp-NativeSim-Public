@@ -1,249 +1,221 @@
-import { ActivityIndicator, Text, TextInput, View } from 'react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { NativeButton, NativeSheet } from '@/components/native';
-import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentProvider';
-import { EmptySavedTextError } from '@/features/home-content/contentSavePipeline';
-import { createLinkSaveSubmissionRunner } from '@/features/home-content/linkSaveSubmission';
+import { NativeButton } from '@/components/native';
+import { submitLinkFromNativePrompt } from '@/features/home-content/nativeLinkPromptSubmission';
+import { getNativeCapabilities } from '@/platform/nativeCapabilities';
 import { useAppTheme } from '@/theme';
 
-export type HomeComposerKind = 'link' | 'text' | null;
+import { useLinkComposerController, type HomeComposerKind } from './HomeContentComposerController';
+
+export type { HomeComposerKind } from './HomeContentComposerController';
 
 export function HomeContentComposer({
   kind,
+  initialLink,
   onClose,
 }: {
   kind: HomeComposerKind;
+  initialLink?: string | null;
   onClose: () => void;
 }) {
-  if (kind === 'link') return <AddLinkSheet onClose={onClose} />;
-  if (kind === 'text') return <AddTextSheet onClose={onClose} />;
+  if (!kind) return null;
+
+  // Alert.prompt is backed by UIAlertController and remains native even when
+  // Expo UI is unavailable in the current iOS runtime.
+  if (kind === 'link' && Platform.OS === 'ios') {
+    return <NativeLinkPrompt initialLink={initialLink} onClose={onClose} />;
+  }
+
+  if (kind === 'link') return <AddLinkFallback initialLink={initialLink} onClose={onClose} />;
   return null;
 }
 
-function AddLinkSheet({ onClose }: { onClose: () => void }) {
-  const { saveLink } = useLocalSavedContent();
-  const { theme } = useAppTheme();
-  const [link, setLink] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const linkAbortController = useRef<AbortController | null>(null);
-  const isMounted = useRef(false);
-  const didClose = useRef(false);
-  const submissionRunner = useRef<ReturnType<typeof createLinkSaveSubmissionRunner> | null>(null);
+function NativeLinkPrompt({ initialLink, onClose }: { initialLink?: string | null; onClose: () => void }) {
+  const { close, isSaving, submit } = useLinkComposerController({ onClose });
+  const promptIsVisible = useRef(false);
+  const initialValueRef = useRef(initialLink ?? '');
+  const presentPromptRef = useRef<(initialValue: string) => void>(() => undefined);
 
-  if (submissionRunner.current == null) {
-    submissionRunner.current = createLinkSaveSubmissionRunner();
-  }
+  const presentPrompt = useCallback(
+    (initialValue: string) => {
+      if (promptIsVisible.current) return;
+      promptIsVisible.current = true;
+
+      Alert.prompt(
+        'Adicionar link',
+        'Cole aqui ou digite o endereço que deseja guardar.',
+        [
+          {
+            text: 'Cancelar',
+            style: 'cancel',
+            onPress: () => {
+              promptIsVisible.current = false;
+              close();
+            },
+          },
+          {
+            text: 'Adicionar',
+            onPress: (enteredValue) => {
+              promptIsVisible.current = false;
+              const submittedValue = enteredValue ?? initialValue;
+
+              void submitLinkFromNativePrompt(submittedValue, submit, (message, retryValue) => {
+                Alert.alert('Não foi possível adicionar o link', message, [
+                  {
+                    text: 'Cancelar',
+                    style: 'cancel',
+                    onPress: close,
+                  },
+                  {
+                    text: 'Tentar novamente',
+                    onPress: () => presentPromptRef.current(retryValue),
+                  },
+                ]);
+              });
+            },
+          },
+        ],
+        'plain-text',
+        initialValue,
+        'url',
+      );
+    },
+    [close, submit],
+  );
 
   useEffect(() => {
-    isMounted.current = true;
-    didClose.current = false;
+    presentPromptRef.current = presentPrompt;
+  }, [presentPrompt]);
 
-    return () => {
-      isMounted.current = false;
-      const controller = linkAbortController.current;
-      linkAbortController.current = null;
-      controller?.abort();
-    };
+  useEffect(() => {
+    presentPromptRef.current(initialValueRef.current);
   }, []);
 
-  const close = () => {
-    if (!isMounted.current || didClose.current) return;
-    didClose.current = true;
-    const controller = linkAbortController.current;
-    linkAbortController.current = null;
-    controller?.abort();
-    setIsSaving(false);
-    setErrorMessage(null);
-    onClose();
-  };
+  if (isSaving && getNativeCapabilities().canUseNativeSwiftUI) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const NativeLinkSavingIndicator = require('./HomeContentComposerLinkSavingSwiftUI.ios').default;
+    return <NativeLinkSavingIndicator />;
+  }
 
-  const handleSave = async () => {
-    if (isSaving || linkAbortController.current || !isMounted.current || didClose.current) return;
-    const controller = new AbortController();
-    linkAbortController.current = controller;
-    await submissionRunner.current?.(
-      () => saveLink(link, controller.signal),
-      controller.signal,
-      {
-        isCurrent: () =>
-          isMounted.current && !didClose.current && linkAbortController.current === controller,
-        onSettled: () => {
-          if (linkAbortController.current === controller) linkAbortController.current = null;
-        },
-        setErrorMessage,
-        setSaving: setIsSaving,
-        onSuccess: () => {
-          if (linkAbortController.current !== controller || controller.signal.aborted) return;
-          linkAbortController.current = null;
-          close();
-        },
-      },
-    );
-  };
-
-  const fieldStyle = {
-    backgroundColor: theme.colors.surfaceMuted,
-    borderColor: theme.colors.separator,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    color: theme.colors.textPrimary,
-    fontSize: 17,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-  } as const;
-
-  return (
-    <NativeSheet
-      accessibilityLabel="Adicionar link"
-      detents={[{ fraction: 0.44 }, 'large']}
-      onVisibleChange={(visible) => {
-        if (!visible) close();
-      }}
-      title="Adicionar link"
-      visible
-    >
-      <View style={{ gap: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-        <TextInput
-          accessibilityLabel="Endereço do link"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          onChangeText={(value) => {
-            setLink(value);
-            setErrorMessage(null);
-          }}
-          onSubmitEditing={() => void handleSave()}
-          placeholder="Cole ou digite um endereço"
-          placeholderTextColor={theme.colors.textTertiary}
-          returnKeyType="done"
-          selectionColor={theme.colors.primary}
-          style={fieldStyle}
-          value={link}
-        />
-        {isSaving ? (
-          <View accessibilityLiveRegion="polite" style={{ alignItems: 'center', flexDirection: 'row', gap: theme.spacing.sm }}>
-            <ActivityIndicator color={theme.colors.primary} />
-            <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-              Buscando prévia do site…
-            </Text>
-          </View>
-        ) : null}
-        {errorMessage ? (
-          <Text accessibilityRole="alert" style={[theme.typography.footnote, { color: theme.colors.danger }]}>
-            {errorMessage}
-          </Text>
-        ) : null}
-        <View style={{ flexDirection: 'row', gap: theme.spacing.sm, justifyContent: 'flex-end' }}>
-          <NativeButton label="Cancelar" onPress={close} variant="plain" />
-          <NativeButton
-            disabled={isSaving || !link.trim()}
-            label={isSaving ? 'Salvando…' : 'Salvar'}
-            onPress={() => void handleSave()}
-            variant="primary"
-          />
-        </View>
+  if (isSaving) {
+    return (
+      <View
+        accessibilityLabel="Salvando link"
+        accessibilityRole="progressbar"
+        pointerEvents="none"
+        style={StyleSheet.absoluteFill}
+      >
+        <ActivityIndicator style={{ flex: 1 }} />
       </View>
-    </NativeSheet>
-  );
+    );
+  }
+
+  return null;
 }
 
-function AddTextSheet({ onClose }: { onClose: () => void }) {
-  const { saveText } = useLocalSavedContent();
+function AddLinkFallback({ initialLink, onClose }: { initialLink?: string | null; onClose: () => void }) {
   const { theme } = useAppTheme();
-  const [text, setText] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const textAbortController = useRef<AbortController | null>(null);
-
-  const close = () => {
-    textAbortController.current?.abort();
-    textAbortController.current = null;
-    setIsSaving(false);
-    setErrorMessage(null);
-    onClose();
-  };
-
-  const handleSave = async () => {
-    if (isSaving || textAbortController.current) return;
-    const controller = new AbortController();
-    textAbortController.current = controller;
-    setIsSaving(true);
-    setErrorMessage(null);
-    try {
-      await saveText(text, controller.signal);
-      if (textAbortController.current !== controller || controller.signal.aborted) return;
-      setIsSaving(false);
-      textAbortController.current = null;
-      onClose();
-    } catch (error) {
-      if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
-      setIsSaving(false);
-      setErrorMessage(
-        error instanceof EmptySavedTextError ? 'Escreva algo antes de salvar.' : 'Não foi possível salvar o texto.',
-      );
-    } finally {
-      if (textAbortController.current === controller) {
-        textAbortController.current = null;
-        setIsSaving(false);
-      }
-    }
-  };
-
-  const fieldStyle = {
-    backgroundColor: theme.colors.surfaceMuted,
-    borderColor: theme.colors.separator,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    color: theme.colors.textPrimary,
-    fontSize: 17,
-    minHeight: 150,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-    textAlignVertical: 'top' as const,
-  };
+  const [link, setLink] = useState(initialLink ?? '');
+  const { clearError, close, errorMessage, isSaving, submit } = useLinkComposerController({
+    onClose,
+  });
 
   return (
-    <NativeSheet
-      accessibilityLabel="Adicionar texto"
-      detents={[{ fraction: 0.52 }, 'large']}
-      onVisibleChange={(visible) => {
-        if (!visible) close();
-      }}
-      title="Adicionar texto"
-      visible
-    >
-      <View style={{ gap: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-        <TextInput
-          accessibilityLabel="Texto para salvar"
-          autoCapitalize="sentences"
-          multiline
-          onChangeText={(value) => {
-            setText(value);
-            setErrorMessage(null);
-          }}
-          placeholder="Escreva ou cole um texto"
-          placeholderTextColor={theme.colors.textTertiary}
-          selectionColor={theme.colors.primary}
-          style={fieldStyle}
-          value={text}
-        />
-        {errorMessage ? (
-          <Text accessibilityRole="alert" style={[theme.typography.footnote, { color: theme.colors.danger }]}>
-            {errorMessage}
-          </Text>
-        ) : null}
-        <View style={{ flexDirection: 'row', gap: theme.spacing.sm, justifyContent: 'flex-end' }}>
-          <NativeButton label="Cancelar" onPress={close} variant="plain" />
-          <NativeButton
-            disabled={isSaving || !text.trim()}
-            label={isSaving ? 'Salvando…' : 'Salvar'}
-            onPress={() => void handleSave()}
-            variant="primary"
+    <Modal animationType="fade" onRequestClose={close} transparent visible>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+        <SafeAreaView
+          edges={['top', 'bottom']}
+          style={{ alignItems: 'center', flex: 1, justifyContent: 'center', padding: theme.spacing.lg }}
+        >
+          <Pressable
+            accessibilityLabel="Fechar compositor de link"
+            onPress={close}
+            style={{ backgroundColor: '#00000066', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 }}
           />
-        </View>
-      </View>
-    </NativeSheet>
+          <View
+            style={{
+              backgroundColor: theme.colors.surfaceElevated,
+              borderColor: theme.colors.separator,
+              borderRadius: theme.radius.xl,
+              borderWidth: 1,
+              gap: theme.spacing.md,
+              maxWidth: 440,
+              padding: theme.spacing.lg,
+              width: '100%',
+            }}
+          >
+            <View style={{ gap: theme.spacing.xs }}>
+              <Text style={[theme.typography.title3, { color: theme.colors.textPrimary }]}>
+                Adicionar link
+              </Text>
+              <Text style={[theme.typography.subheadline, { color: theme.colors.textSecondary }]}>
+                Cole ou digite o endereço que deseja guardar.
+              </Text>
+            </View>
+            <TextInput
+              accessibilityLabel="Endereço do link"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              onChangeText={(value) => {
+                setLink(value);
+                clearError();
+              }}
+              onSubmitEditing={() => void submit(link)}
+              placeholder="https://"
+              placeholderTextColor={theme.colors.textTertiary}
+              returnKeyType="done"
+              selectionColor={theme.colors.primary}
+              style={{
+                backgroundColor: theme.colors.surfaceMuted,
+                borderColor: theme.colors.separator,
+                borderRadius: theme.radius.md,
+                borderWidth: 1,
+                color: theme.colors.textPrimary,
+                fontSize: 17,
+                minHeight: 50,
+                paddingHorizontal: theme.spacing.md,
+              }}
+              value={link}
+            />
+            {isSaving ? (
+              <View style={{ alignItems: 'center', flexDirection: 'row', gap: theme.spacing.sm }}>
+                <ActivityIndicator color={theme.colors.info} />
+                <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
+                  Buscando prévia do site…
+                </Text>
+              </View>
+            ) : null}
+            {errorMessage ? (
+              <Text accessibilityRole="alert" style={[theme.typography.footnote, { color: theme.colors.danger }]}>
+                {errorMessage}
+              </Text>
+            ) : null}
+            <View style={{ flexDirection: 'row', gap: theme.spacing.sm, justifyContent: 'flex-end' }}>
+              <NativeButton label="Cancelar" onPress={close} variant="plain" />
+              <NativeButton
+                disabled={isSaving || !link.trim()}
+                label={isSaving ? 'Salvando…' : 'Adicionar'}
+                onPress={() => void submit(link)}
+                variant="primary"
+              />
+            </View>
+          </View>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }

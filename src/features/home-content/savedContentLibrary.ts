@@ -1,6 +1,10 @@
 import { Directory, File, Paths } from 'expo-file-system';
 
 import { getSaveAppDatabase } from '@/features/photos/photoLibrary';
+import {
+  readHomeFolderAssociation,
+  restoreHomeFolderAssociation,
+} from '@/features/home-folders/folderAssociationDatabase';
 
 import { deleteSavedContentWithPersistence } from './contentDeletionPipeline';
 import { savedContentRowToModel, type SavedContentRow } from './savedContentCatalog';
@@ -70,7 +74,7 @@ export async function saveSavedLink(input: string, signal?: AbortSignal): Promis
     async hasLink(normalizedUrl) {
       const database = await getSaveAppDatabase();
       const row = await database.getFirstAsync<{ id: number }>(
-        "SELECT id FROM saved_content WHERE content_type = 'link' AND normalized_url = ? LIMIT 1;",
+        "SELECT id FROM saved_content WHERE content_type = 'link' AND normalized_url = ? AND deleted_at IS NULL LIMIT 1;",
         normalizedUrl,
       );
       return row != null;
@@ -142,7 +146,7 @@ export async function saveSavedText(text: string, signal?: AbortSignal): Promise
 export async function listSavedHomeContent(): Promise<SavedHomeContent[]> {
   const database = await getSaveAppDatabase();
   const rows = await database.getAllAsync<SavedContentRow>(
-    'SELECT id, content_type, created_at, url, normalized_url, title, description, domain, image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content FROM saved_content ORDER BY created_at DESC, id DESC;',
+    'SELECT id, content_type, created_at, url, normalized_url, title, description, domain, image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content FROM saved_content WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC;',
   );
   return rows.flatMap((row) => {
     try {
@@ -163,7 +167,7 @@ export async function getSavedText(id: number): Promise<SavedText | null> {
   if (!Number.isSafeInteger(id) || id <= 0) return null;
   const database = await getSaveAppDatabase();
   const row = await database.getFirstAsync<SavedContentRow>(
-    "SELECT id, content_type, created_at, url, normalized_url, title, description, domain, image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content FROM saved_content WHERE id = ? AND content_type = 'text';",
+    "SELECT id, content_type, created_at, url, normalized_url, title, description, domain, image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content FROM saved_content WHERE id = ? AND content_type = 'text' AND deleted_at IS NULL;",
     id,
   );
   const content = row
@@ -180,6 +184,8 @@ export async function deleteSavedHomeContent(
   id: number,
   type: SavedHomeContent['contentType'],
 ): Promise<boolean> {
+  const database = await getSaveAppDatabase();
+  const folderId = await readHomeFolderAssociation(database, type, id);
   return deleteSavedContentWithPersistence(id, type, {
     async getContent(contentId, contentType) {
       const database = await getSaveAppDatabase();
@@ -226,38 +232,39 @@ export async function deleteSavedHomeContent(
       return result.changes === 1;
     },
     async restoreMetadata(content) {
-      const database = await getSaveAppDatabase();
-      if (content.contentType === 'text') {
-        await database.runAsync(
-          `INSERT INTO saved_content
-             (id, content_type, created_at, url, normalized_url, title, description, domain,
-              image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content)
-           VALUES (?, 'text', ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?);`,
-          content.id,
-          content.createdAt,
-          content.text,
-        );
-        return;
-      }
-
-      const row = content;
-      await database.runAsync(
-        `INSERT INTO saved_content
-           (id, content_type, created_at, url, normalized_url, title, description, domain,
-            image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content)
-         VALUES (?, 'link', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL);`,
-        row.id,
-        row.createdAt,
-        row.url,
-        row.normalizedUrl,
-        row.title,
-        row.description,
-        row.domain,
-        row.imageUrl,
-        row.faviconUrl,
-        row.previewImageRelativePath,
-        row.previewImageMimeType,
-      );
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        if (content.contentType === 'text') {
+          await transaction.runAsync(
+            `INSERT INTO saved_content
+               (id, content_type, created_at, url, normalized_url, title, description, domain,
+                image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content)
+             VALUES (?, 'text', ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?);`,
+            content.id,
+            content.createdAt,
+            content.text,
+          );
+        } else {
+          const row = content;
+          await transaction.runAsync(
+            `INSERT INTO saved_content
+               (id, content_type, created_at, url, normalized_url, title, description, domain,
+                image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content)
+             VALUES (?, 'link', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL);`,
+            row.id,
+            row.createdAt,
+            row.url,
+            row.normalizedUrl,
+            row.title,
+            row.description,
+            row.domain,
+            row.imageUrl,
+            row.faviconUrl,
+            row.previewImageRelativePath,
+            row.previewImageMimeType,
+          );
+        }
+        await restoreHomeFolderAssociation(transaction, type, content.id, folderId);
+      });
     },
     previewPath(content) {
       return content.contentType === 'link' ? content.previewImageRelativePath : null;

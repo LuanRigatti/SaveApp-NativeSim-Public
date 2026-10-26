@@ -13,6 +13,7 @@ export type SavedContentDeletionAdapter = {
 
 export type ConfirmedSavedContentDeletionAdapter = {
   confirm: () => Promise<boolean>;
+  authorizeBeforeDelete?: () => Promise<boolean>;
   deleteContent: () => Promise<boolean>;
   onDeleted?: () => void | Promise<void>;
   onMissing?: () => void | Promise<void>;
@@ -102,6 +103,7 @@ export async function requestConfirmedSavedContentDeletion(
 
   try {
     if (!(await adapter.confirm())) return 'cancelled';
+    if (adapter.authorizeBeforeDelete && !(await adapter.authorizeBeforeDelete())) return 'cancelled';
     let deleted: boolean;
     try {
       deleted = await adapter.deleteContent();

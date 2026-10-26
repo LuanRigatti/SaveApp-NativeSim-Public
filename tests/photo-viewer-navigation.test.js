@@ -119,6 +119,6 @@ describe('photo viewer navigation', () => {
   test('preserves the native destructive delete action in the photo menu', () => {
     expect(gallerySource).toMatch(/title=\{isVideo \? 'Apagar vídeo' : 'Apagar imagem'\}/);
     expect(gallerySource).toMatch(/icon="trash"[\s\S]*?destructive/);
-    expect(gallerySource).toMatch(/requestDeleteMedia\(item\.id, item\.mediaType, prepareForMediaRemovalAnimation\)/);
+    expect(gallerySource).toMatch(/requestDeleteMedia\([\s\S]*?prepareForMediaRemovalAnimation,[\s\S]*?authorizeItemForAction\(item\.mediaType, item\.id\)/);
   });
 });

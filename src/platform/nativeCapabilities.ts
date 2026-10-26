@@ -5,6 +5,7 @@ import type { NativeCapabilities } from '@/types/native-ui';
 
 import { getRuntimeEnvironment } from './runtimeEnvironment';
 import { hasExpoUiNativeModule } from './nativeModules';
+import { isNativeSheetSupported } from './nativeSheetCapability';
 
 function canUseLiquidGlass(): boolean {
   if (Platform.OS !== 'ios') {
@@ -20,14 +21,16 @@ function canUseLiquidGlass(): boolean {
 
 export function getNativeCapabilities(): NativeCapabilities {
   const environment = getRuntimeEnvironment();
+  const expoUiNativeModuleAvailable = Platform.OS === 'ios' && hasExpoUiNativeModule();
   const canUseExpoUI =
-    environment === 'development-build' && Platform.OS === 'ios' && hasExpoUiNativeModule();
+    environment === 'development-build' && expoUiNativeModuleAvailable;
 
   return {
     environment,
     canUseExpoUI,
+    canUseNativeSwiftUI: expoUiNativeModuleAvailable,
     canUseNativeMenu: environment !== 'web',
-    canUseNativeSheet: canUseExpoUI,
+    canUseNativeSheet: isNativeSheetSupported(Platform.OS, expoUiNativeModuleAvailable),
     canUseNativePicker: canUseExpoUI,
     canUseNativeTabs: environment !== 'web',
     canUseLiquidGlass: canUseLiquidGlass(),

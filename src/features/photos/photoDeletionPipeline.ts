@@ -12,6 +12,7 @@ export type PhotoDeletionPersistenceAdapter = {
 
 export type ConfirmedPhotoDeletionAdapter = {
   confirm: () => Promise<boolean>;
+  authorizeBeforeDelete?: () => Promise<boolean>;
   deletePhoto: () => Promise<boolean>;
   onDeleted?: () => void | Promise<void>;
   onMissing?: () => void | Promise<void>;
@@ -165,6 +166,9 @@ export async function requestConfirmedPhotoDeletion(
 
   try {
     if (!(await adapter.confirm())) {
+      return 'cancelled';
+    }
+    if (adapter.authorizeBeforeDelete && !(await adapter.authorizeBeforeDelete())) {
       return 'cancelled';
     }
 

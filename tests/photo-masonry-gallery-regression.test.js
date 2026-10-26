@@ -8,6 +8,10 @@ const gallerySource = readFileSync(
   join(__dirname, '../src/components/photos/PhotoMasonryGallery.tsx'),
   'utf8',
 );
+const gridCardSource = readFileSync(
+  join(__dirname, '../src/components/homeContent/HomeGridCard.tsx'),
+  'utf8',
+);
 const providerSource = readFileSync(
   join(__dirname, '../src/features/photos/LocalPhotoLibraryProvider.tsx'),
   'utf8',
@@ -29,8 +33,31 @@ const linkPresentationSource = readFileSync(
   'utf8',
 );
 const tabsLayoutSource = readFileSync(join(__dirname, '../src/app/(tabs)/_layout.tsx'), 'utf8');
+const homeSource = readFileSync(join(__dirname, '../src/app/(tabs)/index.tsx'), 'utf8');
+const homeToolbarMenuSource = readFileSync(join(__dirname, '../src/features/home-folders/homeFolderToolbarMenu.tsx'), 'utf8');
+const homeViewModeProviderSource = readFileSync(
+  join(__dirname, '../src/features/home-content/HomeViewModeProvider.tsx'),
+  'utf8',
+);
 
 describe('mixed-media masonry regression contract', () => {
+  test('keeps the Home title at the top while independent startup sources hydrate', () => {
+    expect(homeSource).toMatch(/isReady: photoLibraryReady/);
+    expect(homeSource).toMatch(/isReady: savedContentReady/);
+    expect(homeSource).toMatch(/isReady: documentLibraryReady/);
+    expect(homeSource).toMatch(/isReady: viewModeReady/);
+    expect(homeSource).toMatch(/isReady: homeFoldersReady/);
+    expect(homeSource).toMatch(/areHomeFeedSourcesReady\(\{/);
+    expect(homeSource).toMatch(/isInitialFeedReady=\{homeFeedReady\}/);
+    expect(homeViewModeProviderSource).toMatch(/const \[isReady, setIsReady\] = useState\(false\)/);
+    expect(homeViewModeProviderSource).toMatch(/restoreHomeViewMode\(AsyncStorage\)\.then/);
+    expect(homeViewModeProviderSource).toMatch(/setIsReady\(true\)/);
+    expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?allItems,[\s\S]*?folderFilter,[\s\S]*?folderIdByItemKey,[\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
+    expect(gallerySource).toMatch(/buildHomeGalleryEntriesWhenReady\(filteredItems, now, isInitialFeedReady && homeFoldersReady\)/);
+    expect(gallerySource).toMatch(/ListHeaderComponent=\{listHeader\}/);
+    expect(gallerySource).toMatch(/if \(offset != null && offset > 0\)/);
+  });
+
   test('presents links with a small source label and concise text only in the list modes', () => {
     const { getSavedLinkPresentation } = require('../src/features/home-content/savedLinkPresentation');
     const linkRowSource = gallerySource.slice(
@@ -177,16 +204,17 @@ describe('mixed-media masonry regression contract', () => {
   });
 
   test('renders photos and videos directly in FlashList and marks both thumbnails for Apple Zoom', () => {
-    expect(gallerySource).not.toMatch(/NativeCardContextMenu|@expo\/ui|Host|RNHostView|matchContents/);
+    expect(gallerySource).not.toMatch(/@expo\/ui|Host|RNHostView|matchContents/);
+    expect(gallerySource).toMatch(/NativeCardContextMenu actions=\{contextActions\}/);
     expect(gallerySource).toMatch(/<FlashList[\s\S]*?data=\{entries\}/);
     expect(gallerySource).toMatch(/pathname: '\/photos\/\[id\]'/);
     expect(gallerySource).toMatch(/pathname: '\/videos\/\[id\]'/);
     expect(gallerySource).toMatch(/const zoomableMediaImage = supportsAppleZoom \? \([\s\S]*?<Link\.AppleZoom>\{mediaImage\}<\/Link\.AppleZoom>/);
     expect(gallerySource).toMatch(/contentFit="cover"/);
-    expect(gallerySource).toMatch(/aspectRatio: item\.width \/ item\.height/);
+    expect(gallerySource).toMatch(/height: '100%',[\s\S]*?overflow: 'hidden',[\s\S]*?width: '100%'/);
     expect(gallerySource).toMatch(/width: '100%'/);
-    expect(gallerySource).toMatch(/marginBottom: theme\.spacing\.xs/);
-    expect(gallerySource).toMatch(/marginHorizontal: theme\.spacing\.xxs/);
+    expect(gallerySource).toMatch(/function getGridCardPressStyle\(theme: AppTheme, mode: HomeGridCardMode, width: number\): ViewStyle[\s\S]*?if \(mode === 'large'\)[\s\S]*?alignSelf: 'center',[\s\S]*?width,/);
+    expect(gallerySource).toMatch(/marginBottom: theme\.spacing\.md,[\s\S]*?marginHorizontal: theme\.spacing\.xs/);
     expect(gallerySource).toMatch(/recyclingKey=\{`\$\{item\.mediaType\}-\$\{item\.id\}`\}/);
     expect(gallerySource).toMatch(/masonry=\{viewLayout\.masonry\}/);
     expect(gallerySource).toMatch(/numColumns=\{viewLayout\.numColumns\}/);
@@ -198,13 +226,14 @@ describe('mixed-media masonry regression contract', () => {
   });
 
   test('keeps native context menus in Link and uses static media previews', () => {
-    expect(gallerySource).toMatch(/NATIVE_PHOTO_CONTEXT_MENU_ENABLED = true/);
+    expect(gallerySource).toMatch(/const supportsNativeContextMenu = Platform.OS === 'ios';/);
+    expect(gallerySource).not.toContain('NATIVE_PHOTO_CONTEXT_MENU_ENABLED');
     expect(gallerySource).toMatch(/if \(!supportsNativeContextMenu\)/);
     expect(gallerySource).toMatch(/<Link asChild href=\{href\}>[\s\S]*?<Link\.Trigger>\{mediaTrigger\}<\/Link\.Trigger>/);
     expect(gallerySource).toMatch(/source=\{\{ uri: previewUri \}\}/);
     expect(gallerySource).toMatch(/title=\{isVideo \? 'Apagar vídeo' : 'Apagar imagem'\}/);
     expect(gallerySource).toMatch(/icon="trash"[\s\S]*?destructive/);
-    expect(gallerySource).toMatch(/requestDeleteMedia\(item\.id, item\.mediaType, prepareForMediaRemovalAnimation\)/);
+    expect(gallerySource).toMatch(/requestDeleteMedia\([\s\S]*?prepareForMediaRemovalAnimation,[\s\S]*?authorizeItemForAction\(item\.mediaType, item\.id\)/);
     expect(gallerySource).toMatch(/<Link\.Preview style=\{\{ width: previewSize\.width, height: previewSize\.height \}\}>/);
   });
 
@@ -242,7 +271,7 @@ describe('mixed-media masonry regression contract', () => {
     expect(updateFunction).not.toMatch(/created_at|relative_path|DELETE FROM photos/);
   });
 
-  test('renders rounded link previews as a full-width 16:9 cover above the title and domain', () => {
+  test('renders link previews in the shared fixed grid frame above title and metadata', () => {
     const linkCardSource = gallerySource.slice(
       gallerySource.indexOf('const renderSavedContentItem'),
       gallerySource.indexOf('const renderItem'),
@@ -250,15 +279,14 @@ describe('mixed-media masonry regression contract', () => {
 
     expect(linkCardSource).toMatch(/item\.previewImageUri \? \([\s\S]*?<Image/);
     expect(linkCardSource).toMatch(/contentFit="cover"/);
-    expect(linkCardSource).toMatch(/borderRadius: theme\.radius\.linkCard/);
-    expect(linkCardSource).toMatch(
-      /aspectRatio: 16 \/ 9,[\s\S]*borderTopLeftRadius: theme\.radius\.linkCard,[\s\S]*borderTopRightRadius: theme\.radius\.linkCard,[\s\S]*width: '100%',/,
-    );
+    expect(linkCardSource).toMatch(/preview=\{item\.previewImageUri \? \([\s\S]*?style=\{StyleSheet\.absoluteFill\}/);
+    expect(gridCardSource).toMatch(/height: metrics\.previewHeight/);
+    expect(gridCardSource).toMatch(/borderRadius: theme\.radius\.card/);
     expect(linkCardSource).toMatch(/transition=\{120\}/);
-    expect(linkCardSource).toMatch(/overflow: 'hidden'/);
-    expect(linkCardSource).toMatch(/ellipsizeMode="tail"[\s\S]*?numberOfLines=\{3\}/);
-    expect(linkCardSource).toMatch(/theme\.typography\.headline[\s\S]*?\{item\.title\}/);
-    expect(linkCardSource).toMatch(/theme\.typography\.caption[\s\S]*?\{item\.domain\}/);
+    expect(gridCardSource).toMatch(/overflow: 'hidden'/);
+    expect(gridCardSource).toMatch(/ellipsizeMode="tail"[\s\S]*?numberOfLines=\{2\}/);
+    expect(linkCardSource).toMatch(/title=\{item\.title\}/);
+    expect(linkCardSource).toMatch(/metadata=\{item\.domain \|\| 'Link'\}/);
     expect(linkCardSource).toMatch(/name="link-outline"/);
     expect(linkCardSource).not.toMatch(/height: 52|width: 52/);
     expect(radiusSource).toMatch(/linkCard: 32/);
@@ -270,18 +298,15 @@ describe('mixed-media masonry regression contract', () => {
       gallerySource.indexOf('const renderItem'),
     );
 
-    expect(gallerySource).toMatch(/LINK_CARD_LIQUID_GLASS_ENABLED = true/);
     expect(gallerySource).toMatch(/const \{ useGlass \} = useVisualCapabilities\(\)/);
-    expect(gallerySource).toMatch(/LINK_CARD_LIQUID_GLASS_ENABLED && useGlass/);
-    expect(linkCardSource).toMatch(/glassEffectStyle="regular"/);
-    expect(linkCardSource).toMatch(/pointerEvents="none"/);
-    expect(linkCardSource).not.toMatch(/isInteractive/);
-    const glassViewElements = linkCardSource.match(/<GlassView[\s\S]*?\/>/g) ?? [];
-    expect(glassViewElements).toHaveLength(2);
-    expect(glassViewElements.join('\n')).not.toMatch(/borderRadius/);
-    expect(linkCardSource).toMatch(
-      /backgroundColor: useLinkCardGlass \? 'transparent' : theme\.colors\.surface/,
-    );
+    expect(gallerySource).toMatch(/const useLinkCardGlass = useGlass;/);
+    expect(gallerySource).not.toContain('LINK_CARD_LIQUID_GLASS_ENABLED');
+    expect(linkCardSource).toMatch(/glassColorScheme=\{useLinkCardGlass \? resolvedMode : undefined\}/);
+    expect(gridCardSource).toMatch(/glassEffectStyle="regular"/);
+    expect(gridCardSource).toMatch(/pointerEvents="none"/);
+    expect(gridCardSource).not.toMatch(/isInteractive/);
+    expect(gridCardSource).toMatch(/backgroundColor: glassColorScheme \? 'transparent' : theme\.colors\.surface/);
+    expect(gallerySource).toContain('glassColorScheme={useLinkCardGlass ? resolvedMode : undefined}');
     expect(linkCardSource).toMatch(/StyleSheet\.absoluteFill/);
   });
 
@@ -314,41 +339,43 @@ describe('mixed-media masonry regression contract', () => {
     expect(providerSource).toMatch(/onDeleted: \(\) => \{\s*prepareForRemovalAnimation\?\.\(\);\s*setMedia/);
   });
 
-  test('groups the native view and add menus in one adjacent toolbar background on Home', () => {
+  test('keeps the combined folder and layout menu in the header and the native add menu at Home bottom', () => {
     const rightToolbar = tabsLayoutSource.slice(
       tabsLayoutSource.indexOf('<Stack.Toolbar placement="right">'),
       tabsLayoutSource.indexOf('</Stack.Toolbar>', tabsLayoutSource.indexOf('<Stack.Toolbar placement="right">')),
     );
-
-    expect(rightToolbar).toMatch(/icon="square\.grid\.2x2"\s+separateBackground=\{false\}/);
-    expect(rightToolbar).toMatch(/icon="plus"\s+separateBackground=\{false\}/);
-    expect(rightToolbar).toMatch(/<\/Stack\.Toolbar\.Menu>\s*<Stack\.Toolbar\.Menu/);
-    expect(rightToolbar.match(/hidden=\{!isHomeRoute\}/g)).toHaveLength(2);
-    expect(rightToolbar).toMatch(/icon="square\.grid\.2x2"\s+isOn=\{viewMode === 'large'\}/);
-    expect(rightToolbar).toMatch(/icon="square\.grid\.3x3"\s+isOn=\{viewMode === 'small'\}/);
-    expect(rightToolbar).toMatch(/icon="list\.bullet"\s+isOn=\{viewMode === 'list'\}/);
-    expect(rightToolbar).toMatch(
-      /icon="list\.bullet\.rectangle"\s+isOn=\{viewMode === 'compact-list'\}/,
+    const bottomToolbar = homeSource.slice(
+      homeSource.indexOf('<Stack.Toolbar placement="bottom">'),
+      homeSource.indexOf('</Stack.Toolbar>', homeSource.indexOf('<Stack.Toolbar placement="bottom">')),
     );
+
+    expect(rightToolbar).toMatch(/\{createHomeFolderToolbarMenu\([\s\S]*?hidden: !shouldShowHomeToolbarItems/);
+    expect(rightToolbar).not.toMatch(/icon="plus"/);
+    expect((tabsLayoutSource.match(/<Stack\.Toolbar placement="right">/g) ?? []).length).toBe(1);
+    expect(tabsLayoutSource).toMatch(/shouldKeepHomeToolbarItemsMounted\(pathname\)/);
     const layoutOptionsOrder = [
-      rightToolbar.indexOf('Maiores'),
-      rightToolbar.indexOf('Menores'),
-      rightToolbar.indexOf('Lista'),
-      rightToolbar.indexOf('Lista compacta'),
+      homeToolbarMenuSource.indexOf('Maiores'),
+      homeToolbarMenuSource.indexOf('Menores'),
+      homeToolbarMenuSource.indexOf('Lista'),
+      homeToolbarMenuSource.indexOf('Lista compacta'),
+      homeToolbarMenuSource.indexOf('Linha única'),
     ];
     expect(layoutOptionsOrder.every((position) => position >= 0)).toBe(true);
     expect(layoutOptionsOrder).toEqual([...layoutOptionsOrder].sort((left, right) => left - right));
-    expect(rightToolbar).toMatch(/Adicionar imagens/);
-    expect(rightToolbar).toMatch(/Adicionar vídeos/);
-    expect(rightToolbar).toMatch(/Adicionar link/);
-    expect(rightToolbar).toMatch(/Adicionar texto/);
-    expect(rightToolbar).toMatch(/Adicionar arquivos/);
+    expect(bottomToolbar).toMatch(/<Stack\.Toolbar placement="bottom">[\s\S]*?<Stack\.Toolbar\.Spacer\s*\/>[\s\S]*?<Stack\.Toolbar\.Menu/);
+    expect(bottomToolbar).toMatch(/accessibilityLabel="Adicionar"[\s\S]*?icon="plus"[\s\S]*?separateBackground/);
+    expect(bottomToolbar).toMatch(/Adicionar imagens/);
+    expect(bottomToolbar).toMatch(/Adicionar vídeos/);
+    expect(bottomToolbar).toMatch(/Adicionar link/);
+    expect(bottomToolbar).toMatch(/Adicionar texto/);
+    expect(bottomToolbar).toMatch(/Adicionar arquivos/);
   });
 
   test('remounts only the FlashList per layout, restores its approximate offset, and retains stable item keys', () => {
     expect(viewModeSource).toMatch(/'list'[\s\S]*numColumns: 1/);
     expect(viewModeSource).toMatch(/'compact-list'[\s\S]*numColumns: 1/);
-    expect(viewModeSource).toMatch(/'small'[\s\S]*numColumns: 3/);
+    expect(viewModeSource).toMatch(/'single-line'[\s\S]*numColumns: 1/);
+    expect(viewModeSource).toMatch(/'small'[\s\S]*numColumns: 2/);
     expect(viewModeSource).toMatch(/'large'[\s\S]*numColumns: 2/);
     expect(gallerySource).toMatch(/key=\{viewLayout\.key\}/);
     expect(gallerySource).toMatch(/pendingScrollRestoreRef\.current = scrollOffsetRef\.current/);
@@ -359,20 +386,20 @@ describe('mixed-media masonry regression contract', () => {
   });
 
   test('keeps the list rows connected to Apple Zoom, links, text reading, and native deletion menus', () => {
-    expect(gallerySource).toMatch(
-      /isListView\s*\?\s*StyleSheet\.flatten\(\[[\s\S]*?flexDirection: 'row'/,
-    );
+    expect(gallerySource).toMatch(/const mediaTrigger = isListView \? \([\s\S]*?flexDirection: 'row'/);
     expect(gallerySource).toMatch(/isVideo \? 'Vídeo' : getPhotoDisplayTitle\(item\)/);
-    expect(gallerySource).toMatch(/numberOfLines=\{isCompactMasonry \? 4 : 6\}/);
     expect(gallerySource).toMatch(/<Link\.Menu>[\s\S]*?Apagar link[\s\S]*?Apagar texto/);
     expect(gallerySource).toMatch(/accessibilityLabel=\{`Abrir link \$\{item\.title\}`\}/);
     expect(gallerySource).toMatch(/accessibilityLabel="Ler texto salvo"/);
+    expect(gallerySource).toMatch(/<SavedTextThumbnail[\s\S]*?text=\{item\.text\}/);
+    expect(gallerySource).toMatch(/<Link\.Preview style=\{textPreviewSize\}>[\s\S]*?SavedTextPreviewContent/);
+    expect(gallerySource).toMatch(/<Link\.MenuAction title="Apagar texto" icon="trash" destructive/);
   });
 
   test('renders plain List rows with fixed height and rounded, clipped thumbnails', () => {
     expect(viewModeSource).toMatch(/rowHeight: 96, thumbnailSize: 72/);
     expect(viewModeSource).toMatch(/rowHeight: Math\.max\(76,[\s\S]*thumbnailSize: 52/);
-    expect(gallerySource).toMatch(/const isListView = viewMode === 'list' \|\| viewMode === 'compact-list'/);
+    expect(gallerySource).toMatch(/const isListView = viewMode === 'list' \|\| viewMode === 'compact-list' \|\| isSingleLineView/);
     expect(gallerySource).toMatch(
       /function getListRowLayoutStyle\(theme: AppTheme, rowHeight: number, isCompact: boolean\): ViewStyle/,
     );
@@ -383,7 +410,7 @@ describe('mixed-media masonry regression contract', () => {
     expect(listRowStyle).toBeDefined();
     expect(listRowStyle).not.toMatch(/backgroundColor|border(Color|Radius|Width)|shadow|overflow|GlassView/);
     expect(gallerySource).not.toMatch(/ListCardGlassLayer|getListCardContainerStyle/);
-    expect(gallerySource.match(/getListRowLayoutStyle\(theme, listRowHeight, isCompactListView\)/g)).toHaveLength(3);
+    expect(gallerySource.match(/getListRowLayoutStyle\(theme, listRowHeight, isCompactListView\)/g)).toHaveLength(5);
 
     const mediaRenderer = gallerySource.slice(
       gallerySource.indexOf('const renderMediaItem'),
@@ -395,23 +422,24 @@ describe('mixed-media masonry regression contract', () => {
     );
     const listTextBranch =
       savedContentRenderer.match(
-        /\) : isListView \? \(\s*(<Pressable[\s\S]*?accessibilityLabel="Ler texto salvo"[\s\S]*?<\/Pressable>)\s*\) : \(/,
+        /\) : isListView \? \(\s*(<Pressable[\s\S]*?accessibilityLabel="Ler texto salvo"[\s\S]*?<\/Pressable>)\s*\) : gridCardMode/,
       )?.[1] ?? '';
 
-    expect(mediaRenderer).toMatch(/isListView\s*\?\s*StyleSheet\.flatten\(\[[\s\S]*?getListRowLayoutStyle\(theme, listRowHeight, isCompactListView\)/);
+    expect(mediaRenderer).toMatch(/const mediaTrigger = isListView \? \([\s\S]*?style=\{isSingleLineView\s*\?\s*getSingleLineRowLayoutStyle\([\s\S]*?:\s*StyleSheet\.flatten\(\[/);
     expect(mediaRenderer).toMatch(/borderRadius: listThumbnailRadius,[\s\S]*?height: listThumbnailSize/);
     expect(mediaRenderer).toMatch(/height: listThumbnailSize,[\s\S]*?overflow: 'hidden'/);
     expect(mediaRenderer).toMatch(/name="play"/);
     expect(savedContentRenderer).toMatch(/getListRowLayoutStyle\(theme, listRowHeight, isCompactListView\)/);
     expect(savedContentRenderer).toMatch(/borderRadius: LIST_THUMBNAIL_IMAGE_RADIUS,[\s\S]*?height: listThumbnailSize,[\s\S]*?overflow: 'hidden'/);
-    expect(savedContentRenderer.match(/numberOfLines=\{2\}/g)).toHaveLength(1);
     expect(savedContentRenderer).toMatch(/item\.previewImageUri/);
     expect(listTextBranch).not.toBe('');
     expect(listTextBranch).toMatch(/getListRowLayoutStyle\(theme, listRowHeight, isCompactListView\)/);
     expect(listTextBranch).not.toMatch(/GlassView|backgroundColor|border(Color|Radius|Width)|shadow/);
-    expect(listTextBranch).toMatch(/numberOfLines=\{2\}/);
+    expect(listTextBranch).toMatch(/numberOfLines=\{1\}/);
     expect(listTextBranch).not.toMatch(/<Image/);
-    expect(listTextBranch).toMatch(/item\.text/);
+    expect(listTextBranch).toMatch(/SavedTextThumbnail height=\{listThumbnailSize\} text=\{item\.text\} width=\{listThumbnailSize\}/);
+    expect(listTextBranch).toMatch(/textPresentation\?\.title/);
+    expect(listTextBranch).toMatch(/textPresentation\?\.secondaryText \?\? 'Nota salva'/);
     expect(gallerySource).toMatch(/contentFit="cover"/);
   });
 
@@ -427,7 +455,7 @@ describe('mixed-media masonry regression contract', () => {
 
     expect(gallerySource).toMatch(/const LIST_THUMBNAIL_IMAGE_RADIUS = 14/);
     expect(mediaRenderer).toMatch(
-      /const listThumbnailRadius = isListView\s*\?\s*LIST_THUMBNAIL_IMAGE_RADIUS\s*:\s*theme\.radius\.md/,
+      /const listThumbnailRadius = isSingleLineView\s*\?\s*theme\.radius\.sm\s*:\s*isListView\s*\?\s*LIST_THUMBNAIL_IMAGE_RADIUS\s*:\s*theme\.radius\.md/,
     );
     expect(
       mediaRenderer.match(/borderRadius: listThumbnailRadius,[\s\S]*?overflow: 'hidden'/g),
@@ -450,7 +478,7 @@ describe('mixed-media masonry regression contract', () => {
     );
 
     expect(mediaRenderer).toMatch(
-      /<Pressable[\s\S]*?style=\{\s*isListView\s*\?\s*StyleSheet\.flatten\(\[/,
+      /const mediaTrigger = isListView \? \([\s\S]*?<Pressable[\s\S]*?style=\{isSingleLineView\s*\?\s*getSingleLineRowLayoutStyle\([\s\S]*?:\s*StyleSheet\.flatten\(\[/,
     );
     expect(savedContentRenderer).toMatch(
       /<LinkCardPressable[\s\S]*?style=\{StyleSheet\.flatten\(\[/,

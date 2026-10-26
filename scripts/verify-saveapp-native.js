@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const pkg = require(path.join(root, 'package.json'));
@@ -11,11 +12,13 @@ const prohibitedDependencies = [
   'expo-auth-session',
   'expo-location',
   'expo-maps',
-  'expo-widgets',
 ];
 
 const expectedVersions = {
   expo: '~58.0.19',
+  'expo-asset': '~58.0.18',
+  'expo-crypto': '~58.0.7',
+  'expo-widgets': '~58.0.23',
   'react-native-screens': '4.30.0',
   '@expo/ui': '~58.0.23',
 };
@@ -54,6 +57,102 @@ for (const [relativePath, marker] of checks) {
   }
 }
 
+const autolinkingCli = path.join(
+  root,
+  'node_modules',
+  'expo-modules-autolinking',
+  'bin',
+  'expo-modules-autolinking.js',
+);
+if (!fs.existsSync(autolinkingCli)) {
+  fail('Expo SDK 58 autolinking CLI is missing; install the locked project dependencies first');
+} else {
+  const autolinkingResult = spawnSync(
+    process.execPath,
+    [autolinkingCli, 'resolve', '--platform', 'ios', '--json'],
+    { cwd: root, encoding: 'utf8', windowsHide: true },
+  );
+  if (autolinkingResult.error || autolinkingResult.status !== 0) {
+    fail(
+      'Expo SDK 58 iOS autolinking failed: ' +
+        (autolinkingResult.error?.message || autolinkingResult.stderr?.trim() || 'unknown CLI error'),
+    );
+  } else {
+    try {
+      const resolution = JSON.parse(autolinkingResult.stdout);
+      const thumbnailModule = resolution.modules?.find(
+        (module) => module.packageName === 'saveapp-document-thumbnailing',
+      );
+      const thumbnailPod = thumbnailModule?.pods?.find(
+        (pod) => pod.podName === 'SaveAppDocumentThumbnailing',
+      );
+      const expectedPodspecDirectory = path.resolve(root, 'modules/document-thumbnailing/ios');
+      if (
+        !thumbnailPod ||
+        path.resolve(thumbnailPod.podspecDir) !== expectedPodspecDirectory ||
+        !thumbnailModule.swiftModuleNames?.includes('SaveAppDocumentThumbnailing') ||
+        !thumbnailModule.modules?.some(
+          (module) => module.class === 'SaveAppDocumentThumbnailingModule',
+        )
+      ) {
+        fail('Expo SDK 58 did not resolve the local SaveApp Quick Look pod and Swift module');
+      }
+
+      const clipboardDetectionModule = resolution.modules?.find(
+        (module) => module.packageName === 'saveapp-clipboard-url-detection',
+      );
+      const clipboardDetectionPod = clipboardDetectionModule?.pods?.find(
+        (pod) => pod.podName === 'SaveAppClipboardURLDetection',
+      );
+      const expectedClipboardPodspecDirectory = path.resolve(root, 'modules/clipboard-url-detection/ios');
+      if (
+        !clipboardDetectionPod ||
+        path.resolve(clipboardDetectionPod.podspecDir) !== expectedClipboardPodspecDirectory ||
+        !clipboardDetectionModule.swiftModuleNames?.includes('SaveAppClipboardURLDetection') ||
+        !clipboardDetectionModule.modules?.some(
+          (module) => module.class === 'SaveAppClipboardURLDetectionModule',
+        )
+      ) {
+        fail('Expo SDK 58 did not resolve the local privacy-preserving clipboard URL detector');
+      }
+
+      const widgetsModule = resolution.modules?.find(
+        (module) => module.packageName === 'expo-widgets',
+      );
+      const widgetsPod = widgetsModule?.pods?.find((pod) => pod.podName === 'ExpoWidgets');
+      if (
+        !widgetsPod ||
+        !widgetsModule.swiftModuleNames?.includes('ExpoWidgets') ||
+        widgetsModule.packageVersion !== '~58.0.23' && widgetsModule.packageVersion !== '58.0.23'
+      ) {
+        fail('Expo SDK 58 did not resolve the pinned ExpoWidgets native module');
+      }
+    } catch (error) {
+      fail('Expo SDK 58 iOS autolinking returned invalid JSON: ' + error.message);
+    }
+  }
+}
+
+const clipboardDetectorPath = path.join(
+  root,
+  'modules',
+  'clipboard-url-detection',
+  'ios',
+  'SaveAppClipboardURLDetectionModule.swift',
+);
+if (fs.existsSync(clipboardDetectorPath)) {
+  const clipboardDetectorSource = fs.readFileSync(clipboardDetectorPath, 'utf8');
+  if (
+    !clipboardDetectorSource.includes('detectedPatterns(for: [probableWebURL])') ||
+    !clipboardDetectorSource.includes('pasteboard.changeCount') ||
+    /(?:UIPasteboard\.general\.)?(?:string|url|urls|items|itemProviders|detectedValues)\b/.test(clipboardDetectorSource)
+  ) {
+    fail('clipboard detector must use pattern/change-count metadata without reading pasteboard values');
+  }
+} else {
+  fail('missing local clipboard URL detector source');
+}
+
 const appConfigPath = path.join(root, 'app.config.js');
 const previousProjectId = process.env.SAVEAPP_EAS_PROJECT_ID;
 let resolvedAppConfig;
@@ -83,6 +182,20 @@ if (resolvedAppConfig) {
   if (resolvedAppConfig.extra?.saveAppDemo !== true) {
     fail('app.config.js must identify the UI demonstration app');
   }
+
+  const widgetsPlugin = resolvedAppConfig.plugins?.find(
+    (plugin) => Array.isArray(plugin) && plugin[0] === 'expo-widgets',
+  );
+  const widgetsOptions = widgetsPlugin?.[1];
+  if (
+    !widgetsOptions ||
+    widgetsOptions.groupIdentifier !== 'group.com.luanrigatti.saveapp' ||
+    widgetsOptions.enablePushNotifications !== false ||
+    widgetsOptions.frequentUpdates !== false ||
+    widgetsOptions.widgets?.length
+  ) {
+    fail('expo-widgets must use the SaveApp App Group without APNs, frequent updates, or unrelated widgets');
+  }
 }
 
 const appConfigSource = fs.readFileSync(appConfigPath, 'utf8');
@@ -95,4 +208,7 @@ if (/firebase|google-signin/i.test(appConfigSource)) {
   fail('app.config.js contains a removed service');
 }
 
-console.log('SaveApp identity and native contracts are present.');
+if (!process.exitCode) {
+  console.log('Expo SDK 58 autolinks SaveApp native modules, including ExpoWidgets.');
+  console.log('SaveApp identity and native contracts are present.');
+}

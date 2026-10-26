@@ -40,6 +40,15 @@ module.exports = {
     },
     plugins: [
       'expo-router',
+      'expo-asset',
+      [
+        'expo-widgets',
+        {
+          groupIdentifier: 'group.com.luanrigatti.saveapp',
+          enablePushNotifications: false,
+          frequentUpdates: false,
+        },
+      ],
       [
         'expo-image-picker',
         {
@@ -55,6 +64,12 @@ module.exports = {
           image: './assets/splash.png',
           imageWidth: 160,
           resizeMode: 'contain',
+        },
+      ],
+      [
+        'expo-local-authentication',
+        {
+          faceIDPermission: 'O SaveApp utiliza o Face ID para proteger o acesso às suas pastas privadas.',
         },
       ],
       './plugins/withStarterToolbarSync',

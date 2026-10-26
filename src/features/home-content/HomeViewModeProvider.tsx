@@ -18,6 +18,7 @@ import {
 } from './homeViewMode';
 
 type HomeViewModeContextValue = {
+  isReady: boolean;
   viewMode: HomeViewMode;
   setViewMode: (mode: HomeViewMode) => void;
 };
@@ -26,6 +27,7 @@ const HomeViewModeContext = createContext<HomeViewModeContextValue | null>(null)
 
 export function HomeViewModeProvider({ children }: PropsWithChildren) {
   const [viewMode, setViewModeState] = useState<HomeViewMode>(DEFAULT_HOME_VIEW_MODE);
+  const [isReady, setIsReady] = useState(false);
   const userChangedMode = useRef(false);
   const persistenceQueue = useRef(Promise.resolve());
 
@@ -33,9 +35,9 @@ export function HomeViewModeProvider({ children }: PropsWithChildren) {
     let isMounted = true;
 
     void restoreHomeViewMode(AsyncStorage).then((storedMode) => {
-      if (isMounted && !userChangedMode.current) {
-        setViewModeState(storedMode);
-      }
+      if (!isMounted) return;
+      if (!userChangedMode.current) setViewModeState(storedMode);
+      setIsReady(true);
     });
 
     return () => {
@@ -51,7 +53,7 @@ export function HomeViewModeProvider({ children }: PropsWithChildren) {
     );
   }, []);
 
-  const value = useMemo(() => ({ viewMode, setViewMode }), [setViewMode, viewMode]);
+  const value = useMemo(() => ({ isReady, viewMode, setViewMode }), [isReady, setViewMode, viewMode]);
 
   return <HomeViewModeContext.Provider value={value}>{children}</HomeViewModeContext.Provider>;
 }

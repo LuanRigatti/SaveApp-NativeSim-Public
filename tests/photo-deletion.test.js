@@ -187,4 +187,25 @@ describe('photo deletion pipeline', () => {
     expect(onError).toHaveBeenCalledWith(persistenceError);
     expect(onDeleted).not.toHaveBeenCalled();
   });
+
+  test('rechecks authorization after confirmation before deleting', async () => {
+    const events = [];
+    const deletePhoto = jest.fn(async () => true);
+    const authorizeBeforeDelete = jest.fn(async () => {
+      events.push('authorization');
+      return false;
+    });
+
+    await expect(requestConfirmedPhotoDeletion(photo.id, {
+      confirm: async () => {
+        events.push('confirmation');
+        return true;
+      },
+      authorizeBeforeDelete,
+      deletePhoto,
+    })).resolves.toBe('cancelled');
+
+    expect(events).toEqual(['confirmation', 'authorization']);
+    expect(deletePhoto).not.toHaveBeenCalled();
+  });
 });

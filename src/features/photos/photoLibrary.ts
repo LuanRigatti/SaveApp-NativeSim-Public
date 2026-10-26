@@ -4,6 +4,15 @@ import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 
 import { ensureMixedMediaSchema } from './mediaSchemaMigration';
 import { ensureSavedContentSchema } from '@/features/home-content/savedContentSchemaMigration';
+import { ensureSavedDocumentsSchema } from '@/features/documents/documentSchemaMigration';
+import { ensureHomeFolderSchema } from '@/features/home-folders/folderSchemaMigration';
+import { ensureChecklistSchema } from '@/features/home-content/checklistSchemaMigration';
+import { ensureSavedTagSchema } from '@/features/home-tags/tagSchemaMigration';
+import { ensureRecentlyDeletedSchema } from '@/features/home-trash/trashSchemaMigration';
+import {
+  readHomeFolderAssociation,
+  restoreHomeFolderAssociation,
+} from '@/features/home-folders/folderAssociationDatabase';
 import { mediaRowToSavedMedia, sortSavedMediaChronologically, type MediaRow } from './mediaCatalog';
 import {
   importPhotoAssets,
@@ -45,8 +54,14 @@ function getDatabase(): Promise<SQLiteDatabase> {
     databasePromise = openDatabaseAsync(DATABASE_NAME)
       .then(async (database) => {
         await database.execAsync('PRAGMA journal_mode = WAL;');
+        await database.execAsync('PRAGMA foreign_keys = ON;');
         await ensureMixedMediaSchema(database);
         await ensureSavedContentSchema(database);
+        await ensureSavedDocumentsSchema(database);
+        await ensureHomeFolderSchema(database);
+        await ensureChecklistSchema(database);
+        await ensureSavedTagSchema(database);
+        await ensureRecentlyDeletedSchema(database);
         return database;
       })
       .catch((error: unknown) => {
@@ -273,7 +288,7 @@ const videoImportAdapter: VideoImportAdapter = {
   removeFile: removeMediaFile,
 };
 
-async function getMediaFromDatabase(id: number): Promise<SavedMedia | null> {
+async function getMediaFromDatabase(id: number, includeRecentlyDeleted = false): Promise<SavedMedia | null> {
   if (!Number.isSafeInteger(id) || id <= 0) {
     return null;
   }
@@ -282,7 +297,7 @@ async function getMediaFromDatabase(id: number): Promise<SavedMedia | null> {
   const row = await database.getFirstAsync<MediaRow>(
     `SELECT id, relative_path, width, height, created_at, mime_type,
             media_type, duration_ms, thumbnail_relative_path, custom_title, is_screenshot
-     FROM photos WHERE id = ?;`,
+     FROM photos WHERE id = ?${includeRecentlyDeleted ? '' : ' AND deleted_at IS NULL'};`,
     id,
   );
   if (!row) {
@@ -301,7 +316,7 @@ export async function listSavedMedia(): Promise<SavedMedia[]> {
   const rows = await database.getAllAsync<MediaRow>(
     `SELECT id, relative_path, width, height, created_at, mime_type,
             media_type, duration_ms, thumbnail_relative_path, custom_title, is_screenshot
-     FROM photos ORDER BY created_at DESC, id DESC;`,
+     FROM photos WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC;`,
   );
   const media: SavedMedia[] = [];
 
@@ -353,7 +368,7 @@ export async function updateSavedPhotoTitle(
 
   const database = await getDatabase();
   const result = await database.runAsync(
-    'UPDATE photos SET custom_title = ? WHERE id = ? AND media_type = ?;',
+    'UPDATE photos SET custom_title = ? WHERE id = ? AND media_type = ? AND deleted_at IS NULL;',
     customTitle,
     id,
     'photo',
@@ -386,10 +401,12 @@ export async function importSelectedVideos(
 }
 
 export async function deleteSavedPhoto(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const folderId = await readHomeFolderAssociation(database, 'photo', id);
   return deletePhotoWithPersistence(id, {
     async getPhoto(photoId) {
-      const photo = await getSavedPhoto(photoId);
-      if (!photo) {
+      const photo = await getMediaFromDatabase(photoId, true);
+      if (!photo || photo.mediaType !== 'photo') {
         return null;
       }
 
@@ -442,32 +459,36 @@ export async function deleteSavedPhoto(id: number): Promise<boolean> {
       return result.changes === 1;
     },
     async restoreMetadata(photo) {
-      const database = await getDatabase();
-      await database.runAsync(
-        `INSERT INTO photos
-           (id, relative_path, width, height, created_at, mime_type,
-            media_type, duration_ms, thumbnail_relative_path, custom_title, is_screenshot)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        photo.id,
-        photo.relativePath,
-        photo.width,
-        photo.height,
-        photo.createdAt,
-        photo.mimeType,
-        photo.mediaType,
-        photo.durationMs,
-        photo.thumbnailRelativePath,
-        photo.customTitle,
-        photo.isScreenshot ? 1 : 0,
-      );
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO photos
+             (id, relative_path, width, height, created_at, mime_type,
+              media_type, duration_ms, thumbnail_relative_path, custom_title, is_screenshot)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          photo.id,
+          photo.relativePath,
+          photo.width,
+          photo.height,
+          photo.createdAt,
+          photo.mimeType,
+          photo.mediaType,
+          photo.durationMs,
+          photo.thumbnailRelativePath,
+          photo.customTitle,
+          photo.isScreenshot ? 1 : 0,
+        );
+        await restoreHomeFolderAssociation(transaction, 'photo', photo.id, folderId);
+      });
     },
   });
 }
 
 export async function deleteSavedVideo(id: number): Promise<boolean> {
+  const database = await getDatabase();
+  const folderId = await readHomeFolderAssociation(database, 'video', id);
   return deleteVideoWithPersistence(id, {
     async getVideo(videoId): Promise<VideoMetadata | null> {
-      const media = await getMediaFromDatabase(videoId);
+      const media = await getMediaFromDatabase(videoId, true);
       return media?.mediaType === 'video' ? media : null;
     },
     getStorageDirectory(video) {
@@ -506,28 +527,30 @@ export async function deleteSavedVideo(id: number): Promise<boolean> {
       return result.changes === 1;
     },
     async restoreMetadata(video) {
-      const database = await getDatabase();
-      await database.runAsync(
-        `INSERT INTO photos
-           (id, relative_path, width, height, created_at, mime_type,
-            media_type, duration_ms, thumbnail_relative_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        video.id,
-        video.relativePath,
-        video.width,
-        video.height,
-        video.createdAt,
-        video.mimeType,
-        video.mediaType,
-        video.durationMs,
-        video.thumbnailRelativePath,
-      );
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO photos
+             (id, relative_path, width, height, created_at, mime_type,
+              media_type, duration_ms, thumbnail_relative_path)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          video.id,
+          video.relativePath,
+          video.width,
+          video.height,
+          video.createdAt,
+          video.mimeType,
+          video.mediaType,
+          video.durationMs,
+          video.thumbnailRelativePath,
+        );
+        await restoreHomeFolderAssociation(transaction, 'video', video.id, folderId);
+      });
     },
   });
 }
 
 export async function deleteSavedMedia(id: number): Promise<boolean> {
-  const saved = await getMediaFromDatabase(id);
+  const saved = await getMediaFromDatabase(id, true);
   if (!saved) {
     return false;
   }

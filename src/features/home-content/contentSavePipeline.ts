@@ -1,4 +1,5 @@
 import { fallbackLinkTitle, normalizeWebLink } from './linkValidation';
+import { parseYouTubeVideoLink, readableYouTubeFallbackTitle } from './youtubeVideoLink';
 import type { LinkPreviewMetadata } from './linkPreview';
 import type { SavedLink, SavedText } from './homeContentTypes';
 
@@ -50,8 +51,11 @@ function makeAbortError(): Error {
 
 function fallbackPreview(url: string): LinkPreviewMetadata {
   const link = normalizeWebLink(url);
+  const title = fallbackLinkTitle(link.url);
   return {
-    title: fallbackLinkTitle(link.url),
+    title: parseYouTubeVideoLink(link.url)
+      ? readableYouTubeFallbackTitle(title, link.url)
+      : title,
     description: null,
     domain: link.domain,
     imageUrl: null,

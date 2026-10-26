@@ -10,7 +10,7 @@ export default function NativeSheetNative(props: NativeSheetProps) {
     return <NativeSheetExpo {...props} />;
   }
 
-  // Select SwiftUI synchronously in an iOS Development Build.
+  // Select SwiftUI synchronously on iOS whenever Expo UI is available.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const NativeSheetSwiftUI = require('./NativeSheetSwiftUI.ios').default;
 
