@@ -93,7 +93,9 @@ function Test-SaveAppMirrorBlockedName {
   $path = $RelativePath.Replace('\','/')
   $approvedModuleIosFiles = @(
     'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec',
-    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift'
+    'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift',
+    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec',
+    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift'
   )
   if ($approvedModuleIosFiles -contains $path) { return $false }
 

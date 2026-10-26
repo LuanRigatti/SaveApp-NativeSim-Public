@@ -1,0 +1,11 @@
+{
+  "name": "saveapp-clipboard-url-detection",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Privacy-preserving iOS URL pattern detection for SaveApp clipboard offers.",
+  "license": "UNLICENSED",
+  "author": "SaveApp",
+  "homepage": "https://github.com/LuanRigatti/SaveApp",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

@@ -1,0 +1,7 @@
+{
+  "platforms": ["apple"],
+  "apple": {
+    "modules": ["SaveAppClipboardURLDetectionModule"],
+    "podspecPath": "ios/SaveAppClipboardURLDetection.podspec"
+  }
+}

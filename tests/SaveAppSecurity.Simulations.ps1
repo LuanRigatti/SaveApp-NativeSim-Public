@@ -166,9 +166,18 @@ try {
     'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift',
     'modules/document-thumbnailing/src/index.ts'
   )
+  $clipboardDetectionModuleFiles = @(
+    'modules/clipboard-url-detection/package.json',
+    'modules/clipboard-url-detection/expo-module.config.json',
+    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec',
+    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
+    'modules/clipboard-url-detection/src/index.ts'
+  )
+  $allAllowedLocalModuleFiles = @($documentThumbnailModuleFiles + $clipboardDetectionModuleFiles)
   Assert-True ($productionAllowedDirectories -notcontains 'modules' -and
-    $productionAllowedDirectories -notcontains 'modules/document-thumbnailing') 'the mirror does not recursively allow modules or its parent directory'
-  foreach ($moduleRelativePath in $documentThumbnailModuleFiles) {
+    $productionAllowedDirectories -notcontains 'modules/document-thumbnailing' -and
+    $productionAllowedDirectories -notcontains 'modules/clipboard-url-detection') 'the mirror does not recursively allow modules or either local module directory'
+  foreach ($moduleRelativePath in $allAllowedLocalModuleFiles) {
     Assert-True ($productionAllowedFiles -contains $moduleRelativePath) "$moduleRelativePath is included as an exact mirror allowlist entry"
     Assert-True (Test-SaveAppMirrorAllowedRelativePath -RelativePath $moduleRelativePath `
       -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) "$moduleRelativePath passes the production snapshot path policy"
@@ -176,20 +185,28 @@ try {
     $moduleContent = [IO.File]::ReadAllText($moduleFullPath)
     Assert-True (Assert-SaveAppSafeContent -RelativePath $moduleRelativePath -Content $moduleContent) "$moduleRelativePath passes the existing content scanner"
   }
-  $moduleSnapshot = Get-SaveAppMirrorStagedPathResult -GitOutput $documentThumbnailModuleFiles `
+  $moduleSnapshot = Get-SaveAppMirrorStagedPathResult -GitOutput $allAllowedLocalModuleFiles `
     -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories
-  Assert-True ($moduleSnapshot.HasChanges -and $moduleSnapshot.Paths.Length -eq $documentThumbnailModuleFiles.Length -and
-    ($moduleSnapshot.Paths -join '|') -eq ($documentThumbnailModuleFiles -join '|')) 'the simulated mirror snapshot contains all five Quick Look module files'
+  Assert-True ($moduleSnapshot.HasChanges -and $moduleSnapshot.Paths.Length -eq $allAllowedLocalModuleFiles.Length -and
+    ($moduleSnapshot.Paths -join '|') -eq ($allAllowedLocalModuleFiles -join '|')) 'the simulated mirror snapshot contains all ten exact files from both local modules'
   Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec') -eq $false -and
-    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift') -eq $false) 'only the two exact iOS module sources bypass the generated ios-directory name block'
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift') -eq $false -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec') -eq $false -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift') -eq $false) 'only the four exact local module iOS sources bypass the generated ios-directory name block'
   Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/Unapproved.swift') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/private-key.pem') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/.env.local') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/Unapproved.swift') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/private-key.pem') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/.env.local') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'ios/Pods/SaveApp.xcodeproj')) 'unapproved iOS files, secrets, and generated native directories remain blocked'
   foreach ($unapprovedModulePath in @(
       'modules/document-thumbnailing/ios/Unapproved.swift',
       'modules/document-thumbnailing/private/credentials.pem',
       'modules/document-thumbnailing/.env.local',
+      'modules/clipboard-url-detection/ios/Unapproved.swift',
+      'modules/clipboard-url-detection/private/credentials.pem',
+      'modules/clipboard-url-detection/.env.local',
       'modules/other/Module.swift'
     )) {
     Assert-True (-not (Test-SaveAppMirrorAllowedRelativePath -RelativePath $unapprovedModulePath `
@@ -199,6 +216,55 @@ try {
     Assert-SaveAppSafeContent -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift' `
       -Content ('token=' + ('x' * 32))
   } 'the existing credential scanner still blocks secrets inside an allowlisted Swift source path'
+  Assert-Refused {
+    Assert-SaveAppSafeContent -RelativePath 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift' `
+      -Content ('token=' + ('x' * 32))
+  } 'the existing credential scanner still blocks secrets inside the clipboard Swift source path'
+
+  $mirrorSimulation = Join-Path $tempRoot 'local-module-mirror'
+  New-Item -ItemType Directory -Path $mirrorSimulation -Force | Out-Null
+  $moduleImportChecks = @(
+    [pscustomobject]@{
+      Importer = 'src/app/links/compose.tsx'
+      Specifier = '../../../modules/clipboard-url-detection/src'
+      ModuleIndex = 'modules/clipboard-url-detection/src/index.ts'
+    },
+    [pscustomobject]@{
+      Importer = 'src/features/home-content/useClipboardLinkOffer.ts'
+      Specifier = '../../../modules/clipboard-url-detection/src'
+      ModuleIndex = 'modules/clipboard-url-detection/src/index.ts'
+    },
+    [pscustomobject]@{
+      Importer = 'src/features/documents/LocalDocumentLibraryProvider.tsx'
+      Specifier = '../../../modules/document-thumbnailing/src'
+      ModuleIndex = 'modules/document-thumbnailing/src/index.ts'
+    }
+  )
+  $mirrorSimulationPaths = @($allAllowedLocalModuleFiles + @($moduleImportChecks | ForEach-Object { $_.Importer }))
+  foreach ($relativePath in $mirrorSimulationPaths) {
+    Assert-True (Test-SaveAppMirrorAllowedRelativePath -RelativePath $relativePath `
+      -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) "$relativePath is permitted by the production mirror path policy"
+    $sourceFile = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $relativePath -ExpectedType File
+    Assert-True (Assert-SaveAppSafeContent -RelativePath $relativePath -Content ([IO.File]::ReadAllText($sourceFile))) "$relativePath passes content scanning before mirror copy"
+    $copiedFile = Copy-SaveAppMirrorFile -SourceRoot $repositoryRoot -MirrorRoot $mirrorSimulation -RelativePath $relativePath
+    $copiedHash = (Get-FileHash -LiteralPath $copiedFile -Algorithm SHA256).Hash
+    $sourceHash = (Get-FileHash -LiteralPath $sourceFile -Algorithm SHA256).Hash
+    Assert-True ($copiedHash -ceq $sourceHash) "$relativePath is copied unchanged into the local mirror simulation"
+  }
+  foreach ($importCheck in $moduleImportChecks) {
+    $mirroredImporter = Resolve-SaveAppMirrorPath -Base $mirrorSimulation -RelativePath $importCheck.Importer -ExpectedType File
+    $importerText = [IO.File]::ReadAllText($mirroredImporter)
+    $expectedImport = "from '$($importCheck.Specifier)'"
+    Assert-True ($importerText.Contains($expectedImport)) "$($importCheck.Importer) retains its local module import in the mirrored source"
+    $resolvedImportIndex = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $mirroredImporter) ($importCheck.Specifier + '\index.ts')))
+    $expectedImportIndex = Resolve-SaveAppMirrorPath -Base $mirrorSimulation -RelativePath $importCheck.ModuleIndex -ExpectedType File
+    Assert-True ($resolvedImportIndex -ceq $expectedImportIndex) "$($importCheck.Importer) resolves to $($importCheck.ModuleIndex) in the mirrored tree"
+  }
+  Assert-True ((Test-SaveAppMirrorAllowedRelativePath -RelativePath 'modules/clipboard-url-detection/.env' `
+    -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) -eq $false -and
+    (Test-SaveAppMirrorAllowedRelativePath -RelativePath 'modules/clipboard-url-detection/ios/Unapproved.swift' `
+      -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) -eq $false) 'the local module mirror excludes environment files and unapproved native sources'
+
   $noChangeGateIndex = $mirrorScript.IndexOf('if (-not $stagedPathResult.HasChanges)',[StringComparison]::Ordinal)
   $noChangeReturnIndex = if ($noChangeGateIndex -ge 0) {
     $mirrorScript.IndexOf('return',$noChangeGateIndex,[StringComparison]::Ordinal)
