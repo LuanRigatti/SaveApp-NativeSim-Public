@@ -47,7 +47,7 @@ const checks = [
   ['plugins/withStarterToolbarSync.js', 'StarterToolbarMorphExperimentVariant'],
   ['scripts/patch-expo-ui-bottom-sheet.js', 'ignoresSafeArea(.container, edges: .bottom)'],
   ['.github/workflows/swift-preflight.yml', 'CODE_SIGNING_ALLOWED=NO'],
-  ['.github/workflows/native-sim.yml', 'native-sim-template-version: 18'],
+  ['.github/workflows/native-sim.yml', 'native-sim-template-version: 19'],
 ];
 
 for (const [relativePath, marker] of checks) {
@@ -68,6 +68,15 @@ if (fs.existsSync(nativeSimWorkflowPath)) {
     'CODE_SIGNING_ALLOWED=YES',
     'CODE_SIGNING_REQUIRED=YES',
     'CODE_SIGN_IDENTITY=-',
+    '-showBuildSettings',
+    '-json',
+    'CODE_SIGN_ENTITLEMENTS',
+    'SaveApp/SaveApp.entitlements',
+    'ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements',
+    'assert_generated_app_group "$APP_ENTITLEMENTS" "SaveApp"',
+    'assert_generated_app_group "$WIDGET_ENTITLEMENTS" "ExpoWidgetsTarget"',
+    'codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"',
+    'codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP"',
     "Signature=adhoc",
     'codesign -d --entitlements :-',
     'com.apple.security.application-groups',
@@ -82,7 +91,28 @@ if (fs.existsSync(nativeSimWorkflowPath)) {
     buildStep.includes('CODE_SIGNING_ALLOWED=NO') ||
     requiredSimulatorSigningMarkers.some((marker) => !buildStep.includes(marker))
   ) {
-    fail('NativeSim must ad hoc-sign only the iOS Simulator build and verify the App Group entitlement on app and extension');
+    fail('NativeSim must verify generated entitlement build settings, explicitly ad hoc-sign the iOS Simulator extension and app, and verify their signed App Group entitlements');
+  }
+  const widgetResignIndex = buildStep.indexOf(
+    'codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"',
+  );
+  const appResignIndex = buildStep.indexOf(
+    'codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP"',
+  );
+  const widgetSignatureCheckIndex = buildStep.indexOf(
+    'verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"',
+  );
+  const appSignatureCheckIndex = buildStep.indexOf(
+    'verify_app_group_signature "$APP" "SaveApp"',
+  );
+  if (
+    widgetResignIndex < 0 ||
+    appResignIndex <= widgetResignIndex ||
+    widgetSignatureCheckIndex <= appResignIndex ||
+    appSignatureCheckIndex <= appResignIndex ||
+    buildStep.includes('codesign --deep')
+  ) {
+    fail('NativeSim must sign the extension before the app, verify both signed bundles, and preserve nested component signatures');
   }
 }
 

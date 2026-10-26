@@ -53,7 +53,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(swiftPreflightWorkflow).toContain('createLiveActivity uses the generated generic WidgetLiveActivity; widgets[] is not required.');
   });
 
-  test('NativeSim ad hoc-signs the Simulator app and verifies App Group entitlements on app and extension', () => {
+  test('NativeSim verifies generated entitlements, explicitly signs both Simulator bundles, and checks the final signatures', () => {
     const buildStep = nativeSimWorkflow.match(
       /- name: Build ad hoc signed Simulator app[\s\S]*?(?=\n      - name:)/,
     )?.[0] ?? '';
@@ -62,6 +62,30 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(buildStep).toContain('CODE_SIGNING_ALLOWED=YES');
     expect(buildStep).toContain('CODE_SIGNING_REQUIRED=YES');
     expect(buildStep).toContain('CODE_SIGN_IDENTITY=-');
+    expect(buildStep).toContain('-showBuildSettings');
+    expect(buildStep).toContain('-json');
+    expect(buildStep).toContain('CODE_SIGN_ENTITLEMENTS');
+    expect(buildStep).toContain('SaveApp/SaveApp.entitlements');
+    expect(buildStep).toContain('ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements');
+    expect(buildStep).toContain('assert_generated_app_group "$APP_ENTITLEMENTS" "SaveApp"');
+    expect(buildStep).toContain('assert_generated_app_group "$WIDGET_ENTITLEMENTS" "ExpoWidgetsTarget"');
+    const extensionSigning = buildStep.indexOf(
+      'codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"',
+    );
+    const appSigning = buildStep.indexOf(
+      'codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP"',
+    );
+    const extensionVerification = buildStep.indexOf(
+      'verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"',
+    );
+    const appVerification = buildStep.indexOf(
+      'verify_app_group_signature "$APP" "SaveApp"',
+    );
+    expect(extensionSigning).toBeGreaterThanOrEqual(0);
+    expect(appSigning).toBeGreaterThan(extensionSigning);
+    expect(extensionVerification).toBeGreaterThan(appSigning);
+    expect(appVerification).toBeGreaterThan(appSigning);
+    expect(buildStep).not.toContain('codesign --deep');
     expect(buildStep).toContain("Signature=adhoc");
     expect(buildStep).toContain('codesign -d --entitlements :-');
     expect(buildStep).toContain('com.apple.security.application-groups');

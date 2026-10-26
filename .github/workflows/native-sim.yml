@@ -1,4 +1,4 @@
-# native-sim-template-version: 18
+# native-sim-template-version: 19
 # SaveApp streaming Simulator workflow. An auth gate protects the public tunnel.
 name: native-sim
 run-name: native-sim ${{ inputs.session }} · ${{ inputs.configuration }} · ${{ inputs.minutes }}m
@@ -224,6 +224,103 @@ jobs:
           WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace' | head -1)
           test -n "$WORKSPACE"
           DERIVED_DATA="build/native-sim-derived-data"
+          EXPECTED_APP_GROUP="group.com.luanrigatti.saveapp"
+          APP_ENTITLEMENTS="$PWD/ios/SaveApp/SaveApp.entitlements"
+          WIDGET_ENTITLEMENTS="$PWD/ios/ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements"
+
+          test -f "$APP_ENTITLEMENTS" || { echo "::error::Generated SaveApp entitlements file is missing"; exit 1; }
+          test -f "$WIDGET_ENTITLEMENTS" || { echo "::error::Generated ExpoWidgetsTarget entitlements file is missing"; exit 1; }
+          plutil -lint "$APP_ENTITLEMENTS"
+          plutil -lint "$WIDGET_ENTITLEMENTS"
+
+          assert_generated_app_group() {
+            local entitlements_path="$1"
+            local bundle_label="$2"
+            local actual_app_group
+            actual_app_group=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$entitlements_path") || {
+              echo "::error::Generated entitlements for ${bundle_label} do not declare an App Group"
+              exit 1
+            }
+            test "$actual_app_group" = "$EXPECTED_APP_GROUP" || {
+              echo "::error::Generated entitlements for ${bundle_label} declare an unexpected App Group"
+              exit 1
+            }
+          }
+
+          assert_generated_app_group "$APP_ENTITLEMENTS" "SaveApp"
+          assert_generated_app_group "$WIDGET_ENTITLEMENTS" "ExpoWidgetsTarget"
+
+          BUILD_SETTINGS_JSON="$RUNNER_TEMP/saveapp-simulator-build-settings.json"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            -showBuildSettings \
+            -json \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_IDENTITY=- > "$BUILD_SETTINGS_JSON"
+          node - "$BUILD_SETTINGS_JSON" "$PWD/ios" <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const [settingsPath, iosRootArgument] = process.argv.slice(2);
+          const iosRoot = path.resolve(iosRootArgument);
+          const buildSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8').replace(/^\uFEFF/, ''));
+          const expectedTargets = new Map([
+            ['SaveApp', 'SaveApp/SaveApp.entitlements'],
+            ['ExpoWidgetsTarget', 'ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements'],
+          ]);
+
+          function fail(message) {
+            console.error(`::error::${message}`);
+            process.exit(1);
+          }
+
+          if (!Array.isArray(buildSettings)) fail('Xcode did not return JSON build settings for the Simulator targets');
+
+          for (const [targetName, expectedRelativePath] of expectedTargets) {
+            const entries = buildSettings.filter((entry) => entry.target === targetName);
+            if (entries.length === 0) fail(`Xcode build settings did not include target ${targetName}`);
+
+            const expectedPath = path.normalize(path.join(iosRoot, expectedRelativePath));
+            for (const entry of entries) {
+              const settings = entry.buildSettings ?? {};
+              let entitlementSetting = settings.CODE_SIGN_ENTITLEMENTS;
+              const sourceRoot = settings.SRCROOT;
+              if (typeof entitlementSetting !== 'string' || !entitlementSetting.trim()) {
+                fail(`${targetName} has no effective CODE_SIGN_ENTITLEMENTS build setting`);
+              }
+              if (typeof sourceRoot !== 'string' || !sourceRoot.trim()) {
+                fail(`Xcode did not report SRCROOT for ${targetName}; cannot verify its entitlements path`);
+              }
+
+              entitlementSetting = entitlementSetting.trim().replace(/^['"]|['"]$/g, '');
+              entitlementSetting = entitlementSetting
+                .replace(/\$\(SRCROOT\)|\$\{SRCROOT\}/g, sourceRoot)
+                .replace(/\$\(PROJECT_DIR\)|\$\{PROJECT_DIR\}/g, sourceRoot);
+              if (/\$\([^)]+\)|\$\{[^}]+\}/.test(entitlementSetting)) {
+                fail(`${targetName} CODE_SIGN_ENTITLEMENTS contains an unresolved Xcode variable`);
+              }
+
+              const effectivePath = path.normalize(
+                path.isAbsolute(entitlementSetting)
+                  ? entitlementSetting
+                  : path.join(sourceRoot, entitlementSetting),
+              );
+              if (effectivePath !== expectedPath) {
+                fail(`${targetName} CODE_SIGN_ENTITLEMENTS does not point to its generated App Group entitlements file`);
+              }
+              if (!fs.existsSync(effectivePath)) {
+                fail(`${targetName} effective CODE_SIGN_ENTITLEMENTS file does not exist`);
+              }
+            }
+            console.log(`Verified effective CODE_SIGN_ENTITLEMENTS for ${targetName}: ${expectedRelativePath}`);
+          }
+          NODE
+
           xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -241,7 +338,11 @@ jobs:
           APPEX="$APP/PlugIns/ExpoWidgetsTarget.appex"
           test -d "$APPEX" || { echo "::error::ExpoWidgetsTarget.appex is missing from the Simulator app"; exit 1; }
 
-          EXPECTED_APP_GROUP="group.com.luanrigatti.saveapp"
+          # Re-sign only each top-level bundle, inside out. Xcode's signatures on
+          # nested frameworks and other native components remain untouched.
+          codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"
+          codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP"
+
           verify_app_group_signature() {
             local bundle_path="$1"
             local bundle_label="$2"
@@ -255,10 +356,16 @@ jobs:
               echo "::error::${bundle_label} is not signed with the expected ad hoc Simulator identity"
               exit 1
             }
-            codesign -d --entitlements :- "$bundle_path" > "$entitlements_path" 2>/dev/null || {
+            codesign -d --entitlements :- "$bundle_path" > "$entitlements_path" 2> "$RUNNER_TEMP/${bundle_label}-codesign-entitlements.log" || {
               echo "::error::Could not extract signed entitlements from ${bundle_label}"
+              cat "$RUNNER_TEMP/${bundle_label}-codesign-entitlements.log"
               exit 1
             }
+            test -s "$entitlements_path" || {
+              echo "::error::${bundle_label} signature contains no extractable entitlements"
+              exit 1
+            }
+            plutil -lint "$entitlements_path"
             actual_app_group=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$entitlements_path") || {
               echo "::error::${bundle_label} has no signed App Groups entitlement"
               exit 1

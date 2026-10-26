@@ -426,6 +426,23 @@ try {
     $preflightWorkflow.Contains('ExpoWidgetsTarget.appex')) 'Swift Preflight verifies generated Live Activity configuration and Simulator extension packaging'
   Assert-True ($mirrorScript.Contains('origin/main is empty') -and $mirrorScript.Contains('empty root commit')) 'public mirror refuses empty main until the owner bootstraps a root commit'
   $workflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github\workflows\native-sim.yml') -Raw
+  $simulatorSigningMatch = [regex]::Match($workflow,'(?ms)^\s*- name: Build ad hoc signed Simulator app\s+(?<step>.*?)(?=^\s*- name:|\z)')
+  $simulatorSigningStep = if ($simulatorSigningMatch.Success) { $simulatorSigningMatch.Groups['step'].Value } else { '' }
+  $widgetResignIndex = $simulatorSigningStep.IndexOf('codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"',[StringComparison]::Ordinal)
+  $appResignIndex = $simulatorSigningStep.IndexOf('codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP"',[StringComparison]::Ordinal)
+  $widgetVerifyIndex = $simulatorSigningStep.IndexOf('verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"',[StringComparison]::Ordinal)
+  $appVerifyIndex = $simulatorSigningStep.IndexOf('verify_app_group_signature "$APP" "SaveApp"',[StringComparison]::Ordinal)
+  Assert-True ($workflow.Contains('native-sim-template-version: 19') -and
+    $simulatorSigningStep.Contains('-showBuildSettings') -and $simulatorSigningStep.Contains('-json') -and
+    $simulatorSigningStep.Contains('CODE_SIGN_ENTITLEMENTS') -and
+    $simulatorSigningStep.Contains('SaveApp/SaveApp.entitlements') -and
+    $simulatorSigningStep.Contains('ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements') -and
+    $widgetResignIndex -ge 0 -and $appResignIndex -gt $widgetResignIndex -and
+    $widgetVerifyIndex -gt $appResignIndex -and $appVerifyIndex -gt $appResignIndex -and
+    -not $simulatorSigningStep.Contains('codesign --deep') -and
+    $simulatorSigningStep.Contains('CODE_SIGNING_ALLOWED=YES') -and
+    $simulatorSigningStep.Contains('verify_app_group_signature "$APP" "SaveApp"') -and
+    $simulatorSigningStep.Contains('verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"')) 'NativeSim verifies effective target entitlements, re-signs the extension before the app, and retains both final App Group signature gates without deep signing'
   $maskStepStart = $workflow.IndexOf('- name: Mask stream access key',[StringComparison]::Ordinal)
   $maskStepEnd = $workflow.IndexOf('- name:', $maskStepStart + 1,[StringComparison]::Ordinal)
   $maskStep = if ($maskStepStart -ge 0 -and $maskStepEnd -gt $maskStepStart) { $workflow.Substring($maskStepStart,$maskStepEnd - $maskStepStart) } else { '' }
