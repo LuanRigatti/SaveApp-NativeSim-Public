@@ -426,15 +426,27 @@ try {
     $preflightWorkflow.Contains('ExpoWidgetsTarget.appex')) 'Swift Preflight verifies generated Live Activity configuration and Simulator extension packaging'
   Assert-True ($mirrorScript.Contains('origin/main is empty') -and $mirrorScript.Contains('empty root commit')) 'public mirror refuses empty main until the owner bootstraps a root commit'
   $workflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github\workflows\native-sim.yml') -Raw
+  $buildSettingsVerifier = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\verify-saveapp-simulator-build-settings.js') -Raw
   $simulatorSigningMatch = [regex]::Match($workflow,'(?ms)^\s*- name: Build ad hoc signed Simulator app\s+(?<step>.*?)(?=^\s*- name:|\z)')
   $simulatorSigningStep = if ($simulatorSigningMatch.Success) { $simulatorSigningMatch.Groups['step'].Value } else { '' }
   $widgetResignIndex = $simulatorSigningStep.IndexOf('codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"',[StringComparison]::Ordinal)
   $appResignIndex = $simulatorSigningStep.IndexOf('codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP"',[StringComparison]::Ordinal)
   $widgetVerifyIndex = $simulatorSigningStep.IndexOf('verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"',[StringComparison]::Ordinal)
   $appVerifyIndex = $simulatorSigningStep.IndexOf('verify_app_group_signature "$APP" "SaveApp"',[StringComparison]::Ordinal)
-  Assert-True ($workflow.Contains('native-sim-template-version: 19') -and
+  Assert-True ($workflow.Contains('native-sim-template-version: 20') -and
+    $simulatorSigningStep.Contains('APP_XCODE_PROJECT="$PWD/ios/SaveApp.xcodeproj"') -and
+    $simulatorSigningStep.Contains('-project "$APP_XCODE_PROJECT"') -and
+    $simulatorSigningStep.Contains('-target SaveApp') -and
+    $simulatorSigningStep.Contains('-target ExpoWidgetsTarget') -and
+    $simulatorSigningStep.Contains('saveapp-simulator-app-build-settings.json') -and
+    $simulatorSigningStep.Contains('saveapp-simulator-widget-build-settings.json') -and
+    $simulatorSigningStep.Contains('node scripts/verify-saveapp-simulator-build-settings.js') -and
     $simulatorSigningStep.Contains('-showBuildSettings') -and $simulatorSigningStep.Contains('-json') -and
-    $simulatorSigningStep.Contains('CODE_SIGN_ENTITLEMENTS') -and
+    $buildSettingsVerifier.Contains('settings.CODE_SIGN_ENTITLEMENTS') -and
+    $buildSettingsVerifier.Contains("settings.CONFIGURATION !== 'Release'") -and
+    $buildSettingsVerifier.Contains("targetName: 'SaveApp'") -and
+    $buildSettingsVerifier.Contains("targetName: 'ExpoWidgetsTarget'") -and
+    $buildSettingsVerifier.Contains('targetEntries.length !== 1') -and
     $simulatorSigningStep.Contains('SaveApp/SaveApp.entitlements') -and
     $simulatorSigningStep.Contains('ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements') -and
     $widgetResignIndex -ge 0 -and $appResignIndex -gt $widgetResignIndex -and

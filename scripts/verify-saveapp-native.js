@@ -47,7 +47,7 @@ const checks = [
   ['plugins/withStarterToolbarSync.js', 'StarterToolbarMorphExperimentVariant'],
   ['scripts/patch-expo-ui-bottom-sheet.js', 'ignoresSafeArea(.container, edges: .bottom)'],
   ['.github/workflows/swift-preflight.yml', 'CODE_SIGNING_ALLOWED=NO'],
-  ['.github/workflows/native-sim.yml', 'native-sim-template-version: 19'],
+  ['.github/workflows/native-sim.yml', 'native-sim-template-version: 20'],
 ];
 
 for (const [relativePath, marker] of checks) {
@@ -64,13 +64,19 @@ if (fs.existsSync(nativeSimWorkflowPath)) {
     /- name: Build ad hoc signed Simulator app[\s\S]*?(?=\n      - name:)/,
   )?.[0] ?? '';
   const requiredSimulatorSigningMarkers = [
+    'APP_XCODE_PROJECT="$PWD/ios/SaveApp.xcodeproj"',
+    '-project "$APP_XCODE_PROJECT"',
+    '-target SaveApp',
+    '-target ExpoWidgetsTarget',
     '-sdk iphonesimulator',
     'CODE_SIGNING_ALLOWED=YES',
     'CODE_SIGNING_REQUIRED=YES',
     'CODE_SIGN_IDENTITY=-',
     '-showBuildSettings',
     '-json',
-    'CODE_SIGN_ENTITLEMENTS',
+    'saveapp-simulator-app-build-settings.json',
+    'saveapp-simulator-widget-build-settings.json',
+    'node scripts/verify-saveapp-simulator-build-settings.js',
     'SaveApp/SaveApp.entitlements',
     'ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements',
     'assert_generated_app_group "$APP_ENTITLEMENTS" "SaveApp"',
@@ -91,7 +97,7 @@ if (fs.existsSync(nativeSimWorkflowPath)) {
     buildStep.includes('CODE_SIGNING_ALLOWED=NO') ||
     requiredSimulatorSigningMarkers.some((marker) => !buildStep.includes(marker))
   ) {
-    fail('NativeSim must verify generated entitlement build settings, explicitly ad hoc-sign the iOS Simulator extension and app, and verify their signed App Group entitlements');
+    fail('NativeSim must query Release build settings separately for the app and extension, verify generated entitlements, explicitly ad hoc-sign both iOS Simulator bundles, and verify their signed App Group entitlements');
   }
   const widgetResignIndex = buildStep.indexOf(
     'codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"',
@@ -113,6 +119,31 @@ if (fs.existsSync(nativeSimWorkflowPath)) {
     buildStep.includes('codesign --deep')
   ) {
     fail('NativeSim must sign the extension before the app, verify both signed bundles, and preserve nested component signatures');
+  }
+}
+
+const simulatorBuildSettingsVerifierPath = path.join(
+  root,
+  'scripts',
+  'verify-saveapp-simulator-build-settings.js',
+);
+if (!fs.existsSync(simulatorBuildSettingsVerifierPath)) {
+  fail('target-specific Simulator build settings verifier is missing');
+} else {
+  const simulatorBuildSettingsVerifier = fs.readFileSync(simulatorBuildSettingsVerifierPath, 'utf8');
+  const requiredBuildSettingsVerifierMarkers = [
+    "targetName: 'SaveApp'",
+    "targetName: 'ExpoWidgetsTarget'",
+    "settings.CONFIGURATION !== 'Release'",
+    'settings.CODE_SIGN_ENTITLEMENTS',
+    'settings.SRCROOT',
+    'settings.PROJECT_DIR',
+    'SaveApp/SaveApp.entitlements',
+    'ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements',
+    'targetEntries.length !== 1',
+  ];
+  if (requiredBuildSettingsVerifierMarkers.some((marker) => !simulatorBuildSettingsVerifier.includes(marker))) {
+    fail('target-specific Simulator verifier must require Release settings and each generated entitlement path');
   }
 }
 

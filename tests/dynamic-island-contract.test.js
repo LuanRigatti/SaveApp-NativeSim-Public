@@ -16,9 +16,13 @@ const clipboardHookSource = readSource('../src/features/home-content/useClipboar
 const swiftPreflightWorkflow = readSource('../.github/workflows/swift-preflight.yml');
 const nativeSimWorkflow = readSource('../.github/workflows/native-sim.yml');
 const nativeVerificationSource = readSource('../scripts/verify-saveapp-native.js');
+const simulatorBuildSettingsVerifierSource = readSource('../scripts/verify-saveapp-simulator-build-settings.js');
 const failureAlertSource = readSource('../src/features/dynamic-island/liveActivityFailureAlert.ts');
 const expoWidgetsModuleSource = readSource('../node_modules/expo-widgets/ios/WidgetsModule.swift');
 const expoWidgetsFactorySource = readSource('../node_modules/expo-widgets/ios/LiveActivityFactory.swift');
+const expoWidgetsTargetPluginSource = readSource('../node_modules/expo-widgets/plugin/src/ios/withIosWidgets.ts');
+const expoWidgetsProjectPluginSource = readSource('../node_modules/expo-widgets/plugin/src/ios/xcode/withTargetXcodeProject.ts');
+const expoWidgetsNativeTargetSource = readSource('../node_modules/expo-widgets/plugin/src/ios/xcode/addToPbxNativeTargetSection.ts');
 
 describe('SaveApp Dynamic Island link-saving mode', () => {
   test('uses Expo Widgets with the private app group and no APNs or unrelated widgets', () => {
@@ -53,6 +57,14 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(swiftPreflightWorkflow).toContain('createLiveActivity uses the generated generic WidgetLiveActivity; widgets[] is not required.');
   });
 
+  test('Expo Widgets registers its extension target in the generated app Xcode project', () => {
+    expect(expoWidgetsTargetPluginSource).toContain("const targetName = 'ExpoWidgetsTarget'");
+    expect(expoWidgetsProjectPluginSource).toContain('withXcodeProject(config');
+    expect(expoWidgetsProjectPluginSource).toContain('addToPbxNativeTargetSection(xcodeProject');
+    expect(expoWidgetsProjectPluginSource).toContain('addToPbxProjectSection(xcodeProject, target)');
+    expect(expoWidgetsNativeTargetSource).toContain('xcodeProject.addToPbxNativeTargetSection(target)');
+  });
+
   test('NativeSim verifies generated entitlements, explicitly signs both Simulator bundles, and checks the final signatures', () => {
     const buildStep = nativeSimWorkflow.match(
       /- name: Build ad hoc signed Simulator app[\s\S]*?(?=\n      - name:)/,
@@ -62,11 +74,23 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(buildStep).toContain('CODE_SIGNING_ALLOWED=YES');
     expect(buildStep).toContain('CODE_SIGNING_REQUIRED=YES');
     expect(buildStep).toContain('CODE_SIGN_IDENTITY=-');
+    expect(buildStep).toContain('APP_XCODE_PROJECT="$PWD/ios/SaveApp.xcodeproj"');
+    expect(buildStep).toContain('-project "$APP_XCODE_PROJECT"');
+    expect(buildStep).toContain('-target SaveApp');
+    expect(buildStep).toContain('-target ExpoWidgetsTarget');
+    expect(buildStep).toContain('saveapp-simulator-app-build-settings.json');
+    expect(buildStep).toContain('saveapp-simulator-widget-build-settings.json');
+    expect(buildStep).toContain('node scripts/verify-saveapp-simulator-build-settings.js');
+    expect(buildStep).toMatch(/xcodebuild \\\s+-project "\$APP_XCODE_PROJECT" \\\s+-target SaveApp[\s\S]*?> "\$APP_BUILD_SETTINGS_JSON"/);
+    expect(buildStep).toMatch(/xcodebuild \\\s+-project "\$APP_XCODE_PROJECT" \\\s+-target ExpoWidgetsTarget[\s\S]*?> "\$WIDGET_BUILD_SETTINGS_JSON"/);
     expect(buildStep).toContain('-showBuildSettings');
     expect(buildStep).toContain('-json');
-    expect(buildStep).toContain('CODE_SIGN_ENTITLEMENTS');
+    expect(simulatorBuildSettingsVerifierSource).toContain('settings.CODE_SIGN_ENTITLEMENTS');
+    expect(simulatorBuildSettingsVerifierSource).toContain("settings.CONFIGURATION !== 'Release'");
+    expect(simulatorBuildSettingsVerifierSource).toContain('targetEntries.length !== 1');
     expect(buildStep).toContain('SaveApp/SaveApp.entitlements');
     expect(buildStep).toContain('ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements');
+    expect(nativeVerificationSource).toContain('native-sim-template-version: 20');
     expect(buildStep).toContain('assert_generated_app_group "$APP_ENTITLEMENTS" "SaveApp"');
     expect(buildStep).toContain('assert_generated_app_group "$WIDGET_ENTITLEMENTS" "ExpoWidgetsTarget"');
     const extensionSigning = buildStep.indexOf(

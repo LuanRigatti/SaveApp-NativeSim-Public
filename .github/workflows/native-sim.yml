@@ -1,4 +1,4 @@
-# native-sim-template-version: 19
+# native-sim-template-version: 20
 # SaveApp streaming Simulator workflow. An auth gate protects the public tunnel.
 name: native-sim
 run-name: native-sim ${{ inputs.session }} · ${{ inputs.configuration }} · ${{ inputs.minutes }}m
@@ -223,11 +223,13 @@ jobs:
           set -euo pipefail
           WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace' | head -1)
           test -n "$WORKSPACE"
+          APP_XCODE_PROJECT="$PWD/ios/SaveApp.xcodeproj"
           DERIVED_DATA="build/native-sim-derived-data"
           EXPECTED_APP_GROUP="group.com.luanrigatti.saveapp"
           APP_ENTITLEMENTS="$PWD/ios/SaveApp/SaveApp.entitlements"
           WIDGET_ENTITLEMENTS="$PWD/ios/ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements"
 
+          test -d "$APP_XCODE_PROJECT" || { echo "::error::Generated SaveApp Xcode project is missing"; exit 1; }
           test -f "$APP_ENTITLEMENTS" || { echo "::error::Generated SaveApp entitlements file is missing"; exit 1; }
           test -f "$WIDGET_ENTITLEMENTS" || { echo "::error::Generated ExpoWidgetsTarget entitlements file is missing"; exit 1; }
           plutil -lint "$APP_ENTITLEMENTS"
@@ -250,76 +252,34 @@ jobs:
           assert_generated_app_group "$APP_ENTITLEMENTS" "SaveApp"
           assert_generated_app_group "$WIDGET_ENTITLEMENTS" "ExpoWidgetsTarget"
 
-          BUILD_SETTINGS_JSON="$RUNNER_TEMP/saveapp-simulator-build-settings.json"
+          APP_BUILD_SETTINGS_JSON="$RUNNER_TEMP/saveapp-simulator-app-build-settings.json"
+          WIDGET_BUILD_SETTINGS_JSON="$RUNNER_TEMP/saveapp-simulator-widget-build-settings.json"
+          echo "Inspecting Release Simulator build settings in ios/SaveApp.xcodeproj for target SaveApp"
           xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
+            -project "$APP_XCODE_PROJECT" \
+            -target SaveApp \
             -configuration Release \
             -sdk iphonesimulator \
-            -destination "id=$UDID" \
             -showBuildSettings \
             -json \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES \
-            CODE_SIGN_IDENTITY=- > "$BUILD_SETTINGS_JSON"
-          node - "$BUILD_SETTINGS_JSON" "$PWD/ios" <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-
-          const [settingsPath, iosRootArgument] = process.argv.slice(2);
-          const iosRoot = path.resolve(iosRootArgument);
-          const buildSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8').replace(/^\uFEFF/, ''));
-          const expectedTargets = new Map([
-            ['SaveApp', 'SaveApp/SaveApp.entitlements'],
-            ['ExpoWidgetsTarget', 'ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements'],
-          ]);
-
-          function fail(message) {
-            console.error(`::error::${message}`);
-            process.exit(1);
-          }
-
-          if (!Array.isArray(buildSettings)) fail('Xcode did not return JSON build settings for the Simulator targets');
-
-          for (const [targetName, expectedRelativePath] of expectedTargets) {
-            const entries = buildSettings.filter((entry) => entry.target === targetName);
-            if (entries.length === 0) fail(`Xcode build settings did not include target ${targetName}`);
-
-            const expectedPath = path.normalize(path.join(iosRoot, expectedRelativePath));
-            for (const entry of entries) {
-              const settings = entry.buildSettings ?? {};
-              let entitlementSetting = settings.CODE_SIGN_ENTITLEMENTS;
-              const sourceRoot = settings.SRCROOT;
-              if (typeof entitlementSetting !== 'string' || !entitlementSetting.trim()) {
-                fail(`${targetName} has no effective CODE_SIGN_ENTITLEMENTS build setting`);
-              }
-              if (typeof sourceRoot !== 'string' || !sourceRoot.trim()) {
-                fail(`Xcode did not report SRCROOT for ${targetName}; cannot verify its entitlements path`);
-              }
-
-              entitlementSetting = entitlementSetting.trim().replace(/^['"]|['"]$/g, '');
-              entitlementSetting = entitlementSetting
-                .replace(/\$\(SRCROOT\)|\$\{SRCROOT\}/g, sourceRoot)
-                .replace(/\$\(PROJECT_DIR\)|\$\{PROJECT_DIR\}/g, sourceRoot);
-              if (/\$\([^)]+\)|\$\{[^}]+\}/.test(entitlementSetting)) {
-                fail(`${targetName} CODE_SIGN_ENTITLEMENTS contains an unresolved Xcode variable`);
-              }
-
-              const effectivePath = path.normalize(
-                path.isAbsolute(entitlementSetting)
-                  ? entitlementSetting
-                  : path.join(sourceRoot, entitlementSetting),
-              );
-              if (effectivePath !== expectedPath) {
-                fail(`${targetName} CODE_SIGN_ENTITLEMENTS does not point to its generated App Group entitlements file`);
-              }
-              if (!fs.existsSync(effectivePath)) {
-                fail(`${targetName} effective CODE_SIGN_ENTITLEMENTS file does not exist`);
-              }
-            }
-            console.log(`Verified effective CODE_SIGN_ENTITLEMENTS for ${targetName}: ${expectedRelativePath}`);
-          }
-          NODE
+            CODE_SIGN_IDENTITY=- > "$APP_BUILD_SETTINGS_JSON"
+          echo "Inspecting Release Simulator build settings in ios/SaveApp.xcodeproj for target ExpoWidgetsTarget"
+          xcodebuild \
+            -project "$APP_XCODE_PROJECT" \
+            -target ExpoWidgetsTarget \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -showBuildSettings \
+            -json \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_IDENTITY=- > "$WIDGET_BUILD_SETTINGS_JSON"
+          node scripts/verify-saveapp-simulator-build-settings.js \
+            "$APP_BUILD_SETTINGS_JSON" \
+            "$WIDGET_BUILD_SETTINGS_JSON" \
+            "$PWD/ios"
 
           xcodebuild \
             -workspace "$WORKSPACE" \
