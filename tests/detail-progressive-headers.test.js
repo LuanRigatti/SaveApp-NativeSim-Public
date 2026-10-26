@@ -6,6 +6,7 @@ const { join } = require('node:path');
 const readSource = (path) => readFileSync(join(__dirname, path), 'utf8');
 const rootSource = readSource('../src/app/_layout.tsx');
 const progressiveScreenSource = readSource('../src/components/premium/ProgressiveCollapsibleScreen.tsx');
+const progressiveBlurSource = readSource('../src/components/ui/progressive-blur.tsx');
 const detailRoutes = {
   folder: readSource('../src/app/folders/[id].tsx'),
   text: readSource('../src/app/texts/[id].tsx'),
@@ -41,9 +42,10 @@ describe('native progressive detail headers', () => {
   });
 
   test('derives blur gradients from the active background and keeps the existing progressive intensities', () => {
-    expect(progressiveScreenSource).toContain('colorWithAlpha(theme.colors.background, 0.99)');
+    expect(progressiveScreenSource).toContain('progressiveBlurColorWithAlpha(theme.colors.background, 0.99)');
     expect(progressiveScreenSource).toContain('const solidGradientColor = theme.colors.background;');
-    expect(progressiveScreenSource).toMatch(/colors=\{\[[\s\S]*?theme\.colors\.background,[\s\S]*?colorWithAlpha\(theme\.colors\.background, 0\.2\)/);
+    expect(progressiveScreenSource).toContain("getProgressiveBlurOverlayColors(theme.colors.background, 'top')");
+    expect(progressiveBlurSource).toMatch(/progressiveBlurColorWithAlpha\(backgroundColor, 0\.2\)/);
     expect(progressiveScreenSource).toContain("'systemUltraThinMaterialDark'");
     expect(progressiveScreenSource).toContain("'systemUltraThinMaterialLight'");
     expect(progressiveScreenSource).not.toMatch(/'black'|'white'|'rgba\(0,\s*0,\s*0|rgba\(255,\s*255,\s*255/);

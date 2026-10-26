@@ -4,8 +4,13 @@ import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { HomeContentComposer, type HomeComposerKind } from '@/components/homeContent/HomeContentComposer';
 import { PhotoMasonryGallery } from '@/components/photos/PhotoMasonryGallery';
-import { ProgressiveCollapsibleScreen } from '@/components/premium';
+import { ProgressiveBlur, ProgressiveCollapsibleScreen } from '@/components/premium';
+import { getProgressiveBlurOverlayColors } from '@/components/ui/progressive-blur';
 import { useHomeViewMode } from '@/features/home-content/HomeViewModeProvider';
+import { useHomeSearch } from '@/features/home-content/HomeSearchProvider';
+import { supportsNativeHomeSearch } from '@/features/home-content/homeSearch';
+import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider';
+import { getHomeTitleForFavorites } from '@/features/home-content/homeFavorites';
 import { TEXT_COMPOSER_ROUTE } from '@/features/home-content/textComposerNavigation';
 import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentProvider';
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
@@ -29,7 +34,7 @@ import { useAppSafeAreaInsets } from '@/providers';
 import { useAppTheme } from '@/theme';
 
 export default function HomeScreen() {
-  const { theme } = useAppTheme();
+  const { resolvedMode, theme } = useAppTheme();
   const insets = useAppSafeAreaInsets();
   const router = useRouter();
   const {
@@ -46,6 +51,7 @@ export default function HomeScreen() {
     importDocumentsFromPicker,
   } = useLocalDocumentLibrary();
   const [revealSavedTextId, setRevealSavedTextId] = useState<number | null>(null);
+  const { searchQuery } = useHomeSearch();
   const [composerKind, setComposerKind] = useState<HomeComposerKind>(null);
   const [composerInitialLink, setComposerInitialLink] = useState<string | null>(null);
   const [isClipboardResultAlertActive, setIsClipboardResultAlertActive] = useState(false);
@@ -68,7 +74,8 @@ export default function HomeScreen() {
     pendingFolderOpenSignal,
   } = useHomeSettingsSheet();
   const [revealNewestSignal, setRevealNewestSignal] = useState(0);
-  const homeTitle = getHomeFolderHomeTitle(selection, folders);
+  const { favoriteKeys, favoritesOnly } = useHomeFavorites();
+  const homeTitle = getHomeTitleForFavorites(getHomeFolderHomeTitle(selection, folders), favoritesOnly);
   const selectedFolderId = selection.kind === 'folder' ? selection.folderId : null;
   const selectedFolderAuthorization = useHomeFolderAuthorization(selectedFolderId);
   const isSelectedProtectedFolderLocked = selectedFolderAuthorization.isProtected &&
@@ -84,8 +91,8 @@ export default function HomeScreen() {
     [checklists, contents, documents, media],
   );
   const folderFilter = useMemo(
-    () => getHomeFolderItemFilterForSelection(selection),
-    [selection],
+    () => favoritesOnly ? { kind: 'all-items' as const } : getHomeFolderItemFilterForSelection(selection),
+    [favoritesOnly, selection],
   );
   const homeFeedReady = areHomeFeedSourcesReady({
     photoLibraryReady,
@@ -192,6 +199,11 @@ export default function HomeScreen() {
       <Stack.Screen options={{ headerTitle: '', headerTransparent: true }} />
       {Platform.OS === 'ios' ? (
         <Stack.Toolbar placement="bottom">
+          {supportsNativeHomeSearch(Platform.OS, Platform.Version) ? (
+            <Stack.Toolbar.SearchBarSlot
+              hidden={view === 'folders' && !favoritesOnly}
+            />
+          ) : null}
           <Stack.Toolbar.Spacer />
           <Stack.Toolbar.Menu
             accessibilityLabel="Adicionar"
@@ -235,6 +247,27 @@ export default function HomeScreen() {
         <ProgressiveCollapsibleScreen
           compactTitle={homeTitle}
           contentTopInset={theme.spacing.xl + theme.spacing.xxl + theme.spacing.xxs * 2 + 2}
+          fixedContent={
+            Platform.OS === 'ios' ? (
+              <ProgressiveBlur
+                edge="bottom"
+                height={
+                  insets.bottom +
+                  theme.sizes.touchTargetMinimum +
+                  theme.spacing.lg
+                }
+                intensity={15}
+                layers={1}
+                overlayColors={getProgressiveBlurOverlayColors(theme.colors.background, 'bottom')}
+                style={{ bottom: 0 }}
+                tint={
+                  resolvedMode === 'dark'
+                    ? 'systemUltraThinMaterialDark'
+                    : 'systemUltraThinMaterialLight'
+                }
+              />
+            ) : null
+          }
           largeTitle={
             <View style={{ paddingHorizontal: theme.layout.screenHorizontalPadding }}>
               <Text
@@ -257,18 +290,21 @@ export default function HomeScreen() {
           contentGap={theme.spacing.md}
           renderScrollableContent={(scrollProps) => (
             <>
-              <View style={{ display: view === 'folders' ? 'none' : 'flex', flex: 1 }}>
+              <View style={{ display: view === 'folders' && !favoritesOnly ? 'none' : 'flex', flex: 1 }}>
                 <PhotoMasonryGallery
                   {...scrollProps}
                   contents={contents}
                   checklists={checklists}
                   documents={documents}
                   folderFilter={folderFilter}
-                  hidden={view === 'folders' || isSelectedProtectedFolderLocked}
+                  favoriteKeys={favoriteKeys}
+                  favoritesOnly={favoritesOnly}
+                  hidden={(view === 'folders' && !favoritesOnly) || (!favoritesOnly && isSelectedProtectedFolderLocked)}
                   isInitialFeedReady={homeFeedReady}
                   media={media}
                   revealNewestSignal={revealNewestSignal}
                   revealSavedTextId={revealSavedTextId}
+                  searchQuery={searchQuery}
                 />
                 {isSelectedProtectedFolderLocked ? (
                   <View
@@ -285,7 +321,7 @@ export default function HomeScreen() {
               <HomeFolderOverview
                 {...scrollProps}
                 folders={folders}
-                hidden={view !== 'folders'}
+                hidden={view !== 'folders' || favoritesOnly}
                 isReady={homeFoldersReady}
               />
             </>

@@ -4,6 +4,26 @@ import type { ReactNode } from 'react';
 import { StyleSheet, View, type ColorValue, type StyleProp, type ViewStyle } from 'react-native';
 import MaskedView from './MaskedViewCompat';
 
+export function progressiveBlurColorWithAlpha(color: string, alpha: number): string {
+  const hex = color.match(/^#([\da-f]{6})$/i)?.[1];
+  if (!hex) return color;
+
+  const red = Number.parseInt(hex.slice(0, 2), 16);
+  const green = Number.parseInt(hex.slice(2, 4), 16);
+  const blue = Number.parseInt(hex.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+export function getProgressiveBlurOverlayColors(
+  backgroundColor: string,
+  edge: 'top' | 'bottom',
+): readonly [ColorValue, ColorValue] {
+  const softenedBackground = progressiveBlurColorWithAlpha(backgroundColor, 0.2);
+  return edge === 'top'
+    ? [backgroundColor, softenedBackground]
+    : [softenedBackground, backgroundColor];
+}
+
 type ProgressiveBlurMaskProps = {
   children: ReactNode;
   colors: readonly [ColorValue, ColorValue, ColorValue, ColorValue, ColorValue];
@@ -37,7 +57,10 @@ export type ProgressiveBlurProps = {
   intensity?: number;
   layers?: number;
   tint?: BlurTint;
-  overlayColors?: readonly [ColorValue, ColorValue, ColorValue] | null;
+  overlayColors?:
+    | readonly [ColorValue, ColorValue]
+    | readonly [ColorValue, ColorValue, ColorValue]
+    | null;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -61,6 +84,7 @@ export function ProgressiveBlur({
   const fadeDistance = safeHeight - resolvedFadeStart;
   const fadeEnd = Math.max(resolvedFadeStart, safeHeight - Math.min(2, fadeDistance * 0.08));
   const layerIntensity = clamp(intensity, 1, 100) / layerCount;
+  const maskBottomOverlay = edge === 'bottom' && overlayColors?.length === 2;
 
   return (
     <View pointerEvents="none" style={[styles.container, { height }, style]}>
@@ -90,17 +114,24 @@ export function ProgressiveBlur({
             colors={maskColors}
             locations={maskLocations}
           >
-            <BlurView intensity={layerIntensity} tint={tint} style={StyleSheet.absoluteFill} />
+            <>
+              <BlurView intensity={layerIntensity} tint={tint} style={StyleSheet.absoluteFill} />
+              {maskBottomOverlay && index === 0 && overlayColors ? (
+                <LinearGradient colors={overlayColors} style={StyleSheet.absoluteFill} />
+              ) : null}
+            </>
           </ProgressiveBlurMask>
         );
       })}
-      {overlayColors ? (
+      {overlayColors && !maskBottomOverlay ? (
         <LinearGradient
           colors={overlayColors}
           locations={
-            edge === 'top'
-              ? [0, resolvedFadeStart / safeHeight, 1]
-              : [0, 1 - resolvedFadeStart / safeHeight, 1]
+            overlayColors.length === 3
+              ? edge === 'top'
+                ? [0, resolvedFadeStart / safeHeight, 1]
+                : [0, 1 - resolvedFadeStart / safeHeight, 1]
+              : undefined
           }
           style={StyleSheet.absoluteFill}
         />

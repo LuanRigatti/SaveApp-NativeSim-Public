@@ -51,6 +51,9 @@ import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentP
 import { useLocalDocumentLibrary } from '@/features/documents/LocalDocumentLibraryProvider';
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
 import { buildHomeGalleryEntriesWhenReady } from '@/features/home-content/homeFeed';
+import { filterHomeFavoriteItems } from '@/features/home-content/homeFavorites';
+import { createHomeSearchIndex, filterHomeSearchIndex } from '@/features/home-content/homeSearch';
+import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider';
 import { hasSavedTextGalleryEntry } from '@/features/home-content/textComposerNavigation';
 import type { HomeGalleryEntry, SavedHomeContent } from '@/features/home-content/homeContentTypes';
 import type { SavedChecklistSummary } from '@/features/home-content/checklistTypes';
@@ -232,6 +235,9 @@ type PhotoMasonryGalleryProps = Pick<
   documents: SavedDocument[];
   checklists: SavedChecklistSummary[];
   folderFilter: HomeFolderItemFilter;
+  favoriteKeys: ReadonlySet<string>;
+  favoritesOnly: boolean;
+  searchQuery?: string;
   hidden?: boolean;
   isInitialFeedReady: boolean;
   revealNewestSignal?: number;
@@ -247,6 +253,9 @@ export function PhotoMasonryGallery({
   documents,
   checklists,
   folderFilter,
+  favoriteKeys,
+  favoritesOnly,
+  searchQuery = '',
   hidden = false,
   isInitialFeedReady,
   revealNewestSignal = 0,
@@ -256,6 +265,7 @@ export function PhotoMasonryGallery({
 }: PhotoMasonryGalleryProps) {
   const { reduceMotionEnabled, resolvedMode, theme } = useAppTheme();
   const { viewMode } = useHomeViewMode();
+  const { setFavorite } = useHomeFavorites();
   const viewLayout = getHomeViewLayout(viewMode);
   const gridCardMode: HomeGridCardMode | null = viewMode === 'large' || viewMode === 'small' ? viewMode : null;
   const isSingleLineView = viewMode === 'single-line';
@@ -287,9 +297,11 @@ export function PhotoMasonryGallery({
   const scrollOffsetRef = useRef(0);
   const pendingScrollRestoreRef = useRef<number | null>(null);
   const previousViewModeRef = useRef(viewMode);
-  const currentFolderFilterKey = folderFilter.kind === 'folder'
-    ? `folder:${folderFilter.folderId}`
-    : folderFilter.kind;
+  const currentFolderFilterKey = favoritesOnly
+    ? 'favorites'
+    : folderFilter.kind === 'folder'
+      ? `folder:${folderFilter.folderId}`
+      : folderFilter.kind;
   const previousFolderFilterKeyRef = useRef(currentFolderFilterKey);
   const { fontScale, height: screenHeight, width: screenWidth } = useWindowDimensions();
   const listMetrics = getHomeListMetrics(viewMode, fontScale);
@@ -403,6 +415,35 @@ export function PhotoMasonryGallery({
     [authorizeItemForAction],
   );
 
+  const createFavoriteAction = useCallback((itemType: HomeFolderItemType, itemId: number): NativeCardContextMenuAction => {
+    const key = getHomeFolderItemKey(itemType, itemId);
+    const currentlyFavorite = favoriteKeys.has(key);
+    return {
+      id: 'toggle-favorite',
+      title: currentlyFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos',
+      systemImage: currentlyFavorite ? 'star.slash' : 'star',
+      onPress: withItemAuthorization(itemType, itemId, async () => {
+        try {
+          await setFavorite({ itemType, itemId }, !currentlyFavorite);
+        } catch {
+          Alert.alert('Não foi possível atualizar Favoritos', 'Tente novamente.');
+        }
+      }),
+    };
+  }, [favoriteKeys, setFavorite, withItemAuthorization]);
+
+  const renderFavoriteMenuAction = useCallback((itemType: HomeFolderItemType, itemId: number) => {
+    const action = createFavoriteAction(itemType, itemId);
+    return (
+      <Link.MenuAction
+        key={`favorite-${itemType}-${itemId}`}
+        title={action.title}
+        icon={action.systemImage}
+        onPress={action.onPress}
+      />
+    );
+  }, [createFavoriteAction]);
+
   const authorizeTagOperation = useCallback(async (itemType: HomeFolderItemType, itemId: number) => {
     if (!homeFoldersReady || !isAppActive || !isTagAppActive || hidden || AppState.currentState !== 'active') return false;
     const operationEpoch = lockEpoch;
@@ -512,8 +553,18 @@ export function PhotoMasonryGallery({
     () => isAppActive ? unlockedFolderIds : new Set<string>(),
     [isAppActive, unlockedFolderIds],
   );
-  const filteredItems = useMemo(() => {
+  const folderAndFavoriteFilteredItems = useMemo(() => {
     const allItems = [...media, ...contents, ...documents, ...checklists];
+    if (favoritesOnly) {
+      return filterHomeFavoriteItems(
+        allItems,
+        favoriteKeys,
+        folderIdByItemKey,
+        protectedFolderIds,
+        accessibleUnlockedFolderIds,
+        homeFoldersReady,
+      );
+    }
     if (!homeFoldersReady) return allItems;
     return filterHomeFolderItems(
       allItems,
@@ -522,7 +573,15 @@ export function PhotoMasonryGallery({
       protectedFolderIds,
       accessibleUnlockedFolderIds,
     );
-  }, [accessibleUnlockedFolderIds, checklists, contents, documents, folderFilter, folderIdByItemKey, homeFoldersReady, media, protectedFolderIds]);
+  }, [accessibleUnlockedFolderIds, checklists, contents, documents, favoriteKeys, favoritesOnly, folderFilter, folderIdByItemKey, homeFoldersReady, media, protectedFolderIds]);
+  const homeSearchIndex = useMemo(
+    () => createHomeSearchIndex(folderAndFavoriteFilteredItems),
+    [folderAndFavoriteFilteredItems],
+  );
+  const filteredItems = useMemo(
+    () => filterHomeSearchIndex(homeSearchIndex, searchQuery),
+    [homeSearchIndex, searchQuery],
+  );
   const tagQueryReferences = useMemo<SavedTagItemReference[]>(
     () => filteredItems.map((item) => ({ itemType: getHomeFolderItemType(item), itemId: item.id })),
     [filteredItems],
@@ -679,6 +738,7 @@ export function PhotoMasonryGallery({
         systemImage: 'tag',
         onPress: () => { void openTagPicker({ itemType, itemId }); },
       },
+      createFavoriteAction(itemType, itemId),
       ...(renameAction ? [{
         ...renameAction,
         onPress: withItemAuthorization(itemType, itemId, renameAction.onPress),
@@ -702,7 +762,7 @@ export function PhotoMasonryGallery({
         onPress: withItemAuthorization(itemType, itemId, deleteAction.onPress),
       },
     ],
-    [assignItemToFolder, openAssignmentPicker, openTagPicker, withItemAuthorization],
+    [assignItemToFolder, createFavoriteAction, openAssignmentPicker, openTagPicker, withItemAuthorization],
   );
 
   const renderSavedTagSubmenu = useCallback((itemType: HomeFolderItemType, itemId: number) => {
@@ -1135,6 +1195,7 @@ export function PhotoMasonryGallery({
                 onPress={withItemAuthorization(item.mediaType, item.id, () => assignItemToFolder(item.mediaType, item.id, null))}
               />
             ) : null}
+            {renderFavoriteMenuAction(item.mediaType, item.id)}
             {renderSavedTagSubmenu(item.mediaType, item.id)}
             {!isVideo ? (
               <Link.MenuAction
@@ -1187,6 +1248,7 @@ export function PhotoMasonryGallery({
       withItemAuthorization,
       now,
       openAssignmentPicker,
+      renderFavoriteMenuAction,
       renderSavedTagSubmenu,
       visibleTagDotsForItem,
     ],
@@ -1514,6 +1576,7 @@ export function PhotoMasonryGallery({
                     onPress={withItemAuthorization('link', item.id, () => assignItemToFolder('link', item.id, null))}
                   />
                 ) : null}
+                {renderFavoriteMenuAction('link', item.id)}
                 {renderSavedTagSubmenu('link', item.id)}
                 <Link.MenuAction title="Apagar link" icon="trash" destructive onPress={deleteItem} />
               </Link.Menu>
@@ -1551,6 +1614,7 @@ export function PhotoMasonryGallery({
                     onPress={withItemAuthorization('text', item.id, () => assignItemToFolder('text', item.id, null))}
                 />
               ) : null}
+              {renderFavoriteMenuAction('text', item.id)}
               {renderSavedTagSubmenu('text', item.id)}
               <Link.MenuAction title="Apagar texto" icon="trash" destructive onPress={deleteItem} />
             </Link.Menu>
@@ -1576,6 +1640,7 @@ export function PhotoMasonryGallery({
       folderIdByItemKey,
       homeFolderContextActions,
       openAssignmentPicker,
+      renderFavoriteMenuAction,
       renderSavedTagSubmenu,
       visibleTagDotsForItem,
       requestDeleteContent,
@@ -1733,6 +1798,7 @@ export function PhotoMasonryGallery({
                 onPress={withItemAuthorization('document', document.id, () => assignItemToFolder('document', document.id, null))}
               />
             ) : null}
+            {renderFavoriteMenuAction('document', document.id)}
             {renderSavedTagSubmenu('document', document.id)}
             <Link.MenuAction
               title="Apagar arquivo"
@@ -1770,6 +1836,7 @@ export function PhotoMasonryGallery({
       requestDeleteDocument,
       authorizeItemForAction,
       openAssignmentPicker,
+      renderFavoriteMenuAction,
       renderSavedTagSubmenu,
       visibleTagDotsForItem,
       screenWidth,
@@ -1971,6 +2038,7 @@ export function PhotoMasonryGallery({
                 onPress={withItemAuthorization('checklist', checklist.id, () => assignItemToFolder('checklist', checklist.id, null))}
               />
             ) : null}
+            {renderFavoriteMenuAction('checklist', checklist.id)}
             {renderSavedTagSubmenu('checklist', checklist.id)}
             <Link.MenuAction title="Apagar lista" icon="trash" destructive onPress={withItemAuthorization('checklist', checklist.id, deleteAction.onPress)} />
           </Link.Menu>
@@ -1996,6 +2064,7 @@ export function PhotoMasonryGallery({
       listRowHeight,
       listThumbnailSize,
       openAssignmentPicker,
+      renderFavoriteMenuAction,
       renderSavedTagSubmenu,
       router,
       screenWidth,
@@ -2051,11 +2120,15 @@ export function PhotoMasonryGallery({
     () => ({ marginBottom: contentGap }),
     [contentGap],
   );
-  const emptyMessage = folderFilter.kind === 'folder'
-    ? 'Nenhum item nesta pasta'
-    : folderFilter.kind === 'unfiled'
-      ? 'Nenhum item sem pasta'
-      : 'Nenhum item salvo';
+  const emptyMessage = searchQuery.trim()
+    ? 'Nenhum resultado encontrado'
+    : favoritesOnly
+    ? 'Nenhum favorito ainda'
+    : folderFilter.kind === 'folder'
+      ? 'Nenhum item nesta pasta'
+      : folderFilter.kind === 'unfiled'
+        ? 'Nenhum item sem pasta'
+        : 'Nenhum item salvo';
 
   return (
     <>

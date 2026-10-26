@@ -6,16 +6,24 @@ import { useCallback, useEffect, useRef } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 
 import { getClipboardURLDetectionSnapshot } from '../../../modules/clipboard-url-detection/src';
-import { shouldOfferClipboardLink } from './clipboardLinkOffer';
+import { clipboardLinkOfferState } from './clipboardLinkOfferState';
 
 const LAST_HANDLED_CHANGE_COUNT_KEY = '@saveapp/clipboard-link-offer-change-count-v1';
-let lastHandledChangeCountInMemory: number | null = null;
+let persistenceQueue: Promise<void> = Promise.resolve();
 
 export function markClipboardLinkChangeCountHandled(changeCount: number | null | undefined): void {
-  if (!Number.isSafeInteger(changeCount) || (changeCount as number) < 0) return;
-  const value = changeCount as number;
-  lastHandledChangeCountInMemory = value;
-  void AsyncStorage.setItem(LAST_HANDLED_CHANGE_COUNT_KEY, String(value)).catch(() => undefined);
+  if (!clipboardLinkOfferState.markHandled(changeCount)) return;
+  const value = clipboardLinkOfferState.getLastHandledChangeCount();
+  if (value == null) return;
+
+  persistenceQueue = persistenceQueue
+    .catch(() => undefined)
+    .then(() => AsyncStorage.setItem(LAST_HANDLED_CHANGE_COUNT_KEY, String(value)))
+    .catch(() => undefined);
+}
+
+export function beginDynamicIslandClipboardFlow(): () => void {
+  return clipboardLinkOfferState.beginExplicitFlow();
 }
 
 type ClipboardLinkOfferOptions = {
@@ -37,7 +45,6 @@ export function useClipboardLinkOffer({
   const isCheckingRef = useRef(false);
   const isAlertVisibleRef = useRef(false);
   const isReadingClipboardRef = useRef(false);
-  const lastHandledChangeCountRef = useRef<number | null>(null);
   const checkClipboardRef = useRef<() => void>(() => undefined);
 
   const checkClipboard = useCallback(async () => {
@@ -47,6 +54,7 @@ export function useClipboardLinkOffer({
       !canPresentRef.current ||
       !isFocusedRef.current ||
       !isStorageReadyRef.current ||
+      clipboardLinkOfferState.hasExplicitFlow() ||
       isCheckingRef.current ||
       isAlertVisibleRef.current ||
       isReadingClipboardRef.current
@@ -65,24 +73,21 @@ export function useClipboardLinkOffer({
         !enabledRef.current ||
         !canPresentRef.current ||
         !isFocusedRef.current ||
+        clipboardLinkOfferState.hasExplicitFlow() ||
         isReadingClipboardRef.current
       ) {
         return;
       }
 
-      if (!shouldOfferClipboardLink(
+      if (!clipboardLinkOfferState.shouldOffer(
         snapshot.hasURLItem,
         snapshot.hasProbableWebURL,
         snapshot.changeCount,
-        snapshot.changeCount === lastHandledChangeCountInMemory
-          ? snapshot.changeCount
-          : lastHandledChangeCountRef.current,
       )) {
         return;
       }
 
       const offeredChangeCount = snapshot.changeCount;
-      lastHandledChangeCountRef.current = offeredChangeCount;
       markClipboardLinkChangeCountHandled(offeredChangeCount);
       isAlertVisibleRef.current = true;
 
@@ -150,16 +155,18 @@ export function useClipboardLinkOffer({
 
   useEffect(() => {
     let mounted = true;
+    const hydrationRevision = clipboardLinkOfferState.getRevision();
     void AsyncStorage.getItem(LAST_HANDLED_CHANGE_COUNT_KEY)
       .then((storedValue) => {
         if (!mounted) return;
         const parsed = storedValue == null ? NaN : Number(storedValue);
-        lastHandledChangeCountRef.current = Number.isSafeInteger(parsed) ? parsed : null;
-        lastHandledChangeCountInMemory = lastHandledChangeCountRef.current;
+        clipboardLinkOfferState.restorePersisted(
+          Number.isSafeInteger(parsed) ? parsed : null,
+          hydrationRevision,
+        );
       })
       .catch(() => {
-        // A failed preference read only removes duplicate suppression for this launch.
-        if (mounted) lastHandledChangeCountRef.current = null;
+        // A failed preference read only removes persisted suppression for this launch.
       })
       .finally(() => {
         if (!mounted) return;

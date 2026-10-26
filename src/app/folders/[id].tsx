@@ -6,6 +6,7 @@ import { PhotoMasonryGallery } from '@/components/photos/PhotoMasonryGallery';
 import { ProgressiveCollapsibleScreen } from '@/components/premium';
 import { areHomeFeedSourcesReady } from '@/features/home-content/homeFeed';
 import { useHomeViewMode } from '@/features/home-content/HomeViewModeProvider';
+import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider';
 import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentProvider';
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
 import { useLocalDocumentLibrary } from '@/features/documents/LocalDocumentLibraryProvider';
@@ -27,6 +28,7 @@ export default function HomeFolderScreen() {
   const { checklists, isReady: checklistLibraryReady } = useLocalChecklists();
   const { documents, isReady: documentLibraryReady } = useLocalDocumentLibrary();
   const { isReady: viewModeReady } = useHomeViewMode();
+  const { favoriteKeys } = useHomeFavorites();
   const { folders, isReady: homeFoldersReady } = useLocalHomeFolders();
   const authorization = useHomeFolderAuthorization(rawFolderId ?? null);
   const folder = folders.find((item) => item.id === rawFolderId);
@@ -100,6 +102,8 @@ export default function HomeFolderScreen() {
               checklists={checklists}
               documents={documents}
               folderFilter={folderFilter}
+              favoriteKeys={favoriteKeys}
+              favoritesOnly={false}
               isInitialFeedReady={homeFeedReady}
               media={media}
               revealSavedTextId={null}

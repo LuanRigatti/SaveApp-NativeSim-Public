@@ -49,6 +49,7 @@ export function createHomeFolderToolbarMenu({
       accessibilityLabel={`Selecionar pasta. Atual: ${currentLabel}.`}
       hidden={hidden}
       icon="folder"
+      separateBackground={false}
       tintColor={tintColor}
     >
       <Stack.Toolbar.MenuAction

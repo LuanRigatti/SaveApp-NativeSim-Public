@@ -2,16 +2,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
+import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider';
 import { useHomeViewMode } from '@/features/home-content/HomeViewModeProvider';
 import { getHomeFolderAccentColor } from '@/features/home-folders/homeFolderColor';
 import { useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
 import type { HomeViewMode } from '@/features/home-content/homeViewMode';
 import { useAppTheme } from '@/theme';
+import { triggerSelectionHaptic } from '@/utils/haptics';
 
 export default function HomeFolderFilterButton() {
   const { setViewMode, viewMode } = useHomeViewMode();
-  const { folders, selectFolder, selectView, selection, view } = useLocalHomeFolders();
+  const { authorizeFolder, folders, isFolderAuthorized, selectFolder, selectView, selection, view } = useLocalHomeFolders();
   const { accentColor, resolvedMode, theme } = useAppTheme();
+  const { favoritesOnly, setFavoritesOnly } = useHomeFavorites();
   const [isOpen, setIsOpen] = useState(false);
   const selectedFolderId = selection.kind === 'folder' ? selection.folderId : null;
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId);
@@ -24,6 +27,14 @@ export default function HomeFolderFilterButton() {
 
   const selectLayout = (mode: HomeViewMode) => {
     setViewMode(mode);
+    setIsOpen(false);
+  };
+
+  const selectFolderAfterAuthorization = async (folderId: string) => {
+    const outcome = await authorizeFolder(folderId);
+    if (outcome !== 'authenticated' || !isFolderAuthorized(folderId)) return;
+    selectFolder(folderId);
+    setFavoritesOnly(false);
     setIsOpen(false);
   };
 
@@ -63,28 +74,28 @@ export default function HomeFolderFilterButton() {
 
   return (
     <>
-      <Pressable
-        accessibilityLabel={`Pastas e visualização: ${currentLabel}`}
-        accessibilityRole="button"
-        onPress={() => setIsOpen(true)}
-        style={{
-          alignItems: 'center',
-          borderColor: theme.colors.separator,
-          borderRadius: theme.radius.pill,
-          borderWidth: 1,
-          flexDirection: 'row',
-          gap: theme.spacing.xs,
-          maxWidth: 176,
-          paddingHorizontal: theme.spacing.sm,
-          paddingVertical: theme.spacing.xs,
-        }}
-      >
-        <Ionicons color={selectedFolderColor} name="folder-outline" size={14} />
-        <Text numberOfLines={1} style={[theme.typography.caption, { color: theme.colors.textPrimary, flexShrink: 1, minWidth: 0 }]}>
-          {currentLabel}
-        </Text>
-        <Ionicons color={theme.colors.textTertiary} name="chevron-down" size={12} />
-      </Pressable>
+      <View style={{ alignItems: 'center', borderColor: theme.colors.separator, borderRadius: theme.radius.pill, borderWidth: 1, flexDirection: 'row', height: 44, paddingHorizontal: 2 }}>
+        <Pressable
+          accessibilityLabel={favoritesOnly ? 'Desativar Favoritos' : 'Mostrar Favoritos'}
+          accessibilityRole="button"
+          accessibilityState={{ selected: favoritesOnly }}
+          onPress={() => {
+            triggerSelectionHaptic();
+            setFavoritesOnly(!favoritesOnly);
+          }}
+          style={{ alignItems: 'center', height: 40, justifyContent: 'center', width: 40 }}
+        >
+          <Ionicons color={theme.colors.primary} name={favoritesOnly ? 'star' : 'star-outline'} size={18} />
+        </Pressable>
+        <Pressable
+          accessibilityLabel={`Selecionar pasta. Atual: ${currentLabel}.`}
+          accessibilityRole="button"
+          onPress={() => setIsOpen(true)}
+          style={{ alignItems: 'center', height: 40, justifyContent: 'center', width: 40 }}
+        >
+          <Ionicons color={selectedFolderColor} name="folder-outline" size={18} />
+        </Pressable>
+      </View>
       <Modal animationType="fade" onRequestClose={() => setIsOpen(false)} transparent visible={isOpen}>
         <Pressable
           onPress={() => setIsOpen(false)}
@@ -96,10 +107,12 @@ export default function HomeFolderFilterButton() {
           >
             <ScrollView>
               {renderOption('all-items', 'Todos', view === 'all-items', () => {
+                setFavoritesOnly(false);
                 selectView('all-items');
                 setIsOpen(false);
               }, 'grid-outline')}
               {renderOption('folders', 'Pastas', view === 'folders', () => {
+                setFavoritesOnly(false);
                 selectView('folders');
                 setIsOpen(false);
               }, 'folder-outline')}
@@ -108,8 +121,7 @@ export default function HomeFolderFilterButton() {
                 folder.name,
                 selectedFolderId === folder.id,
                 () => {
-                  selectFolder(folder.id);
-                  setIsOpen(false);
+                  void selectFolderAfterAuthorization(folder.id);
                 },
                 'folder-outline',
                 getHomeFolderAccentColor(folder.color, accentColor, resolvedMode),

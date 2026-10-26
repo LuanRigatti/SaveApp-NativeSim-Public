@@ -101,7 +101,9 @@ describe('Face ID folder authorization', () => {
     expect(root).toMatch(/!isAppActive[\s\S]*?StyleSheet\.absoluteFill/);
     expect(home).toMatch(/isSelectedProtectedFolderLocked/);
     expect(home).toMatch(/HomeFolderAuthorizationPrompt authorization=\{selectedFolderAuthorization\}/);
-    expect(home).toMatch(/hidden=\{view === 'folders' \|\| isSelectedProtectedFolderLocked\}/);
+    expect(home).toMatch(/hidden=\{\(view === 'folders' && !favoritesOnly\) \|\| \(!favoritesOnly && isSelectedProtectedFolderLocked\)\}/);
+    const gallery = readSource('src/components/photos/PhotoMasonryGallery.tsx');
+    expect(gallery).toMatch(/filterHomeFavoriteItems\([\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds,[\s\S]*?homeFoldersReady/);
   });
 
   test('excludes protected items from Todos and guards destructive/organizing actions', () => {

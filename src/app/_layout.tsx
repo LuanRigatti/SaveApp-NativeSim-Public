@@ -19,6 +19,7 @@ import { LocalChecklistLibraryProvider } from '@/features/home-content/LocalChec
 import { HomeSettingsSheetProvider, useHomeSettingsSheet } from '@/features/home-content/HomeSettingsSheetProvider';
 import { purgeExpiredRecentlyDeletedItems } from '@/features/home-trash/trashLibrary';
 import { HomeViewModeProvider } from '@/features/home-content/HomeViewModeProvider';
+import { HomeFavoritesProvider } from '@/features/home-content/HomeFavoritesProvider';
 import { SaveLinkDynamicIslandProvider } from '@/features/dynamic-island/SaveLinkDynamicIslandProvider';
 import { LocalHomeFolderProvider, useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
 import { shouldCoverAppSwitcherPreview } from '@/features/home-folders/appSwitcherPrivacy';
@@ -264,13 +265,15 @@ export default function RootLayout() {
                 <LocalDocumentLibraryProvider>
                   <LocalChecklistLibraryProvider>
                     <LocalHomeFolderProvider>
-                      <SaveLinkDynamicIslandProvider>
-                        <HomeSettingsSheetProvider>
-                          <HomeViewModeProvider>
-                            <NavigationRoot />
-                          </HomeViewModeProvider>
-                        </HomeSettingsSheetProvider>
-                      </SaveLinkDynamicIslandProvider>
+                      <HomeFavoritesProvider>
+                        <SaveLinkDynamicIslandProvider>
+                          <HomeSettingsSheetProvider>
+                            <HomeViewModeProvider>
+                              <NavigationRoot />
+                            </HomeViewModeProvider>
+                          </HomeSettingsSheetProvider>
+                        </SaveLinkDynamicIslandProvider>
+                      </HomeFavoritesProvider>
                     </LocalHomeFolderProvider>
                   </LocalChecklistLibraryProvider>
                 </LocalDocumentLibraryProvider>

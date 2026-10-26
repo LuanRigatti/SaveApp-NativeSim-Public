@@ -41,6 +41,7 @@ describe('home folder regression contract', () => {
     expect(toolbarMenuSource).toMatch(/<Stack\.Toolbar\.Menu[\s\S]*?accessibilityHint="Abre as opções de pastas e visualização\."[\s\S]*?hidden=\{hidden\}[\s\S]*?icon="folder"/);
     expect(toolbarMenuSource).not.toMatch(/<Stack\.Toolbar\.View|<Host|@expo\/ui\/swift-ui|frame\(|buttonStyle\(|buttonBorderShape\(|controlSize\(/);
     expect(toolbarMenuSource).not.toMatch(/title=\{currentLabel\}|>\s*\{currentLabel\}\s*</);
+    expect(tabsLayoutSource).toMatch(/<Stack\.Toolbar\.Button[\s\S]*?icon=\{favoritesOnly \? 'star\.fill' : 'star'\}[\s\S]*?selected=\{favoritesOnly\}[\s\S]*?\{createHomeFolderToolbarMenu\(/);
     expect(tabsLayoutSource).toMatch(/selection\.kind === 'folder' \? selection\.folderId : null/);
     expect(tabsLayoutSource).toMatch(/currentFolder\?\.name \?\? \(\s*view === 'folders' \? 'Pastas' : 'Todos'/);
     expect(toolbarMenuSource).toMatch(/>\s*Todos\s*<\/Stack\.Toolbar\.MenuAction>/);
@@ -49,7 +50,9 @@ describe('home folder regression contract', () => {
       readSource('../src/features/home-folders/HomeFolderFilterButton.tsx'),
     ]) {
       expect(fallbackSource).toMatch(/currentLabel = selectedFolder\?\.name \?\? \(/);
-      expect(fallbackSource).toMatch(/accessibilityLabel=\{`Pastas e visualização: \$\{currentLabel\}`\}/);
+      expect(fallbackSource).toMatch(/accessibilityLabel=\{favoritesOnly \? 'Desativar Favoritos' : 'Mostrar Favoritos'\}/);
+      expect(fallbackSource).toContain('Selecionar pasta. Atual: ${currentLabel}.');
+      expect(fallbackSource).toMatch(/setFavoritesOnly\(false\)/);
       expect(fallbackSource).not.toContain('Sem pasta');
       expect(fallbackSource).not.toContain("selectView('unfiled')");
     }
@@ -64,7 +67,7 @@ describe('home folder regression contract', () => {
     expect(toolbarMenuSource).not.toMatch(/folder\.fill/);
     expect(tabsLayoutSource).not.toMatch(/square\.grid\.2x2"\s+separateBackground/);
     expect(homeSource).toMatch(/fixedLargeTitleAccessory=\{Platform\.OS === 'ios' \? null : <HomeFolderFilterButton \/>\}/);
-    expect(homeSource).toMatch(/const homeTitle = getHomeFolderHomeTitle\(selection, folders\)/);
+    expect(homeSource).toMatch(/const homeTitle = getHomeTitleForFavorites\(getHomeFolderHomeTitle\(selection, folders\), favoritesOnly\)/);
     expect(folderTypesSource).toMatch(/selection\.view === 'folders' \? 'Pastas' : 'Todos'/);
     expect(homeSource).toMatch(/compactTitle=\{homeTitle\}/);
     expect(homeSource).toMatch(/ellipsizeMode="tail"\s+numberOfLines=\{1\}[\s\S]*?>\s*\{homeTitle\}\s*<\/Text>/);
@@ -83,8 +86,8 @@ describe('home folder regression contract', () => {
   test('keeps the toolbar menu independent of Home content states and visible after folder detail return', () => {
     expect(tabsLayoutSource).toMatch(/hidden: !shouldShowHomeToolbarItems/);
     expect(tabsLayoutSource).not.toMatch(/hidden:.*\bview\b/);
-    expect(homeSource).toMatch(/hidden=\{view === 'folders' \|\| isSelectedProtectedFolderLocked\}/);
-    expect(homeSource).toMatch(/hidden=\{view !== 'folders'\}/);
+    expect(homeSource).toMatch(/hidden=\{\(view === 'folders' && !favoritesOnly\) \|\| \(!favoritesOnly && isSelectedProtectedFolderLocked\)\}/);
+    expect(homeSource).toMatch(/hidden=\{view !== 'folders' \|\| favoritesOnly\}/);
     expect(toolbarMenuSource).toMatch(/hidden=\{hidden\}/);
     expect(readSource('../src/features/home-content/homeToolbarVisibility.ts')).toMatch(/pathname === '\/' \|\| SAVED_CONTENT_ROUTE\.test\(pathname\)/);
     for (const pathname of ['/', '/folders/folder-123']) {
@@ -94,8 +97,8 @@ describe('home folder regression contract', () => {
 
   test('keeps items without folders available in Todos and migrates legacy Sem pasta preferences', () => {
     expect(homeSource).toMatch(/folderFilter=\{folderFilter\}/);
-    expect(homeSource).toMatch(/<HomeFolderOverview[\s\S]*?hidden=\{view !== 'folders'\}/);
-    expect(homeSource).toMatch(/hidden=\{view === 'folders' \|\| isSelectedProtectedFolderLocked\}/);
+    expect(homeSource).toMatch(/<HomeFolderOverview[\s\S]*?hidden=\{view !== 'folders' \|\| favoritesOnly\}/);
+    expect(homeSource).toMatch(/hidden=\{\(view === 'folders' && !favoritesOnly\) \|\| \(!favoritesOnly && isSelectedProtectedFolderLocked\)\}/);
     expect(homeSource).toMatch(/getHomeFolderItemFilterForSelection\(selection\)/);
     expect(gallerySource).toMatch(/style=\{\{ display: hidden \? 'none' : 'flex', flex: 1 \}\}/);
     expect(overviewSource).toMatch(/Nenhuma pasta criada\. Crie uma em Configurações\./);
@@ -104,6 +107,7 @@ describe('home folder regression contract', () => {
     expect(gallerySource).toMatch(/'Nenhum item nesta pasta'/);
     expect(gallerySource).toMatch(/'Nenhum item sem pasta'/);
     expect(gallerySource).toMatch(/'Nenhum item salvo'/);
+    expect(gallerySource).toMatch(/'Nenhum favorito ainda'/);
     expect(folderTypesSource).toMatch(/HomeFolderHomeView = 'all-items' \| 'unfiled' \| 'folders'/);
     expect(folderTypesSource).toMatch(/kind: 'all-items'/);
     expect(selectionStorageSource).toMatch(/HOME_FOLDER_SELECTION_STORAGE_KEY = '@saveapp\/home-folder-selection-v4'/);
@@ -166,9 +170,11 @@ describe('home folder regression contract', () => {
     expect(selectionStorageSource).toMatch(/candidate\.kind === 'folder'[\s\S]*?isExistingFolder\(candidate\.folderId, folders\)/);
     expect(selectionStorageSource).toMatch(/persistHomeFolderSelection\(storage, selection\)/);
     expect(folderProviderSource).toMatch(/currentSelection\.kind === 'folder'[\s\S]*?updateSelection\(\{ kind: 'view', view: 'all-items' \}\)/);
-    expect(gallerySource).toMatch(/currentFolderFilterKey = folderFilter\.kind === 'folder'[\s\S]*?folder:\$\{folderFilter\.folderId\}/);
+    expect(gallerySource).toMatch(/currentFolderFilterKey = favoritesOnly\s*\? 'favorites'[\s\S]*?folderFilter\.kind === 'folder'[\s\S]*?folder:\$\{folderFilter\.folderId\}/);
     expect(gallerySource).toMatch(/if \(previousFolderFilterKeyRef\.current === currentFolderFilterKey\) return;[\s\S]*?scrollToOffset\(\{ offset: 0, animated: false \}\)/);
-    expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds,[\s\S]*?buildHomeGalleryEntriesWhenReady\(filteredItems/);
+    expect(gallerySource).toMatch(/if \(favoritesOnly\)[\s\S]*?filterHomeFavoriteItems\([\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
+    expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
+    expect(gallerySource).toMatch(/buildHomeGalleryEntriesWhenReady\(filteredItems/);
   });
 
   test('keeps outline folder symbols for Todos, Pastas, and individual folders without a Sem pasta action', () => {

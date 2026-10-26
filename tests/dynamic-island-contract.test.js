@@ -179,17 +179,28 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
   });
 
   test('keeps Live Activity payload free of saved URLs and reserves the sensor region', () => {
+    const expandedLeading = layoutSource.match(
+      /expandedLeading: \(([\s\S]*?)\n\s*\),\n\s*expandedTrailing:/,
+    )?.[1] ?? '';
+
     expect(layoutSource).toContain("'widget'");
     expect(layoutSource).toContain('compactLeading:');
-    expect(layoutSource).toContain('compactTrailing:');
     expect(layoutSource).toContain('minimal:');
     expect(layoutSource).toContain('expandedLeading:');
     expect(layoutSource).toContain('expandedTrailing:');
-    expect(layoutSource).toContain('expandedCenter: null');
-    expect(layoutSource).toContain('expandedBottom:');
+    expect(layoutSource).toContain('expandedCenter: (');
+    expect(layoutSource).not.toContain('compactTrailing:');
+    expect(layoutSource).not.toContain('expandedBottom:');
+    expect(layoutSource).toContain("clipShape('roundedRectangle'");
+    expect(expandedLeading).toContain('frame({ width: 44, height: 44 })');
+    expect(expandedLeading).toContain("clipShape('roundedRectangle', 10)");
+    expect(expandedLeading).toContain('padding({ top: 8 })');
+    expect(layoutSource).toContain("multilineTextAlignment('center')");
     expect(layoutSource).toContain('Salvar link');
     expect(layoutSource).toContain('Toque para abrir');
     expect(layoutSource).toContain('Ativo');
+    expect(layoutSource).not.toContain('34C759');
+    expect(layoutSource).not.toContain('circle.fill');
     expect(layoutSource).not.toMatch(/clipboard|https?:|normalizedUrl|props\.url/i);
     expect(managerSource).toContain("Linking.createURL('/links/compose'");
     expect(managerSource).toContain('activityToken: token');
@@ -201,15 +212,31 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
   });
 
   test('reads clipboard only on the explicit activity deep link and opens the existing composer', () => {
+    const flowGuardIndex = composerRouteSource.indexOf('beginDynamicIslandClipboardFlow()');
+    const authorizationIndex = composerRouteSource.indexOf(
+      'await isAuthorizedSaveLinkActivityURL(params.activityToken)',
+    );
+    const eventConsumptionIndex = composerRouteSource.indexOf(
+      'markClipboardLinkChangeCountHandled(beforeRead?.changeCount)',
+    );
+    const clipboardReadIndex = composerRouteSource.indexOf('Clipboard.getUrlAsync()');
+
     expect(composerRouteSource).toContain("source === 'dynamic-island'");
-    expect(composerRouteSource).toContain('await isAuthorizedSaveLinkActivityURL(params.activityToken)');
+    expect(flowGuardIndex).toBeGreaterThanOrEqual(0);
+    expect(composerRouteSource.indexOf('useLayoutEffect')).toBeGreaterThanOrEqual(0);
+    expect(flowGuardIndex).toBeLessThan(authorizationIndex);
+    expect(authorizationIndex).toBeLessThan(eventConsumptionIndex);
+    expect(eventConsumptionIndex).toBeLessThan(clipboardReadIndex);
     expect(composerRouteSource).toContain('Clipboard.getUrlAsync()');
     expect(composerRouteSource).toContain('Clipboard.getStringAsync()');
     expect(composerRouteSource).toContain('prepareClipboardLinkCandidate');
     expect(composerRouteSource).toContain('markClipboardLinkChangeCountHandled');
     expect(composerRouteSource).toContain('<HomeContentComposer');
     expect(composerRouteSource).toContain('router.replace(\'/\')');
-    expect(clipboardHookSource).toContain('lastHandledChangeCountInMemory');
     expect(clipboardHookSource).toContain('export function markClipboardLinkChangeCountHandled');
+    expect(clipboardHookSource).toContain('clipboardLinkOfferState.hasExplicitFlow()');
+    expect(clipboardHookSource).toContain('restorePersisted(');
+    expect(clipboardHookSource).not.toContain('lastHandledChangeCountInMemory');
+    expect(composerRouteSource).not.toContain('markClipboardLinkChangeCountHandled(afterRead?.changeCount)');
   });
 });

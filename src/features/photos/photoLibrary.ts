@@ -9,6 +9,7 @@ import { ensureHomeFolderSchema } from '@/features/home-folders/folderSchemaMigr
 import { ensureChecklistSchema } from '@/features/home-content/checklistSchemaMigration';
 import { ensureSavedTagSchema } from '@/features/home-tags/tagSchemaMigration';
 import { ensureRecentlyDeletedSchema } from '@/features/home-trash/trashSchemaMigration';
+import { ensureSavedFavoritesSchema } from '@/features/home-content/favoritesSchemaMigration';
 import {
   readHomeFolderAssociation,
   restoreHomeFolderAssociation,
@@ -62,6 +63,7 @@ function getDatabase(): Promise<SQLiteDatabase> {
         await ensureChecklistSchema(database);
         await ensureSavedTagSchema(database);
         await ensureRecentlyDeletedSchema(database);
+        await ensureSavedFavoritesSchema(database);
         return database;
       })
       .catch((error: unknown) => {

@@ -46,6 +46,19 @@ describe('home link and text composer presentation contract', () => {
     expect(composerSource).not.toMatch(/HomeContentComposerSwiftUI\.ios/);
   });
 
+  test('shows the large creation title above the editor in native and fallback composers', () => {
+    expect(composeRouteSource).toMatch(/<NativeTextComposerView[\s\S]*?title="Adicionar texto"/);
+    expect(composeRouteSource).toMatch(/<TextComposerFallback[\s\S]*?title="Adicionar texto"/);
+    expect(composeRouteSource).toMatch(/accessibilityRole="header"[\s\S]*?theme\.typography\.largeTitle/);
+    expect(composeRouteSource).toMatch(/KeyboardAvoidingView[\s\S]*?behavior=\{Platform\.OS === 'ios' \? 'padding' : undefined\}/);
+    expect(swiftUIComposerSource).toMatch(/font\(\{ textStyle: 'largeTitle', design: 'rounded', weight: 'bold' \}\)/);
+    expect(swiftUIComposerSource).toMatch(/foregroundStyle\(theme\.colors\.textPrimary\)/);
+    expect(swiftUIComposerSource.indexOf('{title}')).toBeLessThan(
+      swiftUIComposerSource.indexOf('<VStack\n            alignment="leading"'),
+    );
+    expect(swiftUIComposerSource).toMatch(/alignment="leading"[\s\S]*?spacing=\{theme\.spacing\.md\}/);
+  });
+
   test('uses one full-frame interactive Glass surface and waits for Native Stack transition before focusing', () => {
     for (const nativeControl of [
       'Host',

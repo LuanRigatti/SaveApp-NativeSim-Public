@@ -29,6 +29,10 @@ import { easeGradient } from 'react-native-easing-gradient';
 import { PREMIUM_TITLE_ACCESSIBILITY_SWITCH_AT } from '@/components/premium/PremiumScreenCollapsibleTitleConstants';
 import { useAppSafeAreaInsets } from '@/providers';
 import MaskedView from '@/components/ui/MaskedViewCompat';
+import {
+  getProgressiveBlurOverlayColors,
+  progressiveBlurColorWithAlpha,
+} from '@/components/ui/progressive-blur';
 import { useAppTheme } from '@/theme';
 
 const MAX_BLUR_INTENSITY = 50;
@@ -40,16 +44,6 @@ const NATIVE_HEADER_PIPELINE_RAISE = 28;
 function setSharedScrollOffset(sharedValue: SharedValue<number>, offset: number) {
   'worklet';
   sharedValue.value = offset;
-}
-
-function colorWithAlpha(color: string, alpha: number): string {
-  const hex = color.match(/^#([\da-f]{6})$/i)?.[1];
-  if (!hex) return color;
-
-  const red = Number.parseInt(hex.slice(0, 2), 16);
-  const green = Number.parseInt(hex.slice(2, 4), 16);
-  const blue = Number.parseInt(hex.slice(4, 6), 16);
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
 const AnimatedBlurView =
@@ -110,7 +104,7 @@ export function ProgressiveCollapsibleScreen({
     },
     [scrollY],
   );
-  const opaqueGradientColor = colorWithAlpha(theme.colors.background, 0.99);
+  const opaqueGradientColor = progressiveBlurColorWithAlpha(theme.colors.background, 0.99);
   const solidGradientColor = theme.colors.background;
   const { colors, locations } = easeGradient({
     colorStops: {
@@ -268,10 +262,7 @@ export function ProgressiveCollapsibleScreen({
           >
             <BlurView intensity={15} tint={progressiveBlurTint} style={StyleSheet.absoluteFill} />
             <LinearGradient
-              colors={[
-                theme.colors.background,
-                colorWithAlpha(theme.colors.background, 0.2),
-              ]}
+              colors={getProgressiveBlurOverlayColors(theme.colors.background, 'top')}
               style={StyleSheet.absoluteFill}
             />
           </MaskedView>

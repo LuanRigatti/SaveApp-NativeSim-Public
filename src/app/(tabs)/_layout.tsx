@@ -5,6 +5,8 @@ import { Alert, Platform, View } from 'react-native';
 
 import { shouldKeepHomeToolbarItemsMounted } from '@/features/home-content/homeToolbarVisibility';
 import { useHomeViewMode } from '@/features/home-content/HomeViewModeProvider';
+import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider';
+import { HomeSearchProvider, useHomeSearch } from '@/features/home-content/HomeSearchProvider';
 import { useHomeSettingsSheet } from '@/features/home-content/HomeSettingsSheetProvider';
 import { createHomeFolderToolbarMenu } from '@/features/home-folders/homeFolderToolbarMenu';
 import { getHomeFolderIdFromPathname, getHomeFolderRoute } from '@/features/home-folders/homeFolderNavigation';
@@ -13,10 +15,15 @@ import { getHomeFolderAccentColor } from '@/features/home-folders/homeFolderColo
 import { useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
 import { getNativeCapabilities } from '@/platform/nativeCapabilities';
 import { useAppTheme } from '@/theme';
-import { triggerLightImpactHaptic, triggerTabHaptic } from '@/utils/haptics';
+import { supportsNativeHomeSearch } from '@/features/home-content/homeSearch';
+import { triggerLightImpactHaptic, triggerSelectionHaptic, triggerTabHaptic } from '@/utils/haptics';
 
 export default function TabsLayout() {
-  return <TabsLayoutContent />;
+  return (
+    <HomeSearchProvider>
+      <TabsLayoutContent />
+    </HomeSearchProvider>
+  );
 }
 
 function TabsLayoutContent() {
@@ -25,8 +32,11 @@ function TabsLayoutContent() {
   const shouldShowHomeToolbarItems = shouldKeepHomeToolbarItemsMounted(pathname);
   const router = useRouter();
   const { setViewMode, viewMode } = useHomeViewMode();
+  const { favoritesOnly, isReady: favoritesReady, setFavoritesOnly } = useHomeFavorites();
   const { authorizeFolder, folders, isFolderAuthorized, selectFolder, selectView, selection, view } = useLocalHomeFolders();
   const { openSettingsSheet } = useHomeSettingsSheet();
+  const { setSearchQuery } = useHomeSearch();
+  const supportsSearchBar = supportsNativeHomeSearch(Platform.OS, Platform.Version);
   const routeFolderId = getHomeFolderIdFromPathname(pathname);
   const selectedHomeFolderId = selection.kind === 'folder' ? selection.folderId : null;
   const currentFolderId = routeFolderId ?? selectedHomeFolderId;
@@ -47,9 +57,10 @@ function TabsLayoutContent() {
     router.push('/settings-sheet-fallback');
   }, [openSettingsSheet, router]);
   const handleHomeViewPress = useCallback((nextView: 'all-items' | 'unfiled' | 'folders') => {
+    setFavoritesOnly(false);
     selectView(nextView);
     if (routeFolderId) router.dismissTo('/');
-  }, [routeFolderId, router, selectView]);
+  }, [routeFolderId, router, selectView, setFavoritesOnly]);
   const handleFolderPress = useCallback((folderId: string) => {
     void (async () => {
       const outcome = await authorizeFolder(folderId);
@@ -59,18 +70,36 @@ function TabsLayoutContent() {
         }
         return;
       }
+      setFavoritesOnly(false);
       if (routeFolderId) {
         router.replace(getHomeFolderRoute(folderId));
         return;
       }
       selectFolder(folderId);
     })();
-  }, [authorizeFolder, isFolderAuthorized, routeFolderId, router, selectFolder]);
+  }, [authorizeFolder, isFolderAuthorized, routeFolderId, router, selectFolder, setFavoritesOnly]);
+  const handleFavoritesPress = useCallback(() => {
+    triggerSelectionHaptic();
+    setFavoritesOnly(!favoritesOnly);
+    if (pathname !== '/') router.dismissTo('/');
+  }, [favoritesOnly, pathname, router, setFavoritesOnly]);
 
   return (
     <View collapsable={false} style={{ flex: 1 }}>
       {Platform.OS === 'ios' ? (
         <>
+          {supportsSearchBar ? (
+            <Stack.SearchBar
+              allowToolbarIntegration
+              autoCapitalize="none"
+              hideWhenScrolling={false}
+              obscureBackground={false}
+              onCancelButtonPress={() => setSearchQuery('')}
+              onChangeText={(event) => setSearchQuery(event.nativeEvent.text)}
+              placeholder="Buscar"
+              placement="integrated"
+            />
+          ) : null}
           <Stack.Toolbar placement="left">
             <Stack.Toolbar.Button
               accessibilityLabel="Configurações"
@@ -81,6 +110,17 @@ function TabsLayoutContent() {
           </Stack.Toolbar>
           <Stack.Toolbar placement="right">
             <Stack.Toolbar.Spacer width={0} />
+            <Stack.Toolbar.Button
+              accessibilityHint="Mostra somente os conteúdos marcados como favoritos."
+              accessibilityLabel={favoritesOnly ? 'Desativar Favoritos' : 'Mostrar Favoritos'}
+              disabled={!favoritesReady}
+              hidden={!shouldShowHomeToolbarItems}
+              icon={favoritesOnly ? 'star.fill' : 'star'}
+              onPress={handleFavoritesPress}
+              separateBackground={false}
+              selected={favoritesOnly}
+              tintColor={theme.colors.primary}
+            />
             {createHomeFolderToolbarMenu({
               currentFolderId,
               currentLabel,

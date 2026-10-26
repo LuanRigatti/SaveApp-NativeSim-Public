@@ -137,6 +137,7 @@ export default function ComposeTextScreen() {
           onDraftChange={onDraftChange}
           onSave={(value: string) => void onSave(value)}
           shouldFocusInput={shouldFocusInput}
+          title="Adicionar texto"
         />
       ) : (
         <TextComposerFallback
@@ -146,6 +147,7 @@ export default function ComposeTextScreen() {
           onDraftChange={onDraftChange}
           onSave={onSave}
           shouldFocusInput={shouldFocusInput}
+          title="Adicionar texto"
         />
       )}
     </>
@@ -160,6 +162,7 @@ function NativeTextComposerView(props: {
   onDraftChange: (value: string) => void;
   onSave: (value: string) => void;
   shouldFocusInput: boolean;
+  title: string;
 }) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const NativeTextComposer = require('@/components/homeContent/HomeContentComposerSwiftUI.ios').default;
@@ -173,6 +176,7 @@ function TextComposerFallback({
   onDraftChange,
   onSave,
   shouldFocusInput,
+  title,
 }: {
   clearError: () => void;
   errorMessage: string | null;
@@ -180,6 +184,7 @@ function TextComposerFallback({
   onDraftChange: (value: string) => void;
   onSave: (value: string) => Promise<void>;
   shouldFocusInput: boolean;
+  title: string;
 }) {
   const { theme } = useAppTheme();
   const [text, setText] = useState('');
@@ -197,6 +202,18 @@ function TextComposerFallback({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1, gap: theme.spacing.md, padding: theme.spacing.lg }}
       >
+        <Text
+          accessibilityRole="header"
+          style={[
+            theme.typography.largeTitle,
+            {
+              color: theme.colors.textPrimary,
+              fontSize: theme.typography.largeTitle.fontSize + 2,
+            },
+          ]}
+        >
+          {title}
+        </Text>
         <TextInput
           accessibilityLabel="Texto para salvar"
           autoCapitalize="sentences"

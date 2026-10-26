@@ -1,5 +1,13 @@
-import { Circle, HStack, Image, Text, VStack } from '@expo/ui/swift-ui';
-import { font, foregroundStyle, frame, padding, resizable } from '@expo/ui/swift-ui/modifiers';
+import { HStack, Image, Text, VStack } from '@expo/ui/swift-ui';
+import {
+  clipShape,
+  font,
+  foregroundStyle,
+  frame,
+  multilineTextAlignment,
+  padding,
+  resizable,
+} from '@expo/ui/swift-ui/modifiers';
 import { createLiveActivity } from 'expo-widgets';
 
 type SaveLinkActivityProps = {
@@ -12,7 +20,10 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
   return {
     banner: (
       <HStack alignment="center" spacing={12} modifiers={[padding({ all: 16 })]}>
-        <Image uiImage={props.iconUri} modifiers={[resizable(), frame({ width: 34, height: 34 })]} />
+        <Image
+          uiImage={props.iconUri}
+          modifiers={[resizable(), frame({ width: 34, height: 34 }), clipShape('roundedRectangle', 8)]}
+        />
         <VStack alignment="leading" spacing={2}>
           <Text modifiers={[font({ weight: 'semibold' })]}>Salvar link</Text>
           <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle('#8E8E93')]}>Toque para abrir</Text>
@@ -20,27 +31,57 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
       </HStack>
     ),
     compactLeading: (
-      <Image uiImage={props.iconUri} modifiers={[resizable(), frame({ width: 20, height: 20 })]} />
+      <Image
+        uiImage={props.iconUri}
+        modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
+      />
     ),
-    compactTrailing: <Image systemName="circle.fill" size={7} color="#34C759" />,
     minimal: (
-      <Image uiImage={props.iconUri} modifiers={[resizable(), frame({ width: 20, height: 20 })]} />
+      <Image
+        uiImage={props.iconUri}
+        modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
+      />
     ),
     expandedLeading: (
-      <Image uiImage={props.iconUri} modifiers={[resizable(), frame({ width: 40, height: 40 })]} />
+      <Image
+        uiImage={props.iconUri}
+        modifiers={[
+          resizable(),
+          frame({ width: 44, height: 44 }),
+          clipShape('roundedRectangle', 10),
+          padding({ top: 8 }),
+        ]}
+      />
     ),
     expandedTrailing: (
-      <HStack alignment="center" spacing={5}>
-        <Circle modifiers={[frame({ width: 7, height: 7 }), foregroundStyle('#34C759')]} />
-        <Text modifiers={[font({ weight: 'semibold', textStyle: 'caption' })]}>Ativo</Text>
-      </HStack>
+      <Text
+        modifiers={[
+          font({ weight: 'semibold', textStyle: 'caption' }),
+          padding({ top: 8 }),
+        ]}
+      >
+        Ativo
+      </Text>
     ),
-    // Leave the TrueDepth sensor area intentionally empty.
-    expandedCenter: null,
-    expandedBottom: (
-      <VStack alignment="leading" spacing={3} modifiers={[padding({ top: 8, leading: 16, bottom: 14, trailing: 16 })]}>
-        <Text modifiers={[font({ weight: 'semibold', textStyle: 'headline' })]}>Salvar link</Text>
-        <Text modifiers={[font({ textStyle: 'subheadline' }), foregroundStyle('#8E8E93')]}>Toque para abrir</Text>
+    expandedCenter: (
+      <VStack alignment="center" spacing={2}>
+        <Text
+          modifiers={[
+            font({ weight: 'semibold', textStyle: 'headline' }),
+            multilineTextAlignment('center'),
+          ]}
+        >
+          Salvar link
+        </Text>
+        <Text
+          modifiers={[
+            font({ textStyle: 'subheadline' }),
+            foregroundStyle('#8E8E93'),
+            multilineTextAlignment('center'),
+          ]}
+        >
+          Toque para abrir
+        </Text>
       </VStack>
     ),
   };

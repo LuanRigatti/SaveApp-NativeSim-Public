@@ -46,6 +46,7 @@ type HomeContentComposerSwiftUIProps = {
   onDraftChange: (value: string) => void;
   onSave: (value: string) => void;
   shouldFocusInput: boolean;
+  title: string;
 };
 
 export default function HomeContentComposerSwiftUI({
@@ -56,6 +57,7 @@ export default function HomeContentComposerSwiftUI({
   onDraftChange,
   onSave,
   shouldFocusInput,
+  title,
 }: HomeContentComposerSwiftUIProps) {
   const { resolvedMode, theme } = useAppTheme();
   const { useGlass } = useVisualCapabilities();
@@ -107,12 +109,22 @@ export default function HomeContentComposerSwiftUI({
         ]}
       >
         <VStack
-          spacing={0}
+          alignment="leading"
+          spacing={theme.spacing.md}
           modifiers={[
             frame({ maxWidth: 560 }),
             padding({ horizontal: theme.spacing.md }),
           ]}
         >
+          <Text
+            modifiers={[
+              font({ textStyle: 'largeTitle', design: 'rounded', weight: 'bold' }),
+              foregroundStyle(theme.colors.textPrimary),
+              frame({ maxWidth: Infinity, alignment: 'leading' }),
+            ]}
+          >
+            {title}
+          </Text>
           <VStack
             alignment="leading"
             spacing={theme.spacing.sm}

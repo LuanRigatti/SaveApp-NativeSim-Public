@@ -1,12 +1,15 @@
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, View } from 'react-native';
 
 import { HomeContentComposer } from '@/components/homeContent/HomeContentComposer';
 import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentProvider';
 import { prepareClipboardLinkCandidate } from '@/features/home-content/clipboardLinkOffer';
-import { markClipboardLinkChangeCountHandled } from '@/features/home-content/useClipboardLinkOffer';
+import {
+  beginDynamicIslandClipboardFlow,
+  markClipboardLinkChangeCountHandled,
+} from '@/features/home-content/useClipboardLinkOffer';
 import { isAuthorizedSaveLinkActivityURL } from '@/features/dynamic-island/saveLinkActivityManager';
 import { useAppTheme } from '@/theme';
 import { getClipboardURLDetectionSnapshot } from '../../../modules/clipboard-url-detection/src';
@@ -20,6 +23,11 @@ export default function DynamicIslandLinkComposerRoute() {
   const [isPrepared, setIsPrepared] = useState(false);
   const [initialLink, setInitialLink] = useState<string | null>(null);
   const didPrepare = useRef(false);
+
+  useLayoutEffect(() => {
+    if (Platform.OS !== 'ios' || source !== 'dynamic-island') return undefined;
+    return beginDynamicIslandClipboardFlow();
+  }, [source]);
 
   useEffect(() => {
     if (!isReady || didPrepare.current) return;
@@ -39,7 +47,6 @@ export default function DynamicIslandLinkComposerRoute() {
             ? await Clipboard.getUrlAsync()
             : await Clipboard.getStringAsync();
           const afterRead = await getClipboardURLDetectionSnapshot();
-          markClipboardLinkChangeCountHandled(afterRead?.changeCount);
 
           if (clipboardText && beforeRead?.changeCount === afterRead?.changeCount) {
             const existingURLs = new Set(

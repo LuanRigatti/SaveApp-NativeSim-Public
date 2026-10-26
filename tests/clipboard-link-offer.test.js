@@ -10,6 +10,8 @@ describe('clipboard link offers', () => {
     expect(shouldOfferClipboardLink(true, false, 12, null)).toBe(true);
     expect(shouldOfferClipboardLink(false, true, 13, 12)).toBe(true);
     expect(shouldOfferClipboardLink(true, true, 12, 12)).toBe(false);
+    // The same URL copied again is a new event when the pasteboard change count changes.
+    expect(shouldOfferClipboardLink(true, false, 14, 12)).toBe(true);
     expect(shouldOfferClipboardLink(false, false, 14, 12)).toBe(false);
     expect(shouldOfferClipboardLink(true, false, -1, null)).toBe(false);
   });
@@ -60,6 +62,9 @@ describe('clipboard link offers', () => {
     expect(detectorSource).toContain('pasteboard.hasURLs');
     expect(detectorSource).not.toMatch(/(?:UIPasteboard\.general\.)?(?:string|url|urls|items|itemProviders|detectedValues)\b/);
     expect(hookSource).not.toMatch(/console\.(?:log|warn|error).*clipboard/i);
+    expect(hookSource).toContain('clipboardLinkOfferState.hasExplicitFlow()');
+    expect(hookSource).toContain('const hydrationRevision = clipboardLinkOfferState.getRevision()');
+    expect(hookSource).toContain('clipboardLinkOfferState.restorePersisted(');
   });
 
   test('limits automatic offers to an eligible Home and passes the normalized candidate into the existing composer', () => {
