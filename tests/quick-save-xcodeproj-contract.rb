@@ -36,7 +36,7 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     @temporary_roots.each { |root| FileUtils.remove_entry(root) if File.exist?(root) }
   end
 
-  def test_replaces_renderer_on_only_the_matching_native_framework_target_with_nested_group_paths
+  def test_replaces_renderer_on_only_the_matching_static_library_target_with_nested_group_paths
     [1, 2, 3].each do |group_layout|
       fixture = create_fixture(group_layout: group_layout)
       unrelated_before = source_file_paths(fixture.unrelated_target)
@@ -50,7 +50,7 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
       assert_project_has_exact_quick_save_sources(fixture)
       assert_equal unrelated_before, source_file_paths(fixture.unrelated_target)
       assert_equal 1, fixture.project.native_targets.count { |target| target.name == 'ExpoWidgets' }
-      assert_equal 'com.apple.product-type.framework', fixture.widgets_target.product_type
+      assert_equal 'com.apple.product-type.library.static', fixture.widgets_target.product_type
       assert_no_orphan_build_files(fixture.project)
 
       fixture.project.save
@@ -61,18 +61,32 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     end
   end
 
-  def test_is_idempotent_after_serializing_and_reopening_the_real_project
-    fixture = create_fixture
+  def test_accepts_framework_target_and_preserves_its_product_type
+    fixture = create_fixture(widgets_product: :framework)
+    assert_equal 'com.apple.product-type.framework', fixture.widgets_target.product_type
+
     saveapp_configure_expo_widgets_quick_save(installer_for(fixture.project), fixture.root)
-    fixture.project.save
-    before = File.binread(project_file_path(fixture.project))
 
-    reopened = Xcodeproj::Project.open(fixture.project.path)
-    saveapp_configure_expo_widgets_quick_save(installer_for(reopened), fixture.root)
-    reopened.save
+    assert_project_has_exact_quick_save_sources(fixture)
+    assert_no_orphan_build_files(fixture.project)
+  end
 
-    assert_equal before, File.binread(project_file_path(reopened))
-    assert_project_has_exact_quick_save_sources(fixture, reopened)
+  def test_is_idempotent_after_serializing_and_reopening_both_supported_product_types
+    { static_library: 'com.apple.product-type.library.static', framework: 'com.apple.product-type.framework' }.each do |product, expected_type|
+      fixture = create_fixture(widgets_product: product)
+      assert_equal expected_type, fixture.widgets_target.product_type
+      saveapp_configure_expo_widgets_quick_save(installer_for(fixture.project), fixture.root)
+      fixture.project.save
+      before = File.binread(project_file_path(fixture.project))
+
+      reopened = Xcodeproj::Project.open(fixture.project.path)
+      saveapp_configure_expo_widgets_quick_save(installer_for(reopened), fixture.root)
+      reopened.save
+
+      assert_equal before, File.binread(project_file_path(reopened))
+      assert_project_has_exact_quick_save_sources(fixture, reopened)
+      assert_no_orphan_build_files(reopened)
+    end
   end
 
   def test_accepts_a_complete_existing_patch_and_rejects_a_partial_patch
@@ -117,17 +131,50 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     assert_raises_message(RuntimeError, /exactly one PBXNativeTarget named ExpoWidgets; found 2/) do
       saveapp_configure_expo_widgets_quick_save(installer_for(ambiguous.project), ambiguous.root)
     end
+
+    aggregate_and_native = create_fixture(aggregate_named_expo_widgets: true)
+    assert_raises_message(RuntimeError, /non-native target\(s\) also named ExpoWidgets/) do
+      saveapp_configure_expo_widgets_quick_save(installer_for(aggregate_and_native.project), aggregate_and_native.root)
+    end
   end
 
-  def test_rejects_an_aggregate_or_non_framework_target_named_expowidgets
+  def test_rejects_an_aggregate_or_unapproved_product_type_named_expowidgets
     aggregate_only = create_fixture(include_widgets_target: false, aggregate_named_expo_widgets: true)
     assert_raises_message(RuntimeError, /PBXNativeTarget named ExpoWidgets; found 0/) do
       saveapp_configure_expo_widgets_quick_save(installer_for(aggregate_only.project), aggregate_only.root)
     end
 
-    wrong_product = create_fixture(widgets_product: :application)
-    assert_raises_message(RuntimeError, /expected ExpoWidgets to be the ExpoWidgets framework target/) do
-      saveapp_configure_expo_widgets_quick_save(installer_for(wrong_product.project), wrong_product.root)
+    {
+      application: 'com.apple.product-type.application',
+      app_extension: 'com.apple.product-type.app-extension',
+      bundle: 'com.apple.product-type.bundle'
+    }.each do |product, product_type|
+      wrong_product = create_fixture(widgets_product: product)
+      assert_equal product_type, wrong_product.widgets_target.product_type
+      assert_raises_message(RuntimeError, /static library or framework target/) do
+        saveapp_configure_expo_widgets_quick_save(installer_for(wrong_product.project), wrong_product.root)
+      end
+    end
+  end
+
+  def test_ignores_a_similarly_named_aggregate_target
+    fixture = create_fixture(similar_aggregate_named_expowidgets: true)
+    aggregate = fixture.project.targets.find { |target| target.name == 'Pods-ExpoWidgets' }
+    assert_instance_of Xcodeproj::Project::Object::PBXAggregateTarget, aggregate
+
+    saveapp_configure_expo_widgets_quick_save(installer_for(fixture.project), fixture.root)
+
+    assert_same fixture.widgets_target, fixture.project.native_targets.find { |target| target.name == 'ExpoWidgets' }
+    assert_project_has_exact_quick_save_sources(fixture)
+  end
+
+  def test_fails_closed_when_the_matching_target_has_no_compile_sources_phase
+    fixture = create_fixture
+    source_phase = fixture.widgets_target.build_phases.grep(Xcodeproj::Project::Object::PBXSourcesBuildPhase).fetch(0)
+    fixture.widgets_target.build_phases.delete(source_phase)
+
+    assert_raises_message(RuntimeError, /expected one existing Compile Sources phase in ExpoWidgets; found 0/) do
+      saveapp_configure_expo_widgets_quick_save(installer_for(fixture.project), fixture.root)
     end
   end
 
@@ -197,7 +244,8 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     include_widgets_target: true,
     duplicate_widgets_target: false,
     aggregate_named_expo_widgets: false,
-    widgets_product: :framework,
+    similar_aggregate_named_expowidgets: false,
+    widgets_product: :static_library,
     include_renderer_build_file: true,
     include_quick_save_sources: false
   )
@@ -226,11 +274,12 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
                       else
                         nil
                       end
+    project.new_aggregate_target('Pods-ExpoWidgets', [], :ios, '16.4') if similar_aggregate_named_expowidgets
 
     widgets_target = if include_widgets_target
                        project.new_target(widgets_product, 'ExpoWidgets', :ios, '16.4')
                      end
-    project.new_target(:framework, 'ExpoWidgets', :ios, '16.4') if duplicate_widgets_target
+    project.new_target(:static_library, 'ExpoWidgets', :ios, '16.4') if duplicate_widgets_target
     unrelated_target = project.new_target(:framework, 'UnrelatedPod', :ios, '16.4')
     widgets_target.new_shell_script_build_phase('Fixture Shell Phase') if widgets_target
 

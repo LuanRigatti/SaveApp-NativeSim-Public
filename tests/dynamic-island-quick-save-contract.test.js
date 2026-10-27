@@ -48,7 +48,10 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSavePodHelper).toContain('project.native_targets.select');
     expect(quickSavePodHelper).toContain('PBXSourcesBuildPhase');
     expect(quickSavePodHelper).toContain('file_ref.real_path');
-    expect(quickSavePodHelper).toContain('target.product_type ==');
+    expect(quickSavePodHelper).toContain('SAVEAPP_EXPO_WIDGETS_ALLOWED_PRODUCT_TYPES');
+    expect(quickSavePodHelper).toContain('com.apple.product-type.library.static');
+    expect(quickSavePodHelper).toContain('com.apple.product-type.framework');
+    expect(quickSavePodHelper).toContain('non_native_targets.empty?');
     expect(quickSavePodHelper).toContain('phase.add_file_reference(file_ref, true)');
     expect(quickSavePodHelper).toContain('phase.remove_build_file(build_file)');
     expect(quickSavePodHelper).toContain('File.realpath');
@@ -75,7 +78,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveButton.match(/struct\s+LiveActivityButtonView\b/g)).toHaveLength(1);
   });
 
-  test('registers framework intents with the SaveApp app target and verifies generated target membership', () => {
+  test('registers ExpoWidgets module intents with the SaveApp app target and verifies generated target membership', () => {
     expect(quickSaveIntent).toContain('public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage');
     expect(quickSaveAppIntentsPackage).toContain('struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage');
     expect(quickSaveAppIntentsPackage).toContain('ExpoWidgetsQuickSaveAppIntentsPackage.self');

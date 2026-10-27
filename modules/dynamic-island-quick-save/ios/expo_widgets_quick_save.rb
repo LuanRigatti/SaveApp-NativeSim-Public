@@ -3,6 +3,10 @@ require 'pathname'
 
 SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.23'.freeze
 SAVEAPP_EXPO_WIDGETS_POD_TARGET = 'ExpoWidgets'.freeze
+SAVEAPP_EXPO_WIDGETS_ALLOWED_PRODUCT_TYPES = [
+  'com.apple.product-type.library.static',
+  'com.apple.product-type.framework'
+].freeze
 SAVEAPP_EXPO_WIDGETS_RENDERER = 'node_modules/expo-widgets/ios/Widgets/Buttons.swift'.freeze
 SAVEAPP_QUICK_SAVE_SOURCES = [
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
@@ -31,8 +35,15 @@ def saveapp_quick_save_native_target(project)
   end
 
   target = targets.first
-  unless target.product_type == 'com.apple.product-type.framework'
-    raise "SaveApp quick-save expected #{SAVEAPP_EXPO_WIDGETS_POD_TARGET} to be the ExpoWidgets framework target; found product type #{target.product_type.inspect}."
+  non_native_targets = project.targets.select do |candidate|
+    candidate.name == SAVEAPP_EXPO_WIDGETS_POD_TARGET && !candidate.is_a?(Xcodeproj::Project::Object::PBXNativeTarget)
+  end
+  unless non_native_targets.empty?
+    raise "SaveApp quick-save found non-native target(s) also named #{SAVEAPP_EXPO_WIDGETS_POD_TARGET}; refusing an ambiguous CocoaPods target."
+  end
+
+  unless SAVEAPP_EXPO_WIDGETS_ALLOWED_PRODUCT_TYPES.include?(target.product_type)
+    raise "SaveApp quick-save expected #{SAVEAPP_EXPO_WIDGETS_POD_TARGET} to be a static library or framework target; found product type #{target.product_type.inspect}."
   end
   target
 end
