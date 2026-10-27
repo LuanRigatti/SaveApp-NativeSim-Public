@@ -34,7 +34,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSavePlugin).toContain("'ios'");
     expect(quickSavePlugin).toContain('expo_widgets_post_install(installer)');
     expect(quickSavePlugin).toContain('saveapp_configure_expo_widgets_quick_save');
-    expect(quickSavePlugin).toContain('refusing an incomplete native integration');
+    expect(quickSavePlugin).toContain('refusing an incomplete or ambiguous native integration');
     expect(quickSavePlugin).not.toMatch(/path\.(?:join|resolve)\([^)]*node_modules|writeFileSync\([^,\n]*node_modules/);
     expect(quickSavePodHelper).toContain("SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.23'");
     expect(quickSavePodHelper).toContain('Widgets/Buttons.swift');

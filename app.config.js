@@ -41,6 +41,9 @@ module.exports = {
     plugins: [
       'expo-router',
       'expo-asset',
+      // Expo composes same-type mods in reverse declaration order. The Quick Save
+      // Podfile mod must run after expo-widgets has installed its post_install hook.
+      './plugins/withSaveLinkQuickSave',
       [
         'expo-widgets',
         {
@@ -49,7 +52,6 @@ module.exports = {
           frequentUpdates: false,
         },
       ],
-      './plugins/withSaveLinkQuickSave',
       [
         'expo-image-picker',
         {

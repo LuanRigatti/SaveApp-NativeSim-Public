@@ -5,6 +5,28 @@ const { withDangerousMod } = require('expo/config-plugins');
 const PODFILE_REQUIRE = "require_relative '../modules/dynamic-island-quick-save/ios/expo_widgets_quick_save'";
 const POST_INSTALL_CALL = 'saveapp_configure_expo_widgets_quick_save(installer, File.expand_path(\'..\', __dir__))';
 const EXPO_WIDGETS_HOOK = 'expo_widgets_post_install(installer)';
+const POST_INSTALL_HEADER = 'post_install do |installer|';
+
+function countOccurrences(source, value) {
+  return source.split(value).length - 1;
+}
+
+function assertPostInstallContract(podfile) {
+  const postInstallBlocks = podfile.match(/^\s*post_install\b[^\r\n]*/gm) ?? [];
+  if (postInstallBlocks.length !== 1 || !postInstallBlocks[0].trim().startsWith(POST_INSTALL_HEADER)) {
+    throw new Error('SaveApp quick-save requires exactly one ExpoWidgets-compatible post_install block.');
+  }
+
+  if (countOccurrences(podfile, EXPO_WIDGETS_HOOK) !== 1) {
+    throw new Error('SaveApp quick-save requires exactly one expo-widgets post_install hook; refusing an incomplete or ambiguous native integration.');
+  }
+
+  const postInstallIndex = podfile.indexOf(POST_INSTALL_HEADER);
+  const widgetsHookIndex = podfile.indexOf(EXPO_WIDGETS_HOOK);
+  if (postInstallIndex < 0 || widgetsHookIndex < postInstallIndex) {
+    throw new Error('SaveApp quick-save found the expo-widgets hook outside its post_install block.');
+  }
+}
 
 /**
  * Routes only the explicitly tagged Save button to a native LiveActivityIntent.
@@ -21,21 +43,34 @@ function withSaveLinkQuickSave(config) {
       }
 
       let podfile = fs.readFileSync(podfilePath, 'utf8');
-      if (!podfile.includes(PODFILE_REQUIRE)) {
-        podfile = `${PODFILE_REQUIRE}\n${podfile}`;
+      assertPostInstallContract(podfile);
+
+      const requireCount = countOccurrences(podfile, PODFILE_REQUIRE);
+      const callCount = countOccurrences(podfile, POST_INSTALL_CALL);
+      if (requireCount > 1 || callCount > 1) {
+        throw new Error('SaveApp quick-save Ruby helper integration is duplicated; refusing an ambiguous CocoaPods patch.');
+      }
+      if (callCount === 1 && requireCount !== 1) {
+        throw new Error('SaveApp quick-save found a partial Ruby helper integration; refusing an incomplete CocoaPods patch.');
       }
 
-      const callCount = podfile.split(POST_INSTALL_CALL).length - 1;
       if (callCount === 0) {
-        if (!podfile.includes(EXPO_WIDGETS_HOOK)) {
-          throw new Error('SaveApp quick-save could not find expo-widgets post_install hook; refusing an incomplete native integration.');
+        if (requireCount === 0) {
+          podfile = `${PODFILE_REQUIRE}\n${podfile}`;
         }
         podfile = podfile.replace(
           EXPO_WIDGETS_HOOK,
           `${EXPO_WIDGETS_HOOK}\n  ${POST_INSTALL_CALL}`,
         );
-      } else if (callCount !== 1) {
-        throw new Error('SaveApp quick-save post_install hook is duplicated; refusing an ambiguous CocoaPods patch.');
+      }
+
+      assertPostInstallContract(podfile);
+      if (
+        countOccurrences(podfile, PODFILE_REQUIRE) !== 1 ||
+        countOccurrences(podfile, POST_INSTALL_CALL) !== 1 ||
+        podfile.indexOf(POST_INSTALL_CALL) <= podfile.indexOf(EXPO_WIDGETS_HOOK)
+      ) {
+        throw new Error('SaveApp quick-save could not verify the complete helper call after the expo-widgets hook.');
       }
 
       fs.writeFileSync(podfilePath, podfile, 'utf8');
