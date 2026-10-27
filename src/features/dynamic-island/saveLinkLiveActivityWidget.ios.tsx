@@ -1,4 +1,4 @@
-import { HStack, Image, Text, VStack } from '@expo/ui/swift-ui';
+import { Button, HStack, Image, Text, VStack } from '@expo/ui/swift-ui';
 import {
   clipShape,
   font,
@@ -12,10 +12,29 @@ import { createLiveActivity } from 'expo-widgets';
 
 type SaveLinkActivityProps = {
   iconUri: string;
+  quickSaveStatus?: 'ready' | 'processing' | 'saved' | 'alreadySaved' | 'invalid' | 'failed';
 };
 
 function SaveLinkActivity(props: SaveLinkActivityProps) {
   'widget';
+
+  const quickSaveLabels = {
+    ready: 'Salvar link',
+    processing: 'Salvando link',
+    saved: 'Link salvo',
+    alreadySaved: 'Link já salvo',
+    invalid: 'Nenhum link válido',
+    failed: 'Erro ao salvar link',
+  } as const;
+  const quickSaveSymbols = {
+    ready: 'arrow.down.to.line',
+    processing: 'hourglass',
+    saved: 'checkmark',
+    alreadySaved: 'checkmark',
+    invalid: 'exclamationmark',
+    failed: 'arrow.clockwise',
+  } as const;
+  const quickSaveStatus = props.quickSaveStatus ?? 'ready';
 
   return {
     banner: (
@@ -53,16 +72,6 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
         ]}
       />
     ),
-    expandedTrailing: (
-      <Text
-        modifiers={[
-          font({ weight: 'semibold', textStyle: 'caption' }),
-          padding({ top: 8 }),
-        ]}
-      >
-        Ativo
-      </Text>
-    ),
     expandedCenter: (
       <VStack alignment="center" spacing={2}>
         <Text
@@ -80,9 +89,17 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
             multilineTextAlignment('center'),
           ]}
         >
-          Toque para abrir
+          Toque para salvar
         </Text>
       </VStack>
+    ),
+    expandedTrailing: (
+      <Button
+        // The native renderer uses this label for accessibility only.
+        label={quickSaveLabels[quickSaveStatus]}
+        systemImage={quickSaveSymbols[quickSaveStatus]}
+        target="saveapp.quickSave"
+      />
     ),
   };
 }

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 
 import { getClipboardURLDetectionSnapshot } from '../../../modules/clipboard-url-detection/src';
+import { wasClipboardChangeHandledByQuickSave } from './clipboardLinkOffer';
 import { clipboardLinkOfferState } from './clipboardLinkOfferState';
 
 const LAST_HANDLED_CHANGE_COUNT_KEY = '@saveapp/clipboard-link-offer-change-count-v1';
@@ -76,6 +77,16 @@ export function useClipboardLinkOffer({
         clipboardLinkOfferState.hasExplicitFlow() ||
         isReadingClipboardRef.current
       ) {
+        return;
+      }
+
+      if (wasClipboardChangeHandledByQuickSave(
+        snapshot.changeCount,
+        snapshot.quickSaveHandledChangeCount,
+        snapshot.systemUptime,
+        snapshot.quickSaveHandledSystemUptime,
+      )) {
+        markClipboardLinkChangeCountHandled(snapshot.changeCount);
         return;
       }
 

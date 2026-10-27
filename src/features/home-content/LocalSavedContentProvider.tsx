@@ -1,4 +1,4 @@
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import {
   createContext,
   useCallback,
@@ -63,6 +63,13 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
     setContents(await listSavedHomeContent());
     setIsReady(true);
   }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refresh().catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, [refresh]);
 
   useEffect(() => {
     void initialize().catch(() => undefined);

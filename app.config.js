@@ -49,6 +49,7 @@ module.exports = {
           frequentUpdates: false,
         },
       ],
+      './plugins/withSaveLinkQuickSave',
       [
         'expo-image-picker',
         {

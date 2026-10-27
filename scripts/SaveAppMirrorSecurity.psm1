@@ -95,7 +95,11 @@ function Test-SaveAppMirrorBlockedName {
     'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec',
     'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift',
     'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec',
-    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift'
+    'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
+    'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'
   )
   if ($approvedModuleIosFiles -contains $path) { return $false }
 
@@ -116,6 +120,11 @@ function Get-SaveAppMirrorAllowlist {
     'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec',
     'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
     'modules/clipboard-url-detection/src/index.ts',
+    'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+    'plugins/withSaveLinkQuickSave.js',
     'plugins/withStarterToolbarSync.js',
     'scripts/patch-expo-ui-bottom-sheet.js','scripts/patch-expo-module-scan-timeout.js',
     'scripts/verify-saveapp-native.js','scripts/verify-saveapp-simulator-build-settings.js',
@@ -131,7 +140,12 @@ function Get-SaveAppMirrorAllowlist {
   $requiredFiles = @(
     'scripts/SaveAppMirrorSecurity.psm1',
     'scripts/Test-SaveAppMirrorSnapshot.ps1',
-    'scripts/verify-saveapp-simulator-build-settings.js'
+    'scripts/verify-saveapp-simulator-build-settings.js',
+    'plugins/withSaveLinkQuickSave.js',
+    'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'
   )
   foreach ($required in $requiredFiles) {
     if ($allowedFiles -notcontains $required) {

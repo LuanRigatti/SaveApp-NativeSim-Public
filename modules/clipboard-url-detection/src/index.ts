@@ -5,6 +5,9 @@ export type ClipboardURLDetectionSnapshot = {
   changeCount: number;
   hasURLItem: boolean;
   hasProbableWebURL: boolean;
+  systemUptime?: number;
+  quickSaveHandledChangeCount?: number;
+  quickSaveHandledSystemUptime?: number;
 };
 
 type ClipboardURLDetectionNativeModule = {
@@ -44,6 +47,13 @@ export async function getClipboardURLDetectionSnapshot(): Promise<ClipboardURLDe
       changeCount: result.changeCount as number,
       hasURLItem: result.hasURLItem,
       hasProbableWebURL: result.hasProbableWebURL,
+      ...(typeof result.systemUptime === 'number' ? { systemUptime: result.systemUptime } : {}),
+      ...(Number.isSafeInteger(result.quickSaveHandledChangeCount)
+        ? { quickSaveHandledChangeCount: result.quickSaveHandledChangeCount as number }
+        : {}),
+      ...(typeof result.quickSaveHandledSystemUptime === 'number'
+        ? { quickSaveHandledSystemUptime: result.quickSaveHandledSystemUptime }
+        : {}),
     };
   } catch {
     return null;

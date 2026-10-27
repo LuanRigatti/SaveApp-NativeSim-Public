@@ -45,6 +45,7 @@ if (pkg.name !== 'saveapp') fail('package.json must identify the independent Sav
 const checks = [
   ['src/app/(tabs)/_layout.tsx', 'expo-router/native-tabs'],
   ['plugins/withStarterToolbarSync.js', 'StarterToolbarMorphExperimentVariant'],
+  ['plugins/withSaveLinkQuickSave.js', 'saveapp_configure_expo_widgets_quick_save'],
   ['scripts/patch-expo-ui-bottom-sheet.js', 'ignoresSafeArea(.container, edges: .bottom)'],
   ['.github/workflows/swift-preflight.yml', 'CODE_SIGNING_ALLOWED=NO'],
   ['.github/workflows/native-sim.yml', 'native-sim-template-version: 20'],
@@ -162,6 +163,11 @@ if (!fs.existsSync(mirrorSecurityPath) || !fs.existsSync(mirrorScriptPath) || !f
     "'scripts/SaveAppMirrorSecurity.psm1'",
     "'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec'",
     "'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec'",
+    "'plugins/withSaveLinkQuickSave.js'",
+    "'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb'",
+    "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift'",
+    "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift'",
+    "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'",
   ];
   if (requiredMirrorDependencies.some((marker) => !mirrorSecuritySource.includes(marker))) {
     fail('the exact mirror allowlist omits a required NativeSim helper or local module dependency');
@@ -318,6 +324,9 @@ if (resolvedAppConfig) {
   const widgetsPlugin = resolvedAppConfig.plugins?.find(
     (plugin) => Array.isArray(plugin) && plugin[0] === 'expo-widgets',
   );
+  if (!resolvedAppConfig.plugins?.includes('./plugins/withSaveLinkQuickSave')) {
+    fail('app.config.js must register the prebuild-persistent ExpoWidgets quick-save renderer plugin');
+  }
   const widgetsOptions = widgetsPlugin?.[1];
   if (
     !widgetsOptions ||
@@ -328,6 +337,43 @@ if (resolvedAppConfig) {
   ) {
     fail('expo-widgets must use the SaveApp App Group without APNs, frequent updates, or unrelated widgets');
   }
+}
+
+const quickSaveNativeSources = [
+  'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
+  'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+  'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
+  'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+];
+for (const relativePath of quickSaveNativeSources) {
+  if (!fs.existsSync(path.join(root, relativePath))) {
+    fail('missing prebuild-persistent Dynamic Island quick-save source: ' + relativePath);
+  }
+}
+const quickSaveIntentSource = fs.readFileSync(path.join(root, quickSaveNativeSources[1]), 'utf8');
+const quickSaveSQLiteSource = fs.readFileSync(path.join(root, quickSaveNativeSources[3]), 'utf8');
+const quickSaveButtonSource = fs.readFileSync(path.join(root, quickSaveNativeSources[2]), 'utf8');
+const widgetsRendererPath = path.join(root, 'node_modules/expo-widgets/ios/Widgets/ViewRenderer.swift');
+const widgetsLiveActivityPath = path.join(root, 'node_modules/expo-widgets/ios/Widgets/WidgetLiveActivity.swift');
+if (!fs.existsSync(widgetsRendererPath) || !fs.existsSync(widgetsLiveActivityPath)) {
+  fail('the installed expo-widgets renderer contract is unavailable for quick-save validation');
+}
+const widgetsRendererSource = fs.readFileSync(widgetsRendererPath, 'utf8');
+const widgetsLiveActivitySource = fs.readFileSync(widgetsLiveActivityPath, 'utf8');
+if (
+  !quickSaveIntentSource.includes('LiveActivityIntent') ||
+  !quickSaveIntentSource.includes('UIPasteboard.general') ||
+  !quickSaveIntentSource.includes('insertOrFindExisting(normalized)') ||
+  !quickSaveButtonSource.includes('props.target == saveAppQuickSaveTarget') ||
+  !quickSaveButtonSource.includes('SaveLinkQuickSaveIntent(activityID: props.source)') ||
+  !widgetsRendererSource.includes('buttonProps.source = name') ||
+  !widgetsLiveActivitySource.includes('WidgetsDynamicView(name: context.activityID') ||
+  !quickSaveSQLiteSource.includes('saveapp-photos.db') ||
+  !quickSaveSQLiteSource.includes('BEGIN IMMEDIATE;') ||
+  quickSaveSQLiteSource.indexOf('BEGIN IMMEDIATE;') > quickSaveSQLiteSource.indexOf('try verifyCompatibleSchema(database)') ||
+  quickSaveSQLiteSource.includes('SQLITE_OPEN_CREATE')
+) {
+  fail('quick-save contract must validate the SDK 58 Live Activity target route, explicit clipboard action, and locked transaction on the existing SQLite database');
 }
 
 const appConfigSource = fs.readFileSync(appConfigPath, 'utf8');

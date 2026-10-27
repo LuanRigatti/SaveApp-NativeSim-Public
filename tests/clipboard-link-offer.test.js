@@ -3,6 +3,7 @@ const { readFileSync } = require('node:fs');
 const {
   prepareClipboardLinkCandidate,
   shouldOfferClipboardLink,
+  wasClipboardChangeHandledByQuickSave,
 } = require('../src/features/home-content/clipboardLinkOffer');
 
 describe('clipboard link offers', () => {
@@ -14,6 +15,14 @@ describe('clipboard link offers', () => {
     expect(shouldOfferClipboardLink(true, false, 14, 12)).toBe(true);
     expect(shouldOfferClipboardLink(false, false, 14, 12)).toBe(false);
     expect(shouldOfferClipboardLink(true, false, -1, null)).toBe(false);
+  });
+
+  test('suppresses only the same quick-saved pasteboard event and ignores stale markers after reboot', () => {
+    expect(wasClipboardChangeHandledByQuickSave(21, 21, 800, 799.5)).toBe(true);
+    expect(wasClipboardChangeHandledByQuickSave(22, 21, 800, 799.5)).toBe(false);
+    expect(wasClipboardChangeHandledByQuickSave(21, 21, 2, 799.5)).toBe(false);
+    expect(wasClipboardChangeHandledByQuickSave(21, 21, undefined, 799.5)).toBe(false);
+    expect(wasClipboardChangeHandledByQuickSave(-1, -1, 800, 799)).toBe(false);
   });
 
   test('normalizes HTTP and HTTPS candidates and detects duplicates before opening the composer', () => {

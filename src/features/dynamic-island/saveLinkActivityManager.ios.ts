@@ -11,7 +11,7 @@ import {
   writeActivityLinkAuthorization,
 } from './activityLinkAuthorization';
 
-type SaveLinkActivityProps = { iconUri: string };
+type SaveLinkActivityProps = { iconUri: string; quickSaveStatus: 'ready' };
 type NativeActivity = {
   end: (dismissalPolicy: 'immediate') => Promise<void>;
   getId: () => string;
@@ -80,7 +80,7 @@ const reconcileInstances = createActivityReconciler({
     });
     let activity: StartedActivity | null = null;
     try {
-      activity = getActivityFactory().start({ iconUri }, url);
+      activity = getActivityFactory().start({ iconUri, quickSaveStatus: 'ready' }, url);
       await writeActivityLinkAuthorization({ token, activityId: activity.getId() });
     } catch (error) {
       if (activity) await activity.end('immediate').catch(() => undefined);

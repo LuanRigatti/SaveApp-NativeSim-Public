@@ -151,7 +151,9 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
 
   test('checks the App Group icon location before ActivityKit and preserves its native failure', () => {
     const iconPreparationIndex = managerSource.indexOf('const iconUri = await getSharedAppIconUri();');
-    const activityStartIndex = managerSource.indexOf('activity = getActivityFactory().start({ iconUri }, url);');
+    const activityStartIndex = managerSource.indexOf(
+      "activity = getActivityFactory().start({ iconUri, quickSaveStatus: 'ready' }, url);",
+    );
 
     expect(iconPreparationIndex).toBeGreaterThanOrEqual(0);
     expect(activityStartIndex).toBeGreaterThan(iconPreparationIndex);
@@ -180,7 +182,10 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
 
   test('keeps Live Activity payload free of saved URLs and reserves the sensor region', () => {
     const expandedLeading = layoutSource.match(
-      /expandedLeading: \(([\s\S]*?)\n\s*\),\n\s*expandedTrailing:/,
+      /expandedLeading: \(([\s\S]*?)\n\s*\),\n\s*expandedCenter:/,
+    )?.[1] ?? '';
+    const expandedCenter = layoutSource.match(
+      /expandedCenter: \(([\s\S]*?)\n\s*\),\n\s*\};/,
     )?.[1] ?? '';
 
     expect(layoutSource).toContain("'widget'");
@@ -188,6 +193,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource).toContain('minimal:');
     expect(layoutSource).toContain('expandedLeading:');
     expect(layoutSource).toContain('expandedTrailing:');
+    expect(layoutSource).toContain('target="saveapp.quickSave"');
     expect(layoutSource).toContain('expandedCenter: (');
     expect(layoutSource).not.toContain('compactTrailing:');
     expect(layoutSource).not.toContain('expandedBottom:');
@@ -197,8 +203,10 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(expandedLeading).toContain('padding({ top: 8 })');
     expect(layoutSource).toContain("multilineTextAlignment('center')");
     expect(layoutSource).toContain('Salvar link');
+    expect(expandedCenter).toContain('Toque para salvar');
+    expect(expandedCenter).not.toContain('Toque para abrir');
     expect(layoutSource).toContain('Toque para abrir');
-    expect(layoutSource).toContain('Ativo');
+    expect(layoutSource).not.toContain('Ativo');
     expect(layoutSource).not.toContain('34C759');
     expect(layoutSource).not.toContain('circle.fill');
     expect(layoutSource).not.toMatch(/clipboard|https?:|normalizedUrl|props\.url/i);
