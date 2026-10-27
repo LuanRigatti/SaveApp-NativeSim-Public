@@ -48,10 +48,35 @@ jobs:
           npm test -- --runInBand
           node scripts/verify-saveapp-native.js
 
+      - name: Verify Quick Save Ruby, Xcodeproj fixtures, and Swift syntax
+        run: |
+          set -euo pipefail
+          ruby -rxcodeproj -e 'puts "Xcodeproj #{Xcodeproj::VERSION}"'
+          ruby -c modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb
+          ruby -c tests/quick-save-xcodeproj-contract.rb
+          ruby tests/quick-save-xcodeproj-contract.rb
+          for source in \
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift \
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift \
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift \
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift \
+            node_modules/expo-widgets/ios/Widgets/Buttons.swift; do
+            swiftc -frontend -parse "$source"
+          done
+
       - name: Generate iOS project and install CocoaPods
         run: |
+          set -euo pipefail
           npx expo prebuild --platform ios --no-install
+          node scripts/verify-saveapp-quick-save-app-intents.js \
+            ios/SaveApp.xcodeproj/project.pbxproj .
           npx pod-install ios
+
+      - name: Verify Quick Save sources in the generated Pods project
+        run: |
+          set -euo pipefail
+          ruby tests/quick-save-xcodeproj-contract.rb \
+            --verify-generated ios/Pods/Pods.xcodeproj .
 
       - name: Verify generated ExpoWidgets Live Activity target and App Group
         run: |

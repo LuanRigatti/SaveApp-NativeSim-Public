@@ -98,6 +98,7 @@ function Test-SaveAppMirrorBlockedName {
     'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
     'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'
   )
@@ -122,17 +123,20 @@ function Get-SaveAppMirrorAllowlist {
     'modules/clipboard-url-detection/src/index.ts',
     'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
     'plugins/withSaveLinkQuickSave.js',
     'plugins/withStarterToolbarSync.js',
     'scripts/patch-expo-ui-bottom-sheet.js','scripts/patch-expo-module-scan-timeout.js',
     'scripts/verify-saveapp-native.js','scripts/verify-saveapp-simulator-build-settings.js',
+    'scripts/verify-saveapp-quick-save-app-intents.js',
     'scripts/Test-SaveAppMirrorSnapshot.ps1',
     'scripts/create-saveapp-provisional-icon.ps1',
     'scripts/mirror-saveapp.ps1','scripts/Invoke-SaveAppSwiftPreflight.ps1',
     'scripts/Start-SaveAppNativeSim.ps1','scripts/Download-SaveAppSimulatorArchive.ps1',
     'scripts/SaveAppMirrorSecurity.psm1','scripts/SaveAppNativeSimCliGuard.psm1',
+    'tests/quick-save-xcodeproj-contract.rb',
     '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
     '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs'
   )
@@ -142,6 +146,9 @@ function Get-SaveAppMirrorAllowlist {
     'scripts/Test-SaveAppMirrorSnapshot.ps1',
     'scripts/verify-saveapp-simulator-build-settings.js',
     'plugins/withSaveLinkQuickSave.js',
+    'scripts/verify-saveapp-quick-save-app-intents.js',
+    'tests/quick-save-xcodeproj-contract.rb',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
     'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',

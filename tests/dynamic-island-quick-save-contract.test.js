@@ -9,7 +9,9 @@ const quickSavePlugin = readSource('../plugins/withSaveLinkQuickSave.js');
 const quickSavePodHelper = readSource('../modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb');
 const quickSaveButton = readSource('../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift');
 const quickSaveIntent = readSource('../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift');
+const quickSaveAppIntentsPackage = readSource('../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift');
 const quickSaveSQLite = readSource('../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift');
+const quickSaveXcodeprojTest = readSource('../tests/quick-save-xcodeproj-contract.rb');
 const activityLayout = readSource('../src/features/dynamic-island/saveLinkLiveActivityWidget.ios.tsx');
 const activityManager = readSource('../src/features/dynamic-island/saveLinkActivityManager.ios.ts');
 const clipboardNative = readSource('../modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift');
@@ -26,6 +28,7 @@ const expoWidgetsActivity = readFileSync(
 );
 const mirrorSecurity = readSource('../scripts/SaveAppMirrorSecurity.psm1');
 const mirrorSnapshot = readSource('../scripts/Test-SaveAppMirrorSnapshot.ps1');
+const appIntentsVerifier = readSource('../scripts/verify-saveapp-quick-save-app-intents.js');
 
 describe('SaveApp Dynamic Island native quick-save contract', () => {
   test('registers a version-pinned config plugin that survives generated iOS project recreation', () => {
@@ -38,14 +41,69 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSavePlugin).not.toMatch(/path\.(?:join|resolve)\([^)]*node_modules|writeFileSync\([^,\n]*node_modules/);
     expect(quickSavePodHelper).toContain("SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.23'");
     expect(quickSavePodHelper).toContain('Widgets/Buttons.swift');
-    expect(quickSavePodHelper).toContain('partial or ambiguous native patch');
+    expect(quickSavePodHelper).toContain('renderer replacement is incomplete');
     expect(quickSavePodHelper).toContain('SaveAppQuickSaveIntent.swift');
     expect(quickSavePodHelper).toContain('SaveAppQuickSaveSQLite.swift');
     expect(quickSavePodHelper).toContain('SaveAppQuickSaveLiveActivityButton.swift');
-    expect(quickSavePodHelper).toContain('project.targets.select');
-    expect(quickSavePodHelper).toContain('target.source_build_phase');
+    expect(quickSavePodHelper).toContain('project.native_targets.select');
+    expect(quickSavePodHelper).toContain('PBXSourcesBuildPhase');
+    expect(quickSavePodHelper).toContain('file_ref.real_path');
+    expect(quickSavePodHelper).toContain('target.product_type ==');
     expect(quickSavePodHelper).toContain('phase.add_file_reference(file_ref, true)');
+    expect(quickSavePodHelper).toContain('phase.remove_build_file(build_file)');
     expect(quickSavePodHelper).toContain('File.realpath');
+    expect(quickSavePodHelper).toContain('saveapp_quick_save_verify_build_file_membership');
+    expect(quickSavePodHelper).toContain('build_phase.respond_to?(:files)');
+    expect(quickSaveXcodeprojTest).toContain("require 'xcodeproj'");
+    expect(quickSaveXcodeprojTest).toContain('PBXAggregateTarget');
+    expect(quickSaveXcodeprojTest).toContain('--verify-generated');
+    expect(quickSaveXcodeprojTest).toContain('test_rejects_orphan_quick_save_build_file_references');
+  });
+
+  test('replaces exactly the installed SDK renderer types and keeps the normal button route', () => {
+    const topLevelTypes = (source) => [...source.matchAll(
+      /^(?:public\s+|private\s+|internal\s+|final\s+|open\s+)*(?:class|struct|enum|protocol)\s+(\w+)/gm,
+    )].map((match) => match[1]).sort();
+    const originalRendererTypes = topLevelTypes(readFileSync(
+      join(__dirname, '../node_modules/expo-widgets/ios/Widgets/Buttons.swift'),
+      'utf8',
+    ));
+
+    expect(topLevelTypes(quickSaveButton)).toEqual(originalRendererTypes);
+    expect(originalRendererTypes).toEqual(['ButtonProps', 'LiveActivityButtonView', 'WidgetButtonView']);
+    expect(quickSaveButton).toContain('intent: LiveActivityUserInteraction(');
+    expect(quickSaveButton.match(/struct\s+LiveActivityButtonView\b/g)).toHaveLength(1);
+  });
+
+  test('registers framework intents with the SaveApp app target and verifies generated target membership', () => {
+    expect(quickSaveIntent).toContain('public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage');
+    expect(quickSaveAppIntentsPackage).toContain('struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage');
+    expect(quickSaveAppIntentsPackage).toContain('ExpoWidgetsQuickSaveAppIntentsPackage.self');
+    expect(quickSaveAppIntentsPackage).toContain('import ExpoWidgets');
+    expect(quickSavePlugin).toContain('withXcodeProject');
+    expect(quickSavePlugin).toContain('com.apple.product-type.application');
+    expect(quickSavePlugin).toContain('addSourceFile(');
+    expect(quickSavePlugin).toContain('verifySaveAppQuickSaveAppIntentsPackage');
+    expect(appIntentsVerifier).toContain('xcode.project(projectFile)');
+    expect(appIntentsVerifier).toContain('verifySaveAppQuickSaveAppIntentsPackage(');
+  });
+
+  test('Swift Preflight tests Xcodeproj, AppIntents target membership, and Swift syntax before the native compile', () => {
+    const preflightWorkflow = readSource('../.github/workflows/swift-preflight.yml');
+    const fixtureTest = preflightWorkflow.indexOf('ruby tests/quick-save-xcodeproj-contract.rb');
+    const appTargetCheck = preflightWorkflow.indexOf('verify-saveapp-quick-save-app-intents.js');
+    const podInstall = preflightWorkflow.indexOf('npx pod-install ios');
+    const generatedCheck = preflightWorkflow.indexOf('--verify-generated ios/Pods/Pods.xcodeproj .');
+
+    expect(fixtureTest).toBeGreaterThanOrEqual(0);
+    expect(appTargetCheck).toBeGreaterThan(0);
+    expect(podInstall).toBeGreaterThan(fixtureTest);
+    expect(appTargetCheck).toBeGreaterThan(preflightWorkflow.indexOf('npx expo prebuild --platform ios --no-install'));
+    expect(appTargetCheck).toBeLessThan(podInstall);
+    expect(generatedCheck).toBeGreaterThan(podInstall);
+    expect(preflightWorkflow).toContain('ruby -c modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb');
+    expect(preflightWorkflow).toContain('swiftc -frontend -parse');
+    expect(preflightWorkflow).not.toContain('continue-on-error');
   });
 
   test('routes only the explicit quick-save button to LiveActivityIntent and retains Expo button paths', () => {
@@ -185,6 +243,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
       'plugins/withSaveLinkQuickSave.js',
       'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
       'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+      'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
       'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
       'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
     ];
@@ -192,7 +251,12 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
       expect(mirrorSecurity).toContain(`'${file}'`);
       expect(mirrorSnapshot).toContain(`'${file}'`);
     }
+    expect(mirrorSecurity).toContain("'tests/quick-save-xcodeproj-contract.rb'");
+    expect(mirrorSecurity).toContain("'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift'");
+    expect(mirrorSecurity).toContain("'scripts/verify-saveapp-quick-save-app-intents.js'");
     expect(mirrorSnapshot).toContain('tests/dynamic-island-quick-save-contract.test.js');
+    expect(mirrorSnapshot).toContain('tests/quick-save-xcodeproj-contract.rb');
+    expect(mirrorSnapshot).toContain('scripts/verify-saveapp-quick-save-app-intents.js');
     expect(mirrorSecurity).not.toContain("$allowedDirectories = @('modules'");
     expect(mirrorSecurity).not.toContain("$allowedDirectories = @('scripts'");
   });

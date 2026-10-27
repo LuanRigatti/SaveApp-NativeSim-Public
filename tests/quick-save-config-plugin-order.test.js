@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { withPlugins } = require('@expo/config-plugins');
+const xcode = require('xcode');
 
 const appConfig = require('../app.config.js').expo;
 const quickSavePlugin = require('../plugins/withSaveLinkQuickSave');
@@ -50,6 +51,76 @@ function createTemporaryProject(podfile) {
   return { root, iosRoot, podfilePath: path.join(iosRoot, 'Podfile') };
 }
 
+function createTemporaryXcodeProject() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'saveapp-quick-save-app-intents-'));
+  temporaryRoots.push(root);
+  const iosRoot = path.join(root, 'ios');
+  const xcodeProjectPath = path.join(iosRoot, 'SaveApp.xcodeproj');
+  const projectFilePath = path.join(xcodeProjectPath, 'project.pbxproj');
+  fs.mkdirSync(xcodeProjectPath, { recursive: true });
+  const templatePath = path.join(
+    projectRoot,
+    'node_modules/react-native-screens/ios/RNScreens.xcodeproj/project.pbxproj',
+  );
+  fs.copyFileSync(templatePath, projectFilePath);
+
+  const sourceRelativePath = quickSavePlugin.APP_INTENTS_PACKAGE_SOURCE;
+  const sourcePath = path.join(root, sourceRelativePath);
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  fs.copyFileSync(path.join(projectRoot, sourceRelativePath), sourcePath);
+
+  const project = xcode.project(projectFilePath);
+  project.parseSync();
+  const targetEntry = Object.entries(project.pbxNativeTargetSection()).find(([key]) => !key.endsWith('_comment'));
+  if (!targetEntry) throw new Error('The Xcode project fixture has no native target.');
+  targetEntry[1].name = 'SaveApp';
+  targetEntry[1].productType = '"com.apple.product-type.application"';
+
+  return { root, iosRoot, projectFilePath, project };
+}
+
+async function runAppIntentsXcodeProjectMod(projectFixture) {
+  const config = quickSavePlugin.withSaveAppQuickSaveAppIntentsPackage({
+    name: 'SaveApp',
+    mods: { ios: {} },
+  });
+  return config.mods.ios.xcodeproj({
+    ...config,
+    modResults: projectFixture.project,
+    modRawConfig: config,
+    modRequest: {
+      projectRoot: projectFixture.root,
+      projectName: 'SaveApp',
+      platformProjectRoot: projectFixture.iosRoot,
+      platform: 'ios',
+      modName: 'xcodeproj',
+      introspect: false,
+      ignoreExistingNativeFiles: false,
+    },
+  });
+}
+
+function getBuildMembershipCount(project, targetName, sourceRelativePath) {
+  const fileReferences = Object.entries(project.pbxFileReferenceSection())
+    .filter(([key]) => !key.endsWith('_comment'))
+    .filter(([, fileReference]) => fileReference.path?.replace(/^"|"$/g, '') === sourceRelativePath);
+  if (fileReferences.length !== 1) return { references: fileReferences.length, memberships: 0 };
+  const [fileReferenceUuid] = fileReferences[0];
+  const target = Object.entries(project.pbxNativeTargetSection())
+    .filter(([key]) => !key.endsWith('_comment'))
+    .map(([uuid, value]) => ({ uuid, value }))
+    .find(({ value }) => value.name === targetName);
+  if (!target) return { references: fileReferences.length, memberships: 0 };
+  const buildFiles = project.pbxBuildFileSection();
+  const memberships = (target.value.buildPhases ?? []).flatMap(({ value }) => {
+    const phase = project.hash.project.objects.PBXSourcesBuildPhase?.[value];
+    return (phase?.files ?? []).filter(({ value: buildFileUuid }) =>
+      buildFiles[buildFileUuid]?.fileRef === fileReferenceUuid,
+    );
+  }).length;
+  return { references: fileReferences.length, memberships };
+}
+
 async function runIosDangerousMods(config, project) {
   return config.mods.ios.dangerous({
     ...config,
@@ -74,6 +145,51 @@ afterEach(() => {
 });
 
 describe('SaveApp Quick Save Expo config plugin composition', () => {
+  test('adds the AppIntentsPackage registry to the real application target idempotently', async () => {
+    const fixture = createTemporaryXcodeProject();
+    const sourceRelativePath = '../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift';
+    const otherTargetsBefore = Object.entries(fixture.project.pbxNativeTargetSection())
+      .filter(([key]) => !key.endsWith('_comment'))
+      .filter(([, target]) => target.name !== 'SaveApp')
+      .map(([uuid, target]) => [uuid, JSON.stringify(target.buildPhases)]);
+
+    await runAppIntentsXcodeProjectMod(fixture);
+    let membership = getBuildMembershipCount(fixture.project, 'SaveApp', sourceRelativePath);
+    expect(membership).toEqual({ references: 1, memberships: 1 });
+    expect(quickSavePlugin.verifySaveAppQuickSaveAppIntentsPackage(
+      fixture.project,
+      fixture.root,
+      fixture.iosRoot,
+      'SaveApp',
+    ).relativeSourcePath).toBe(sourceRelativePath);
+
+    const firstPass = fixture.project.writeSync();
+    fs.writeFileSync(fixture.projectFilePath, firstPass, 'utf8');
+    fixture.project = xcode.project(fixture.projectFilePath);
+    fixture.project.parseSync();
+    await runAppIntentsXcodeProjectMod(fixture);
+    const secondPass = fixture.project.writeSync();
+    expect(secondPass).toBe(firstPass);
+    membership = getBuildMembershipCount(fixture.project, 'SaveApp', sourceRelativePath);
+    expect(membership).toEqual({ references: 1, memberships: 1 });
+
+    const otherTargetsAfter = Object.entries(fixture.project.pbxNativeTargetSection())
+      .filter(([key]) => !key.endsWith('_comment'))
+      .filter(([, target]) => target.name !== 'SaveApp')
+      .map(([uuid, target]) => [uuid, JSON.stringify(target.buildPhases)]);
+    expect(otherTargetsAfter).toEqual(otherTargetsBefore);
+  });
+
+  test('fails closed when the generated project has no uniquely named app target', async () => {
+    const fixture = createTemporaryXcodeProject();
+    const target = Object.entries(fixture.project.pbxNativeTargetSection())
+      .find(([key]) => !key.endsWith('_comment'))?.[1];
+    target.productType = '"com.apple.product-type.framework"';
+
+    await expect(runAppIntentsXcodeProjectMod(fixture))
+      .rejects.toThrow('expected exactly one application PBXNativeTarget named SaveApp; found 0');
+  });
+
   test('runs the real expo-widgets 58.0.23 Podfile hook before the Quick Save integration', async () => {
     expect(expoWidgetsPackage.version).toBe('58.0.23');
     expect(relevantPluginEntries.map((entry) => Array.isArray(entry) ? entry[0] : entry)).toEqual([

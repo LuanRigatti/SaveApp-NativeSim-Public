@@ -5,6 +5,9 @@ import UIKit
 
 let saveAppQuickSaveTarget = "saveapp.quickSave"
 
+/// Makes this pod framework's App Intents metadata discoverable from the app bundle.
+public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage {}
+
 @available(iOS 17.0, *)
 struct SaveLinkQuickSaveIntent: LiveActivityIntent {
   static var title: LocalizedStringResource = "Salvar link do SaveApp"

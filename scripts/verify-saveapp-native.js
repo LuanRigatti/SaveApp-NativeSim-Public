@@ -353,15 +353,26 @@ for (const relativePath of quickSaveNativeSources) {
 const quickSaveIntentSource = fs.readFileSync(path.join(root, quickSaveNativeSources[1]), 'utf8');
 const quickSaveSQLiteSource = fs.readFileSync(path.join(root, quickSaveNativeSources[3]), 'utf8');
 const quickSaveButtonSource = fs.readFileSync(path.join(root, quickSaveNativeSources[2]), 'utf8');
+const quickSavePodHelperSource = fs.readFileSync(path.join(root, quickSaveNativeSources[0]), 'utf8');
+const quickSaveXcodeprojTestPath = path.join(root, 'tests/quick-save-xcodeproj-contract.rb');
+const quickSaveAppIntentsPackagePath = path.join(root, 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift');
+const quickSaveAppIntentsPackageSource = fs.existsSync(quickSaveAppIntentsPackagePath)
+  ? fs.readFileSync(quickSaveAppIntentsPackagePath, 'utf8')
+  : '';
+const quickSaveAppIntentsVerifierPath = path.join(root, 'scripts/verify-saveapp-quick-save-app-intents.js');
 const widgetsRendererPath = path.join(root, 'node_modules/expo-widgets/ios/Widgets/ViewRenderer.swift');
 const widgetsLiveActivityPath = path.join(root, 'node_modules/expo-widgets/ios/Widgets/WidgetLiveActivity.swift');
-if (!fs.existsSync(widgetsRendererPath) || !fs.existsSync(widgetsLiveActivityPath)) {
-  fail('the installed expo-widgets renderer contract is unavailable for quick-save validation');
+if (!fs.existsSync(widgetsRendererPath) || !fs.existsSync(widgetsLiveActivityPath) || !fs.existsSync(quickSaveXcodeprojTestPath) || !fs.existsSync(quickSaveAppIntentsVerifierPath)) {
+  fail('the installed expo-widgets renderer, Xcodeproj regression contract, or app-intents target verifier is unavailable for quick-save validation');
 }
 const widgetsRendererSource = fs.readFileSync(widgetsRendererPath, 'utf8');
 const widgetsLiveActivitySource = fs.readFileSync(widgetsLiveActivityPath, 'utf8');
 if (
   !quickSaveIntentSource.includes('LiveActivityIntent') ||
+  !quickSaveIntentSource.includes('public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage') ||
+  !quickSaveAppIntentsPackageSource.includes('struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage') ||
+  !quickSaveAppIntentsPackageSource.includes('ExpoWidgetsQuickSaveAppIntentsPackage.self') ||
+  !quickSaveAppIntentsPackageSource.includes('import ExpoWidgets') ||
   !quickSaveIntentSource.includes('UIPasteboard.general') ||
   !quickSaveIntentSource.includes('insertOrFindExisting(normalized)') ||
   !quickSaveButtonSource.includes('props.target == saveAppQuickSaveTarget') ||
@@ -371,9 +382,13 @@ if (
   !quickSaveSQLiteSource.includes('saveapp-photos.db') ||
   !quickSaveSQLiteSource.includes('BEGIN IMMEDIATE;') ||
   quickSaveSQLiteSource.indexOf('BEGIN IMMEDIATE;') > quickSaveSQLiteSource.indexOf('try verifyCompatibleSchema(database)') ||
-  quickSaveSQLiteSource.includes('SQLITE_OPEN_CREATE')
+  quickSaveSQLiteSource.includes('SQLITE_OPEN_CREATE') ||
+  !quickSavePodHelperSource.includes('project.native_targets.select') ||
+  !quickSavePodHelperSource.includes('PBXSourcesBuildPhase') ||
+  !quickSavePodHelperSource.includes('file_ref.real_path') ||
+  !quickSavePodHelperSource.includes('phase.remove_build_file(build_file)')
 ) {
-  fail('quick-save contract must validate the SDK 58 Live Activity target route, explicit clipboard action, and locked transaction on the existing SQLite database');
+  fail('quick-save contract must validate the SDK 58 Live Activity route, real native compile target, canonical Xcode file paths, renderer replacement, and locked SQLite transaction');
 }
 
 const appConfigSource = fs.readFileSync(appConfigPath, 'utf8');

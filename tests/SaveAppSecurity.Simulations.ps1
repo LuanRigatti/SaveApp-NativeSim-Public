@@ -160,6 +160,7 @@ try {
   $productionAllowedDirectories = $productionAllowlist.AllowedDirectories
   Assert-True ($productionAllowedFiles -contains 'scripts/verify-saveapp-simulator-build-settings.js' -and
     $productionAllowedFiles -contains 'scripts/Test-SaveAppMirrorSnapshot.ps1' -and
+    $productionAllowedFiles -contains 'scripts/verify-saveapp-quick-save-app-intents.js' -and
     $productionAllowedDirectories -notcontains 'scripts' -and $productionAllowedDirectories -notcontains 'modules') 'mirror path policy explicitly includes the simulator build-settings helper and snapshot gate without broadening sensitive directories'
   $documentThumbnailModuleFiles = @(
     'modules/document-thumbnailing/package.json',
@@ -178,8 +179,10 @@ try {
   $quickSaveIntegrationFiles = @(
     'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+    'scripts/verify-saveapp-quick-save-app-intents.js',
     'plugins/withSaveLinkQuickSave.js'
   )
   $allAllowedLocalModuleFiles = @($documentThumbnailModuleFiles + $clipboardDetectionModuleFiles + $quickSaveIntegrationFiles)
@@ -189,7 +192,10 @@ try {
   $productionCandidates = @(Get-SaveAppMirrorCandidateFiles -SourceRoot $repositoryRoot `
     -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories)
   Assert-True ($productionCandidates -contains 'scripts/verify-saveapp-simulator-build-settings.js' -and
-    $productionCandidates -contains 'scripts/Test-SaveAppMirrorSnapshot.ps1') 'the exact production candidate set contains the helper and pre-publication snapshot gate'
+    $productionCandidates -contains 'scripts/Test-SaveAppMirrorSnapshot.ps1' -and
+    $productionCandidates -contains 'tests/quick-save-xcodeproj-contract.rb' -and
+    $productionCandidates -contains 'scripts/verify-saveapp-quick-save-app-intents.js' -and
+    $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift') 'the exact production candidate set contains the Xcodeproj fixture, AppIntents target verifier, package registry source and pre-publication snapshot gate'
 
   $incompleteSnapshot = Join-Path $tempRoot 'incomplete-mirror-snapshot'
   $incompleteManifestPath = Join-Path $tempRoot 'incomplete-mirror-manifest.json'
@@ -235,6 +241,48 @@ try {
   Assert-True ($incompleteQuickSaveExit -ne 0 -and
     $normalizedQuickSaveGateText -match 'Required mirror dependency is absent from.*modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent\.swift' -and
     $normalizedQuickSaveGateText -notmatch 'Snapshot gate: npm ci') "a missing LiveActivityIntent source blocks the local mirror gate before npm or publication; output: $incompleteQuickSaveText"
+
+  $incompleteXcodeprojManifestPath = Join-Path $tempRoot 'incomplete-xcodeproj-test-manifest.json'
+  $missingXcodeprojTest = 'tests/quick-save-xcodeproj-contract.rb'
+  $incompleteXcodeprojEntries = foreach ($relative in $productionCandidates | Where-Object { $_ -ne $missingXcodeprojTest }) {
+    $fullPath = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $relative -ExpectedType File
+    [pscustomobject]@{ Path = $relative; Sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash }
+  }
+  [IO.File]::WriteAllText($incompleteXcodeprojManifestPath,([pscustomobject]@{
+    SourceCommit = ('b' * 40)
+    Provenance = $incompleteProvenance
+    Files = @($incompleteXcodeprojEntries)
+  } | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+  $incompleteXcodeprojOutput = @(& $pwshForGate.Source -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
+    (Join-Path $repositoryRoot 'scripts\Test-SaveAppMirrorSnapshot.ps1') `
+    -SnapshotRoot $incompleteSnapshot -ManifestPath $incompleteXcodeprojManifestPath -ManifestOnly 2>&1)
+  $incompleteXcodeprojExit = $LASTEXITCODE
+  $incompleteXcodeprojText = ($incompleteXcodeprojOutput | ForEach-Object { "$_" }) -join [Environment]::NewLine
+  $normalizedXcodeprojText = [regex]::Replace($incompleteXcodeprojText,'\s+',' ')
+  Assert-True ($incompleteXcodeprojExit -ne 0 -and
+    $normalizedXcodeprojText -match 'Required mirror dependency is absent from.*tests/quick-save-xcodeproj-contract\.rb' -and
+    $normalizedXcodeprojText -notmatch 'Snapshot gate: npm ci') "a missing real Xcodeproj regression test blocks the local mirror gate before npm or publication; output: $incompleteXcodeprojText"
+
+  $incompleteAppIntentsManifestPath = Join-Path $tempRoot 'incomplete-app-intents-manifest.json'
+  $missingAppIntentsSource = 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift'
+  $incompleteAppIntentsEntries = foreach ($relative in $productionCandidates | Where-Object { $_ -ne $missingAppIntentsSource }) {
+    $fullPath = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $relative -ExpectedType File
+    [pscustomobject]@{ Path = $relative; Sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash }
+  }
+  [IO.File]::WriteAllText($incompleteAppIntentsManifestPath,([pscustomobject]@{
+    SourceCommit = ('b' * 40)
+    Provenance = $incompleteProvenance
+    Files = @($incompleteAppIntentsEntries)
+  } | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+  $incompleteAppIntentsOutput = @(& $pwshForGate.Source -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
+    (Join-Path $repositoryRoot 'scripts\Test-SaveAppMirrorSnapshot.ps1') `
+    -SnapshotRoot $incompleteSnapshot -ManifestPath $incompleteAppIntentsManifestPath -ManifestOnly 2>&1)
+  $incompleteAppIntentsExit = $LASTEXITCODE
+  $incompleteAppIntentsText = ($incompleteAppIntentsOutput | ForEach-Object { "$_" }) -join [Environment]::NewLine
+  $normalizedAppIntentsText = [regex]::Replace($incompleteAppIntentsText,'\s+',' ')
+  Assert-True ($incompleteAppIntentsExit -ne 0 -and
+    $normalizedAppIntentsText -match 'Required mirror dependency is absent from.*modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage\.swift' -and
+    $normalizedAppIntentsText -notmatch 'Snapshot gate: npm ci') "a missing AppIntentsPackage registry source blocks the local snapshot gate before npm or publication; output: $incompleteAppIntentsText"
 
   $snapshotGateIndex = $mirrorScript.IndexOf('Test-SaveAppMirrorSnapshot.ps1',[StringComparison]::Ordinal)
   $destinationCopyIndex = $mirrorScript.IndexOf('Copy-SaveAppMirrorFile -SourceRoot $sourceRoot -MirrorRoot $destinationRoot',[StringComparison]::Ordinal)
