@@ -168,6 +168,8 @@ O snapshot ocupa temporariamente um diretório irmão único do checkout privado
 
 Os arquivos locais de módulos, plugins, assets e workflows são copiados somente pelas entradas necessárias; não liberar `scripts/**` ou `modules/**` recursivamente. O gate Windows não executa prebuild, CocoaPods nem compilação Xcode. Esses requisitos, os build settings Release de SaveApp e ExpoWidgetsTarget, App Group assinado, extensão e inicialização ActivityKit ainda dependem de execução macOS/Simulator; nenhuma checagem estática deve ser relatada como validação em dispositivo.
 
+O Swift Preflight separa JavaScript/Expo/Jest/contratos, Ruby/Xcodeproj e parsing Swift em jobs independentes para que uma falha de Jest não suprima os diagnósticos nativos. Cada grupo executa todas as verificações independentes e termina com falha se qualquer comando falhar. Prebuild, CocoaPods e compilação só executam no job nativo, que depende da aprovação dos três gates; não há `continue-on-error`.
+
 ## Título do composer de texto
 
 A rota `/texts/compose` exibe “Adicionar texto” acima do editor, com tipografia grande arredondada e alinhamento à esquerda, em SwiftUI nativo e no fallback React Native. O título fica no conteúdo da tela; o botão Voltar continua sendo o controle nativo do Root Stack. O foco continua aguardando `transitionEnd`; o Host SwiftUI respeita a safe area do teclado e o fallback usa `KeyboardAvoidingView`. O fluxo atual só cria textos: `/texts/[id]` é leitura e não há edição nem atualização de texto implementada, então “Editar texto” não é apresentado até existir esse fluxo. A apresentação visual do novo título foi aprovada pelo usuário no Expo Go; isso não representa validação em Development Build iOS.

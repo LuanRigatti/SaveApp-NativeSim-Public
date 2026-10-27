@@ -12,6 +12,71 @@ function unquoteXcodeValue(value) {
   return typeof value === 'string' ? value.replace(/^"|"$/g, '') : '';
 }
 
+function isPathWithin(parentPath, childPath) {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === '' || (
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
+}
+
+function getCanonicalQuickSavePaths(projectRoot, platformProjectRoot) {
+  let canonicalProjectRoot;
+  let canonicalPlatformProjectRoot;
+  let canonicalSourcePath;
+
+  try {
+    canonicalProjectRoot = fs.realpathSync(projectRoot);
+    canonicalPlatformProjectRoot = fs.realpathSync(platformProjectRoot);
+    canonicalSourcePath = fs.realpathSync(
+      path.resolve(canonicalProjectRoot, APP_INTENTS_PACKAGE_SOURCE),
+    );
+  } catch (error) {
+    throw new Error(
+      `SaveApp quick-save could not resolve its project, iOS project, or AppIntentsPackage source path: ${error.message}`,
+    );
+  }
+
+  if (!isPathWithin(canonicalProjectRoot, canonicalPlatformProjectRoot)) {
+    throw new Error('SaveApp quick-save iOS project directory resolves outside the project root.');
+  }
+  if (!isPathWithin(canonicalProjectRoot, canonicalSourcePath)) {
+    throw new Error('SaveApp quick-save AppIntentsPackage source resolves outside the project root.');
+  }
+
+  return {
+    platformProjectRoot: canonicalPlatformProjectRoot,
+    sourcePath: canonicalSourcePath,
+    relativeSourcePath: path
+      .relative(canonicalPlatformProjectRoot, canonicalSourcePath)
+      .replace(/\\/g, '/'),
+  };
+}
+
+function getMainGroup(xcodeProject) {
+  const mainGroupUuid = unquoteXcodeValue(xcodeProject.getFirstProject().firstProject.mainGroup);
+  const mainGroup = xcodeProject.hash.project.objects.PBXGroup?.[mainGroupUuid];
+  if (!mainGroup) {
+    throw new Error('SaveApp quick-save could not find the Xcode project main group.');
+  }
+
+  return { uuid: mainGroupUuid, group: mainGroup };
+}
+
+function getBuildPhase(xcodeProject, phaseReference) {
+  const phaseUuid = unquoteXcodeValue(phaseReference.value);
+  const objects = xcodeProject.hash.project.objects;
+
+  for (const [sectionName, section] of Object.entries(objects)) {
+    if (sectionName.endsWith('_comment')) continue;
+    const phase = section?.[phaseUuid];
+    if (phase?.isa?.endsWith('BuildPhase')) return phase;
+  }
+
+  return null;
+}
+
 function getSaveAppApplicationTarget(xcodeProject, projectName) {
   const targets = Object.entries(xcodeProject.pbxNativeTargetSection())
     .filter(([key]) => !key.endsWith('_comment'))
@@ -40,52 +105,92 @@ function getSaveAppApplicationTarget(xcodeProject, projectName) {
 }
 
 function verifySaveAppQuickSaveAppIntentsPackage(xcodeProject, projectRoot, platformProjectRoot, projectName) {
-  const root = fs.realpathSync(projectRoot);
-  const sourcePath = path.resolve(root, APP_INTENTS_PACKAGE_SOURCE);
-  if (!sourcePath.startsWith(`${root}${path.sep}`) || !fs.existsSync(sourcePath)) {
-    throw new Error(`SaveApp quick-save app-intents package source is missing or outside the project: ${APP_INTENTS_PACKAGE_SOURCE}.`);
-  }
-
-  const relativeSourcePath = path.relative(platformProjectRoot, sourcePath).replace(/\\/g, '/');
+  const paths = getCanonicalQuickSavePaths(projectRoot, platformProjectRoot);
   const { uuid: appTargetUuid, phase } = getSaveAppApplicationTarget(xcodeProject, projectName);
   const fileReferences = Object.entries(xcodeProject.pbxFileReferenceSection())
     .filter(([key]) => !key.endsWith('_comment'))
-    .filter(([, fileReference]) => unquoteXcodeValue(fileReference.path).replace(/\\/g, '/') === relativeSourcePath);
+    .filter(([, fileReference]) =>
+      unquoteXcodeValue(fileReference.path).replace(/\\/g, '/') === paths.relativeSourcePath,
+    );
 
   if (fileReferences.length !== 1) {
     throw new Error(
-      `SaveApp quick-save expected exactly one app-intents package PBXFileReference at ${relativeSourcePath}; found ${fileReferences.length}.`,
+      `SaveApp quick-save expected exactly one app-intents package PBXFileReference at ${paths.relativeSourcePath}; found ${fileReferences.length}.`,
     );
   }
 
   const [fileReferenceUuid] = fileReferences[0];
+  const fileReference = fileReferences[0][1];
+  if (unquoteXcodeValue(fileReference.sourceTree) !== '<group>') {
+    throw new Error('SaveApp quick-save AppIntentsPackage PBXFileReference must use the main Xcode group source tree.');
+  }
+
+  const { uuid: mainGroupUuid, group: mainGroup } = getMainGroup(xcodeProject);
+  const mainGroupPath = unquoteXcodeValue(mainGroup.path);
+  const mainGroupSourceTree = unquoteXcodeValue(mainGroup.sourceTree) || '<group>';
+  if (mainGroupSourceTree !== '<group>' && mainGroupSourceTree !== 'SOURCE_ROOT') {
+    throw new Error(`SaveApp quick-save cannot resolve the Xcode main group source tree ${mainGroupSourceTree}.`);
+  }
+  const sourceGroupBasePath = path.resolve(paths.platformProjectRoot, mainGroupPath);
+  const referencedSourcePath = path.resolve(sourceGroupBasePath, unquoteXcodeValue(fileReference.path));
+  let canonicalReferencedSourcePath;
+  try {
+    canonicalReferencedSourcePath = fs.realpathSync(referencedSourcePath);
+  } catch (error) {
+    throw new Error(
+      `SaveApp quick-save Xcode file reference does not resolve to an existing AppIntentsPackage source: ${paths.relativeSourcePath}.`,
+    );
+  }
+  if (path.relative(paths.sourcePath, canonicalReferencedSourcePath) !== '') {
+    throw new Error(
+      `SaveApp quick-save Xcode file reference resolves to a different file than ${APP_INTENTS_PACKAGE_SOURCE}.`,
+    );
+  }
+
+  const groupMemberships = Object.entries(xcodeProject.hash.project.objects.PBXGroup ?? [])
+    .filter(([key]) => !key.endsWith('_comment'))
+    .flatMap(([groupUuid, group]) => (group.children ?? [])
+      .filter(({ value }) => unquoteXcodeValue(value) === fileReferenceUuid)
+      .map(() => groupUuid));
+  if (groupMemberships.length !== 1 || groupMemberships[0] !== mainGroupUuid) {
+    throw new Error('SaveApp quick-save AppIntentsPackage reference must appear exactly once in the Xcode main group.');
+  }
+
   const buildFiles = xcodeProject.pbxBuildFileSection();
+  const buildFilesForReference = Object.entries(buildFiles)
+    .filter(([key]) => !key.endsWith('_comment'))
+    .filter(([, buildFile]) => unquoteXcodeValue(buildFile.fileRef) === fileReferenceUuid);
+  if (buildFilesForReference.length !== 1) {
+    throw new Error(
+      `SaveApp quick-save expected exactly one AppIntentsPackage PBXBuildFile; found ${buildFilesForReference.length}.`,
+    );
+  }
+
+  const [buildFileUuid] = buildFilesForReference[0];
   const memberships = [];
   for (const [targetUuid, target] of Object.entries(xcodeProject.pbxNativeTargetSection())) {
     if (targetUuid.endsWith('_comment')) continue;
     for (const phaseReference of target.buildPhases ?? []) {
-        const sourcePhase = xcodeProject.hash.project.objects.PBXSourcesBuildPhase?.[
-          phaseReference.value.replace(/^"|"$/g, '')
-        ];
-      if (!sourcePhase) continue;
-      for (const buildFileReference of sourcePhase.files ?? []) {
-        const buildFile = buildFiles[buildFileReference.value];
-        if (buildFile?.fileRef === fileReferenceUuid) memberships.push(targetUuid);
+      const phase = getBuildPhase(xcodeProject, phaseReference);
+      if (!phase) continue;
+      for (const buildFileReference of phase.files ?? []) {
+        if (unquoteXcodeValue(buildFileReference.value) !== buildFileUuid) continue;
+        memberships.push({ targetUuid, phaseIsa: phase.isa });
       }
     }
   }
 
-  if (memberships.length !== 1 || memberships[0] !== appTargetUuid ||
-      !(phase.files ?? []).some((buildFileReference) => {
-        const buildFile = buildFiles[buildFileReference.value];
-        return buildFile?.fileRef === fileReferenceUuid;
-      })) {
+  if (memberships.length !== 1 || memberships[0].targetUuid !== appTargetUuid ||
+      memberships[0].phaseIsa !== 'PBXSourcesBuildPhase' ||
+      !(phase.files ?? []).some((buildFileReference) =>
+        unquoteXcodeValue(buildFileReference.value) === buildFileUuid,
+      )) {
     throw new Error(
       'SaveApp quick-save app-intents package must be compiled exactly once by the SaveApp application target and no other target.',
     );
   }
 
-  return { relativeSourcePath, appTargetUuid };
+  return { relativeSourcePath: paths.relativeSourcePath, appTargetUuid };
 }
 
 function withSaveAppQuickSaveAppIntentsPackage(config) {
@@ -94,22 +199,18 @@ function withSaveAppQuickSaveAppIntentsPackage(config) {
     const projectRoot = config.modRequest.projectRoot;
     const platformProjectRoot = config.modRequest.platformProjectRoot;
     const projectName = config.modRequest.projectName;
-    const root = fs.realpathSync(projectRoot);
-    const sourcePath = path.resolve(root, APP_INTENTS_PACKAGE_SOURCE);
-    if (!fs.existsSync(sourcePath)) {
-      throw new Error(`SaveApp quick-save app-intents package source is missing: ${APP_INTENTS_PACKAGE_SOURCE}.`);
-    }
-
-    const relativeSourcePath = path.relative(platformProjectRoot, sourcePath).replace(/\\/g, '/');
+    const paths = getCanonicalQuickSavePaths(projectRoot, platformProjectRoot);
     const { uuid: appTargetUuid } = getSaveAppApplicationTarget(project, projectName);
     const existingReferences = Object.entries(project.pbxFileReferenceSection())
       .filter(([key]) => !key.endsWith('_comment'))
-      .filter(([, fileReference]) => unquoteXcodeValue(fileReference.path).replace(/\\/g, '/') === relativeSourcePath);
+      .filter(([, fileReference]) =>
+        unquoteXcodeValue(fileReference.path).replace(/\\/g, '/') === paths.relativeSourcePath,
+      );
 
     if (existingReferences.length === 0) {
       const mainGroupUuid = unquoteXcodeValue(project.getFirstProject().firstProject.mainGroup);
       const addedFile = project.addSourceFile(
-        relativeSourcePath,
+        paths.relativeSourcePath,
         { target: appTargetUuid },
         mainGroupUuid,
       );
@@ -118,7 +219,7 @@ function withSaveAppQuickSaveAppIntentsPackage(config) {
       }
     } else if (existingReferences.length > 1) {
       throw new Error(
-        `SaveApp quick-save found duplicate app-intents package file references at ${relativeSourcePath}.`,
+        `SaveApp quick-save found duplicate app-intents package file references at ${paths.relativeSourcePath}.`,
       );
     }
 

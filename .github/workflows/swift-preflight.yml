@@ -11,10 +11,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  preflight:
-    name: Verify SaveApp iOS native modules and patches
+  javascript-validation:
+    name: Verify JavaScript, Expo, Jest, and native contracts
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - name: Check out the requested commit
         uses: actions/checkout@v4
@@ -25,7 +25,149 @@ jobs:
           node-version: 22.14.0
           cache: npm
 
-      - name: Report toolchain
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Run independent JavaScript and Expo gates
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          run_gate() {
+            local name="$1"
+            shift
+            echo "::group::${name}"
+            "$@"
+            local status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              echo "::error::${name} failed with exit code ${status}"
+              failed=1
+            fi
+          }
+
+          run_gate 'Expo SDK compatibility' npx expo install --check
+          run_gate 'Expo Doctor' npx expo-doctor
+          run_gate 'TypeScript typecheck' npm run typecheck
+          run_gate 'Lint' npm run lint
+          run_gate 'Complete Jest suite' npm test -- --runInBand
+          run_gate 'SaveApp native contracts' node scripts/verify-saveapp-native.js
+
+          exit "$failed"
+
+  ruby-xcodeproj-validation:
+    name: Verify Ruby and real Xcodeproj integration
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+
+      - name: Run Ruby, Xcodeproj, and syntax diagnostics independently
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          run_gate() {
+            local name="$1"
+            shift
+            echo "::group::${name}"
+            "$@"
+            local status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              echo "::error::${name} failed with exit code ${status}"
+              failed=1
+            fi
+          }
+
+          ruby --version
+          run_gate 'Xcodeproj gem availability' ruby -rxcodeproj -e 'puts "Xcodeproj #{Xcodeproj::VERSION}"'
+          run_gate 'Quick Save Ruby helper syntax' ruby -c modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb
+          run_gate 'Xcodeproj contract test syntax' ruby -c tests/quick-save-xcodeproj-contract.rb
+          run_gate 'Real Xcodeproj fixture and generated project contract' ruby tests/quick-save-xcodeproj-contract.rb
+
+          exit "$failed"
+
+  swift-syntax-validation:
+    name: Parse Quick Save and ExpoWidgets Swift sources
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Install pinned sources and run independent Swift parse checks
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          npm ci
+          install_status=$?
+          if [ "$install_status" -ne 0 ]; then
+            echo "::error::npm ci failed with exit code ${install_status}; local Swift sources will still be parsed"
+            failed=1
+          fi
+
+          local_sources=(
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift
+          )
+
+          for source in "${local_sources[@]}"; do
+            echo "::group::Swift parse: ${source}"
+            swiftc -frontend -parse "$source"
+            status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              echo "::error::Swift parse failed for ${source} with exit code ${status}"
+              failed=1
+            fi
+          done
+
+          expo_widgets_renderer=node_modules/expo-widgets/ios/Widgets/Buttons.swift
+          if [ "$install_status" -eq 0 ]; then
+            echo "::group::Swift parse: ${expo_widgets_renderer}"
+            swiftc -frontend -parse "$expo_widgets_renderer"
+            status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              echo "::error::Swift parse failed for ${expo_widgets_renderer} with exit code ${status}"
+              failed=1
+            fi
+          else
+            echo "::notice::Skipped the installed ExpoWidgets renderer parse because npm ci did not provide node_modules"
+          fi
+
+          exit "$failed"
+
+  native-integration-build:
+    name: Generate, install Pods, and compile iOS Simulator app
+    runs-on: macos-26
+    timeout-minutes: 120
+    needs:
+      - javascript-validation
+      - ruby-xcodeproj-validation
+      - swift-syntax-validation
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Report native toolchain
         run: |
           node --version
           npm --version
@@ -35,34 +177,6 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm ci
-
-      - name: Check Expo SDK compatibility
-        run: |
-          npx expo install --check
-          npx expo-doctor
-
-      - name: Verify TypeScript, lint, tests, and native contracts
-        run: |
-          npm run typecheck
-          npm run lint
-          npm test -- --runInBand
-          node scripts/verify-saveapp-native.js
-
-      - name: Verify Quick Save Ruby, Xcodeproj fixtures, and Swift syntax
-        run: |
-          set -euo pipefail
-          ruby -rxcodeproj -e 'puts "Xcodeproj #{Xcodeproj::VERSION}"'
-          ruby -c modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb
-          ruby -c tests/quick-save-xcodeproj-contract.rb
-          ruby tests/quick-save-xcodeproj-contract.rb
-          for source in \
-            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift \
-            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift \
-            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift \
-            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift \
-            node_modules/expo-widgets/ios/Widgets/Buttons.swift; do
-            swiftc -frontend -parse "$source"
-          done
 
       - name: Generate iOS project and install CocoaPods
         run: |

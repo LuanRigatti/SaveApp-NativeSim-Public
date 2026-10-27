@@ -106,6 +106,44 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(preflightWorkflow).not.toContain('continue-on-error');
   });
 
+  test('runs independent validation jobs and blocks native generation until every gate passes', () => {
+    const preflightWorkflow = readSource('../.github/workflows/swift-preflight.yml');
+    const getJobBlock = (jobName) => {
+      const marker = `  ${jobName}:\n`;
+      const start = preflightWorkflow.indexOf(marker);
+      if (start < 0) return '';
+      const rest = preflightWorkflow.slice(start + marker.length);
+      const nextJob = rest.search(/\n  [a-z][a-z0-9-]*:\n/);
+      return nextJob < 0 ? rest : rest.slice(0, nextJob);
+    };
+
+    const validationJobs = [
+      'javascript-validation',
+      'ruby-xcodeproj-validation',
+      'swift-syntax-validation',
+    ];
+    const validationBlocks = validationJobs.map(getJobBlock);
+    const nativeBuildBlock = getJobBlock('native-integration-build');
+
+    expect(validationBlocks.every(Boolean)).toBe(true);
+    expect(nativeBuildBlock).not.toBe('');
+    for (const block of validationBlocks) {
+      expect(block).not.toMatch(/^\s+needs:/m);
+      expect(block).not.toMatch(/expo prebuild|pod-install ios|xcodebuild[\s\S]*?build/i);
+    }
+
+    expect(nativeBuildBlock).toMatch(/needs:\s*\n\s*- javascript-validation\s*\n\s*- ruby-xcodeproj-validation\s*\n\s*- swift-syntax-validation/);
+    expect(nativeBuildBlock).toContain('npx expo prebuild --platform ios --no-install');
+    expect(nativeBuildBlock).toContain('npx pod-install ios');
+    expect(nativeBuildBlock).toContain('xcodebuild');
+    expect(nativeBuildBlock).toContain('CODE_SIGNING_ALLOWED=NO');
+    expect(preflightWorkflow).not.toContain('continue-on-error');
+
+    expect(getJobBlock('javascript-validation')).toContain('exit "$failed"');
+    expect(getJobBlock('ruby-xcodeproj-validation')).toContain('exit "$failed"');
+    expect(getJobBlock('swift-syntax-validation')).toContain('exit "$failed"');
+  });
+
   test('routes only the explicit quick-save button to LiveActivityIntent and retains Expo button paths', () => {
     expect(activityLayout).toContain('<Button');
     expect(activityLayout).toContain('target="saveapp.quickSave"');
