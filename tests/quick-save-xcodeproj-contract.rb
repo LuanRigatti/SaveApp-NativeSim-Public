@@ -99,7 +99,7 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     fixture.project.save
     before = File.binread(project_file_path(fixture.project))
 
-    assert_raises_message(RuntimeError, /could not resolve .*SaveAppQuickSaveSQLite\.swift/) do
+    assert_raises_message(RuntimeError, /source is missing: .*SaveAppQuickSaveSQLite\.swift/) do
       saveapp_configure_expo_widgets_quick_save(installer_for(fixture.project), fixture.root)
     end
 
@@ -157,12 +157,24 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
       QUICK_SAVE_SOURCE_NAMES.first
     )
     source_ref = fixture.project.files.find do |file_ref|
-      file_ref.isa == 'PBXFileReference' && File.realpath(file_ref.real_path.to_s) == File.realpath(source_path)
+      file_ref.isa == 'PBXFileReference' &&
+        File.basename(file_ref.path.to_s) == QUICK_SAVE_SOURCE_NAMES.first &&
+        File.realpath(file_ref.real_path.to_s) == File.realpath(source_path)
     end
     refute_nil source_ref
 
     orphan = fixture.project.new(Xcodeproj::Project::Object::PBXBuildFile)
     orphan.file_ref = source_ref
+    fixture.project.objects_by_uuid[orphan.uuid] = orphan
+    orphan_reference = fixture.project.objects.find { |object| object.uuid == orphan.uuid }
+    refute_nil orphan_reference
+    assert_same orphan, orphan_reference
+    assert_equal 'PBXBuildFile', orphan_reference.isa
+    assert_same source_ref, orphan_reference.file_ref
+    phase_memberships = fixture.project.targets.flat_map do |target|
+      target.build_phases.flat_map { |phase| phase.files.map(&:uuid) }
+    end
+    refute_includes phase_memberships, orphan_reference.uuid
 
     assert_raises_message(RuntimeError, /must have exactly one PBXBuildFile membership/) do
       saveapp_configure_expo_widgets_quick_save(installer_for(fixture.project), fixture.root)
@@ -208,9 +220,9 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     end
 
     project = Xcodeproj::Project.new(project_path)
-    aggregate = project.new_aggregate_target('Pods-SaveApp', :ios, '16.4')
+    aggregate = project.new_aggregate_target('Pods-SaveApp', [], :ios, '16.4')
     aggregate_named = if aggregate_named_expo_widgets
-                        project.new_aggregate_target('ExpoWidgets', :ios, '16.4')
+                        project.new_aggregate_target('ExpoWidgets', [], :ios, '16.4')
                       else
                         nil
                       end
