@@ -1,8 +1,8 @@
 import AppIntents
-import ExpoWidgets
+internal import ExpoWidgets
 
 /// Registers App Intents declared by the ExpoWidgets module with SaveApp.
-@available(iOS 16.0, *)
+@available(iOS 17.0, *)
 struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage {
   static var includedPackages: [any AppIntentsPackage.Type] {
     [ExpoWidgetsQuickSaveAppIntentsPackage.self]

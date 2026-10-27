@@ -82,7 +82,10 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage');
     expect(quickSaveAppIntentsPackage).toContain('struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage');
     expect(quickSaveAppIntentsPackage).toContain('ExpoWidgetsQuickSaveAppIntentsPackage.self');
-    expect(quickSaveAppIntentsPackage).toContain('import ExpoWidgets');
+    expect(quickSaveIntent).toMatch(/@available\(iOS 17\.0, \*\)\s*public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage/);
+    expect(quickSaveAppIntentsPackage).toMatch(/internal import ExpoWidgets/);
+    expect(quickSaveAppIntentsPackage).toMatch(/@available\(iOS 17\.0, \*\)\s*struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage/);
+    expect(appConfig).toContain("deploymentTarget: '16.4'");
     expect(quickSavePlugin).toContain('withXcodeProject');
     expect(quickSavePlugin).toContain('com.apple.product-type.application');
     expect(quickSavePlugin).toContain('addSourceFile(');

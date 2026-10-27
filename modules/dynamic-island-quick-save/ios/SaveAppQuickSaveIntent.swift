@@ -6,6 +6,7 @@ import UIKit
 let saveAppQuickSaveTarget = "saveapp.quickSave"
 
 /// Makes this pod module's App Intents metadata discoverable from the app bundle.
+@available(iOS 17.0, *)
 public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage {}
 
 @available(iOS 17.0, *)
