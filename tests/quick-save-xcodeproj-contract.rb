@@ -2,7 +2,6 @@
 # Exercises the checked-in Quick Save post_install helper against real Xcodeproj objects.
 
 require 'fileutils'
-require 'minitest/autorun'
 require 'pathname'
 require 'tmpdir'
 require 'xcodeproj'
@@ -18,6 +17,8 @@ if ARGV.first == '--verify-generated'
   puts "Quick Save Xcodeproj verified: #{result[:target].name} (#{source_names.join(', ')})"
   exit 0
 end
+
+require 'minitest/autorun'
 
 class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
   QUICK_SAVE_SOURCE_NAMES = [
