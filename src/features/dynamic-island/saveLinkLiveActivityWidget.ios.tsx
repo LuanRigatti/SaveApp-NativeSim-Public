@@ -1,4 +1,4 @@
-import { Button, HStack, Image, Text, VStack } from '@expo/ui/swift-ui';
+import { Button, HStack, Image, Link, Text, VStack } from '@expo/ui/swift-ui';
 import {
   clipShape,
   font,
@@ -7,11 +7,14 @@ import {
   multilineTextAlignment,
   padding,
   resizable,
+  tint,
 } from '@expo/ui/swift-ui/modifiers';
 import { createLiveActivity } from 'expo-widgets';
 
 type SaveLinkActivityProps = {
   iconUri: string;
+  composeUrl: string;
+  expandedHomeUrl: string;
   quickSaveStatus?: 'ready' | 'processing' | 'saved' | 'alreadySaved' | 'invalid' | 'failed';
 };
 
@@ -50,48 +53,56 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
       </HStack>
     ),
     compactLeading: (
-      <Image
-        uiImage={props.iconUri}
-        modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
-      />
+      <Link destination={props.composeUrl} modifiers={[tint('#FFFFFF')]}>
+        <Image
+          uiImage={props.iconUri}
+          modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
+        />
+      </Link>
     ),
     minimal: (
-      <Image
-        uiImage={props.iconUri}
-        modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
-      />
+      <Link destination={props.composeUrl} modifiers={[tint('#FFFFFF')]}>
+        <Image
+          uiImage={props.iconUri}
+          modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
+        />
+      </Link>
     ),
     expandedLeading: (
-      <Image
-        uiImage={props.iconUri}
-        modifiers={[
-          resizable(),
-          frame({ width: 44, height: 44 }),
-          clipShape('roundedRectangle', 10),
-          padding({ top: 8 }),
-        ]}
-      />
+      <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
+        <Image
+          uiImage={props.iconUri}
+          modifiers={[
+            resizable(),
+            frame({ width: 44, height: 44 }),
+            clipShape('roundedRectangle', 10),
+            padding({ top: 8 }),
+          ]}
+        />
+      </Link>
     ),
     expandedCenter: (
-      <VStack alignment="center" spacing={2}>
-        <Text
-          modifiers={[
-            font({ weight: 'semibold', textStyle: 'headline' }),
-            multilineTextAlignment('center'),
-          ]}
-        >
-          Salvar link
-        </Text>
-        <Text
-          modifiers={[
-            font({ textStyle: 'subheadline' }),
-            foregroundStyle('#8E8E93'),
-            multilineTextAlignment('center'),
-          ]}
-        >
-          Toque para salvar
-        </Text>
-      </VStack>
+      <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
+        <VStack alignment="center" spacing={2}>
+          <Text
+            modifiers={[
+              font({ weight: 'semibold', textStyle: 'headline' }),
+              multilineTextAlignment('center'),
+            ]}
+          >
+            Salvar link
+          </Text>
+          <Text
+            modifiers={[
+              font({ textStyle: 'subheadline' }),
+              foregroundStyle('#8E8E93'),
+              multilineTextAlignment('center'),
+            ]}
+          >
+            Toque para salvar
+          </Text>
+        </VStack>
+      </Link>
     ),
     expandedTrailing: (
       <Button

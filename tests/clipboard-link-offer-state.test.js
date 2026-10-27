@@ -58,4 +58,22 @@ describe('clipboard offer event state', () => {
     const state = createClipboardLinkOfferState();
     expect(state.shouldOffer(true, false, 5)).toBe(true);
   });
+
+  test('suppresses the clipboard event used to open Home from the expanded Dynamic Island', () => {
+    const state = createClipboardLinkOfferState();
+    state.suppressCurrentClipboardOffer(83);
+
+    expect(state.shouldOffer(true, false, 83)).toBe(false);
+    expect(state.shouldOffer(true, false, 83)).toBe(false);
+    expect(state.shouldOffer(true, false, 84)).toBe(true);
+  });
+
+  test('keeps the expanded Home clipboard offer suppressed until a new change when metadata is unavailable', () => {
+    const state = createClipboardLinkOfferState();
+    state.suppressCurrentClipboardOfferUntilChange();
+
+    expect(state.shouldOffer(true, false, 91)).toBe(false);
+    expect(state.shouldOffer(true, false, 91)).toBe(false);
+    expect(state.shouldOffer(true, false, 92)).toBe(true);
+  });
 });

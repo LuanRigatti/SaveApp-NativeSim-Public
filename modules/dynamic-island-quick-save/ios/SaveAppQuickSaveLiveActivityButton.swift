@@ -63,7 +63,7 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
     if quickSaveIsFailure {
       return Color(red: 0.62, green: 0.22, blue: 0.21)
     }
-    return Color(white: 0.22)
+    return Color(white: 0.18)
   }
 
   @ViewBuilder
@@ -88,12 +88,23 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
         ZStack {
           RoundedRectangle(cornerRadius: 10, style: .circular)
             .fill(quickSaveBackground)
+            .overlay {
+              RoundedRectangle(cornerRadius: 10, style: .circular)
+                .strokeBorder(Color.white.opacity(0.09), lineWidth: 0.5)
+            }
 
-          Image(systemName: quickSaveSymbol)
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(.white)
-            .contentTransition(.symbolEffect(.replace))
-            .symbolEffect(.bounce, value: quickSaveIsSuccess)
+          if quickSaveIsProcessing {
+            ProgressView()
+              .controlSize(.small)
+              .tint(.white)
+              .accessibilityHidden(true)
+          } else {
+            Image(systemName: quickSaveSymbol)
+              .font(.system(size: 20, weight: .semibold))
+              .foregroundStyle(.white)
+              .contentTransition(.symbolEffect(.replace))
+              .symbolEffect(.bounce, value: quickSaveIsSuccess)
+          }
         }
         .frame(width: 44, height: 44)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .circular))

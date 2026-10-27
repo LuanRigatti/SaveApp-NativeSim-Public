@@ -9,6 +9,8 @@ export function createClipboardLinkOfferState() {
   let revision = 0;
   let hasLocalConsumption = false;
   let explicitFlowCount = 0;
+  let suppressUntilClipboardChanges = false;
+  let suppressedChangeCount: number | null = null;
 
   return {
     beginExplicitFlow(): () => void {
@@ -34,6 +36,20 @@ export function createClipboardLinkOfferState() {
       return explicitFlowCount > 0;
     },
 
+    suppressCurrentClipboardOfferUntilChange(): void {
+      suppressUntilClipboardChanges = true;
+      suppressedChangeCount = null;
+    },
+
+    suppressCurrentClipboardOffer(changeCount: number): void {
+      if (!isValidChangeCount(changeCount)) return;
+      lastHandledChangeCount = changeCount;
+      suppressUntilClipboardChanges = false;
+      suppressedChangeCount = null;
+      hasLocalConsumption = true;
+      revision += 1;
+    },
+
     markHandled(changeCount: number | null | undefined): boolean {
       if (!isValidChangeCount(changeCount)) return false;
       lastHandledChangeCount = changeCount;
@@ -47,6 +63,16 @@ export function createClipboardLinkOfferState() {
       hasProbableWebURL: boolean,
       changeCount: number,
     ): boolean {
+      if (suppressUntilClipboardChanges) {
+        if (suppressedChangeCount == null) {
+          suppressedChangeCount = changeCount;
+          return false;
+        }
+        if (changeCount === suppressedChangeCount) return false;
+        suppressUntilClipboardChanges = false;
+        suppressedChangeCount = null;
+      }
+
       return explicitFlowCount === 0 && shouldOfferClipboardLink(
         hasURLItem,
         hasProbableWebURL,

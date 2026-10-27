@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const EXPECTED_UI_VERSION = '58.0.24';
+const uiPackagePath = path.resolve(__dirname, '..', 'node_modules', '@expo', 'ui', 'package.json');
 const targetFile = path.resolve(
   __dirname,
   '..',
@@ -12,6 +14,17 @@ const targetFile = path.resolve(
 );
 
 function applyPatch() {
+  if (!fs.existsSync(uiPackagePath)) {
+    console.error('[starter-patch-expo-ui] @expo/ui package metadata not found.');
+    process.exit(1);
+  }
+
+  const uiVersion = JSON.parse(fs.readFileSync(uiPackagePath, 'utf8')).version;
+  if (uiVersion !== EXPECTED_UI_VERSION) {
+    console.error(`[starter-patch-expo-ui] Expected @expo/ui ${EXPECTED_UI_VERSION}, found ${uiVersion}.`);
+    process.exit(1);
+  }
+
   if (!fs.existsSync(targetFile)) {
     console.warn('[starter-patch-expo-ui] BottomSheetView.swift not found in node_modules.');
     process.exit(1);

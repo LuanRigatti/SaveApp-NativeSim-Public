@@ -39,7 +39,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSavePlugin).toContain('saveapp_configure_expo_widgets_quick_save');
     expect(quickSavePlugin).toContain('refusing an incomplete or ambiguous native integration');
     expect(quickSavePlugin).not.toMatch(/path\.(?:join|resolve)\([^)]*node_modules|writeFileSync\([^,\n]*node_modules/);
-    expect(quickSavePodHelper).toContain("SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.23'");
+    expect(quickSavePodHelper).toContain("SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.24'");
     expect(quickSavePodHelper).toContain('Widgets/Buttons.swift');
     expect(quickSavePodHelper).toContain('renderer replacement is incomplete');
     expect(quickSavePodHelper).toContain('SaveAppQuickSaveIntent.swift');
@@ -177,8 +177,13 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('Activity<LiveActivityAttributes>.activities');
     expect(quickSaveIntent).toContain('activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntent).not.toMatch(/console\.|print\(|clipboard\.value.*(props|ContentState)/i);
-    expect(activityManager).toContain("start({ iconUri, quickSaveStatus: 'ready' }, url)");
+    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
+    expect(activityManager).toContain("Linking.createURL('/',");
+    expect(activityManager).toContain("source: 'dynamic-island-expanded'");
+    expect(activityLayout).toContain("<Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>" );
+    expect(activityLayout.match(/<Link destination=\{props\.expandedHomeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
+    expect(activityLayout).toContain('import { Button, HStack, Image, Link, Text, VStack }');
   });
 
   test('renders icon-only quick-save states in the same fixed accessible button', () => {
@@ -204,17 +209,26 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).toContain('.frame(width: 44, height: 44)');
     expect(quickSaveBranch).toContain('.font(.system(size: 20, weight: .semibold))');
     expect(quickSaveBranch).toContain('.foregroundStyle(.white)');
-    expect(quickSaveButton).toContain('Color(white: 0.22)');
+    expect(quickSaveButton).toContain('Color(white: 0.18)');
     expect(quickSaveButton).toContain('Color(red: 0.17, green: 0.45, blue: 0.29)');
     expect(quickSaveBranch).toContain('.buttonStyle(.plain)');
     expect(quickSaveBranch).toContain('.accessibilityLabel(props.label ?? "Salvar link")');
     expect(quickSaveBranch).toContain('.disabled(quickSaveIsProcessing)');
     expect(quickSaveBranch).toContain('.contentTransition(.symbolEffect(.replace))');
+    expect(quickSaveBranch).toContain('ProgressView()');
     expect(quickSaveBranch).toContain('.symbolEffect(.bounce, value: quickSaveIsSuccess)');
     expect(quickSaveBranch).toContain('.animation(.easeInOut(duration: 0.2), value: quickSaveSymbol)');
     expect(quickSaveBranch).toContain('.padding(.top, 8)');
     expect(quickSaveBranch).not.toMatch(/\b(?:Text|Label)\(/);
-    expect(quickSaveIntent).toContain('try? await Task.sleep(nanoseconds: 1_250_000_000)');
+    expect(quickSaveIntent).toContain('terminalStatusDisplayNanoseconds: UInt64 = 5_000_000_000');
+    expect(quickSaveIntent).toContain('guard didSubmitResultStatus else { return }');
+    expect(quickSaveIntent).toContain('try? await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
+    const resultSubmitIndex = quickSaveIntent.indexOf('let didSubmitResultStatus = await updateActivity');
+    const displayWindowIndex = quickSaveIntent.indexOf('Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
+    const readyResetIndex = quickSaveIntent.indexOf('status: .ready', displayWindowIndex);
+    expect(resultSubmitIndex).toBeGreaterThanOrEqual(0);
+    expect(displayWindowIndex).toBeGreaterThan(resultSubmitIndex);
+    expect(readyResetIndex).toBeGreaterThan(displayWindowIndex);
   });
 
   test('reads clipboard only after the explicit intent and reports success only after SQLite commit', () => {
@@ -229,7 +243,12 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('pasteboard.changeCount == changeCount');
     expect(quickSaveIntent).toContain('SaveLinkQuickSaveSQLite.normalize(clipboard.value)');
     expect(quickSaveIntent).toContain('ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount)');
-    expect(quickSaveIntent).not.toMatch(/console\.|print\(|\bLogger\b/);
+    expect(quickSaveIntent).toContain('Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.intent")');
+    expect(quickSaveIntent).not.toMatch(/logger\.(?:info|notice|error)\([^\n]*(?:clipboard\.value|normalized\.url|link\.url)/i);
+    expect(quickSaveIntent).toContain('activity_update.result=skipped');
+    expect(quickSaveIntent).toContain('database_stage=');
+    expect(quickSaveIntent).toContain('clipboard_marker.result=written');
+    expect(quickSaveIntent).toContain('clipboard_marker.result=failed reason=synchronization_unconfirmed');
 
     expect(quickSaveSQLite).toContain('FileManager.default.urls(for: .documentDirectory');
     expect(quickSaveSQLite).toContain('appendingPathComponent("SQLite"');
@@ -251,6 +270,10 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveSQLite).toContain('COMMIT;');
     expect(quickSaveSQLite).toContain('return .inserted');
     expect(quickSaveSQLite).toContain('return .alreadySaved');
+    expect(quickSaveSQLite).toContain('Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.sqlite")');
+    expect(quickSaveSQLite).toContain('database.commit.result=success outcome=inserted');
+    expect(quickSaveSQLite).toContain('diagnosticStage');
+    expect(quickSaveSQLite).toContain('diagnosticSQLiteCode');
     expect(quickSaveSQLite).not.toMatch(/URLSession|URLRequest|withTask\(|fetch\(/);
     expect(quickSaveSQLite).not.toMatch(/CREATE TABLE|ALTER TABLE|DROP TABLE/);
 
@@ -263,6 +286,9 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('status: .processing');
     expect(quickSaveIntent).toContain('requestGenerationByActivity');
     expect(quickSaveIntent).toContain('activeActivityIDs.insert(activityID).inserted');
+    expect(quickSaveIntent).toContain('if requestGenerationByActivity[activityID] == generation');
+    expect(quickSaveIntent).toContain('database_stage=');
+    expect(quickSaveIntent).toContain('sqlite_code=');
     expect(quickSaveIntent).toContain('generation: generation');
     expect(quickSaveIntent).toContain('$0.id == activityID');
     expect(quickSaveIntent).toContain('$0.content.state.name == "SaveAppSaveLink"');
@@ -279,7 +305,30 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(clipboardModule).toContain('quickSaveHandledChangeCount');
     expect(clipboardOffer).toContain('wasClipboardChangeHandledByQuickSave(');
     expect(savedContentProvider).toContain("state === 'active'");
-    expect(savedContentProvider).toContain('void refresh().catch');
+    expect(savedContentProvider).toContain('home.catalog.refresh_failed');
+    expect(savedContentProvider).toContain('home.catalog.initial_load_failed');
+    expect(savedContentProvider).toContain('home.catalog.refresh_after_delete_failed');
+    expect(savedContentProvider).not.toMatch(/console\.warn\([^\n]*(?:error|clipboard|url|path)/i);
+    expect(savedContentProvider).toContain('refreshPromiseRef.current');
+    expect(clipboardOffer).toContain('clipboard_offer.marker_persistence_failed');
+    expect(clipboardOffer).not.toMatch(/console\.warn\([^\n]*(?:clipboardText|url|path)/i);
+  });
+
+  test('uses one Home fallback URL while explicit compact and minimal links keep the authorized composer route', () => {
+    const compactLeading = activityLayout.match(/compactLeading: \(([\s\S]*?)\n\s*\),\n\s*minimal:/)?.[1] ?? '';
+    const minimal = activityLayout.match(/minimal: \(([\s\S]*?)\n\s*\),\n\s*expandedLeading:/)?.[1] ?? '';
+    const expandedTrailing = activityLayout.match(/expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*\};/)?.[1] ?? '';
+
+    expect(compactLeading).toContain('<Link destination={props.composeUrl}');
+    expect(minimal).toContain('<Link destination={props.composeUrl}');
+    expect(activityLayout).toContain('<Link destination={props.expandedHomeUrl}');
+    expect(expandedTrailing).toContain('target="saveapp.quickSave"');
+    expect(activityManager).toContain('start: (props: SaveLinkActivityProps, url?: string)');
+    expect(activityManager).toContain("Linking.createURL('/',");
+    expect(activityManager).toContain("Linking.createURL('/links/compose'");
+    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,");
+    expect(expoWidgetsActivity).toContain('return island.widgetURL(url)');
+    expect(expoWidgetsActivity).toContain('Only apply widgetURL when the activity has one');
   });
 
   test('mirrors the config plugin and exact local native sources without broadening module paths', () => {

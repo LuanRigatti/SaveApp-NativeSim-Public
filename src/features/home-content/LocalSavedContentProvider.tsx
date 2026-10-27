@@ -44,6 +44,7 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
   const [contents, setContents] = useState<SavedHomeContent[]>([]);
   const [isReady, setIsReady] = useState(false);
   const initializationRef = useRef<Promise<void> | null>(null);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const pendingTextRevealIdRef = useRef<number | null>(null);
 
   const initialize = useCallback((): Promise<void> => {
@@ -52,6 +53,7 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
         .then(setContents)
         .catch((error: unknown) => {
           initializationRef.current = null;
+          console.warn('[SaveApp] home.catalog.initial_load_failed');
           throw error;
         })
         .finally(() => setIsReady(true));
@@ -59,20 +61,41 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
     return initializationRef.current;
   }, []);
 
-  const refresh = useCallback(async () => {
-    setContents(await listSavedHomeContent());
-    setIsReady(true);
-  }, []);
+  const refresh = useCallback((): Promise<void> => {
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+
+    let initializedBeforeRefresh = false;
+    const refreshPromise = initialize()
+      .then(() => {
+        initializedBeforeRefresh = true;
+        return listSavedHomeContent();
+      })
+      .then((nextContents) => {
+        setContents(nextContents);
+        setIsReady(true);
+      })
+      .catch(() => {
+        // Initialization reports its own failure; only the follow-up catalog query is a refresh failure.
+        if (initializedBeforeRefresh) console.warn('[SaveApp] home.catalog.refresh_failed');
+      })
+      .finally(() => {
+        if (refreshPromiseRef.current === refreshPromise) refreshPromiseRef.current = null;
+      });
+    refreshPromiseRef.current = refreshPromise;
+    return refreshPromise;
+  }, [initialize]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void refresh().catch(() => undefined);
+      if (state === 'active') void refresh();
     });
     return () => subscription.remove();
   }, [refresh]);
 
   useEffect(() => {
-    void initialize().catch(() => undefined);
+    void initialize().catch(() => {
+      // initialize() records a fixed safe diagnostic before rethrowing to callers.
+    });
   }, [initialize]);
 
   const saveLink = useCallback(
@@ -158,6 +181,7 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
             setContents(await listSavedHomeContent());
           } catch {
             // Keep the last rendered content if the refresh also fails.
+            console.warn('[SaveApp] home.catalog.refresh_after_delete_failed');
           }
           Alert.alert('Não foi possível apagar', 'O SaveApp não conseguiu concluir a exclusão. Tente novamente.');
         },

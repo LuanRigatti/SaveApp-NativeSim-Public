@@ -12,19 +12,34 @@ import { clipboardLinkOfferState } from './clipboardLinkOfferState';
 const LAST_HANDLED_CHANGE_COUNT_KEY = '@saveapp/clipboard-link-offer-change-count-v1';
 let persistenceQueue: Promise<void> = Promise.resolve();
 
+function persistHandledClipboardChangeCount(changeCount: number): void {
+  persistenceQueue = persistenceQueue
+    .catch(() => undefined)
+    .then(() => AsyncStorage.setItem(LAST_HANDLED_CHANGE_COUNT_KEY, String(changeCount)))
+    .catch(() => {
+      console.warn('[SaveApp] clipboard_offer.marker_persistence_failed');
+    });
+}
+
 export function markClipboardLinkChangeCountHandled(changeCount: number | null | undefined): void {
   if (!clipboardLinkOfferState.markHandled(changeCount)) return;
   const value = clipboardLinkOfferState.getLastHandledChangeCount();
   if (value == null) return;
 
-  persistenceQueue = persistenceQueue
-    .catch(() => undefined)
-    .then(() => AsyncStorage.setItem(LAST_HANDLED_CHANGE_COUNT_KEY, String(value)))
-    .catch(() => undefined);
+  persistHandledClipboardChangeCount(value);
 }
 
 export function beginDynamicIslandClipboardFlow(): () => void {
   return clipboardLinkOfferState.beginExplicitFlow();
+}
+
+export function suppressClipboardLinkOfferUntilClipboardChanges(): void {
+  clipboardLinkOfferState.suppressCurrentClipboardOfferUntilChange();
+}
+
+export function suppressClipboardLinkOfferForChangeCount(changeCount: number): void {
+  clipboardLinkOfferState.suppressCurrentClipboardOffer(changeCount);
+  persistHandledClipboardChangeCount(changeCount);
 }
 
 type ClipboardLinkOfferOptions = {

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SQLite3
 
 struct NormalizedQuickSaveLink {
@@ -12,6 +13,29 @@ enum QuickSaveInsertResult {
   case alreadySaved
 }
 
+enum QuickSaveDatabaseFailureStage: String {
+  case path
+  case open
+  case schema
+  case busy
+  case transaction
+  case write
+}
+
+enum QuickSaveDatabaseError: Error {
+  case failure(stage: QuickSaveDatabaseFailureStage, sqliteCode: Int32?)
+
+  var diagnosticStage: String {
+    guard case let .failure(stage, _) = self else { return "unknown" }
+    return stage.rawValue
+  }
+
+  var diagnosticSQLiteCode: Int32 {
+    guard case let .failure(_, sqliteCode) = self else { return SQLITE_ERROR }
+    return sqliteCode ?? SQLITE_ERROR
+  }
+}
+
 enum SaveLinkQuickSaveSQLite {
   private static let databaseName = "saveapp-photos.db"
   private static let requiredMigrations: Set<Int64> = [1, 9]
@@ -21,6 +45,7 @@ enum SaveLinkQuickSaveSQLite {
     "preview_image_mime_type", "text_content", "deleted_at"
   ]
   private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+  private static let logger = Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.sqlite")
 
   static func normalize(_ input: String) -> NormalizedQuickSaveLink? {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,15 +106,17 @@ enum SaveLinkQuickSaveSQLite {
     )
     guard openResult == SQLITE_OK, let database else {
       if let database { sqlite3_close_v2(database) }
-      throw QuickSaveDatabaseError.openFailed
+      throw QuickSaveDatabaseError.failure(stage: .open, sqliteCode: openResult)
     }
     defer { sqlite3_close_v2(database) }
+    logger.info("database.open.result=success location=documents_sqlite")
 
     sqlite3_extended_result_codes(database, 1)
     guard sqlite3_busy_timeout(database, 3_000) == SQLITE_OK else {
-      throw QuickSaveDatabaseError.busy
+      throw QuickSaveDatabaseError.failure(stage: .busy, sqliteCode: sqlite3_errcode(database))
     }
     try execute("BEGIN IMMEDIATE;", in: database)
+    logger.info("database.transaction.begin=success")
     var committed = false
     defer {
       if !committed {
@@ -99,10 +126,12 @@ enum SaveLinkQuickSaveSQLite {
     // Lock the writer before checking the schema so an in-app migration cannot
     // change it between validation and this intent's insert.
     try verifyCompatibleSchema(database)
+    logger.info("database.schema=compatible")
 
     if try containsActiveLink(link.url, in: database) {
       try execute("COMMIT;", in: database)
       committed = true
+      logger.info("database.commit.result=success outcome=already_saved")
       return .alreadySaved
     }
 
@@ -113,6 +142,7 @@ enum SaveLinkQuickSaveSQLite {
       if try containsActiveLink(link.url, in: database) {
         try execute("COMMIT;", in: database)
         committed = true
+        logger.info("database.commit.result=success outcome=already_saved_after_conflict")
         return .alreadySaved
       }
       throw error
@@ -120,12 +150,13 @@ enum SaveLinkQuickSaveSQLite {
 
     try execute("COMMIT;", in: database)
     committed = true
+    logger.info("database.commit.result=success outcome=inserted")
     return .inserted
   }
 
   private static func databaseFileURL() throws -> URL {
     guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-      throw QuickSaveDatabaseError.pathUnavailable
+      throw QuickSaveDatabaseError.failure(stage: .path, sqliteCode: nil)
     }
     return documents.appendingPathComponent("SQLite", isDirectory: true)
       .appendingPathComponent(databaseName, isDirectory: false)
@@ -140,12 +171,12 @@ enum SaveLinkQuickSaveSQLite {
       while true {
         let result = sqlite3_step(statement)
         if result == SQLITE_DONE { break }
-        guard result == SQLITE_ROW else { throw databaseError(database, fallback: .schemaIncompatible) }
+        guard result == SQLITE_ROW else { throw databaseError(database, fallback: .schema) }
         migrations.insert(sqlite3_column_int64(statement, 0))
       }
     }
     guard requiredMigrations.isSubset(of: migrations) else {
-      throw QuickSaveDatabaseError.schemaIncompatible
+      throw QuickSaveDatabaseError.failure(stage: .schema, sqliteCode: SQLITE_SCHEMA)
     }
 
     var columns: Set<String> = []
@@ -153,14 +184,14 @@ enum SaveLinkQuickSaveSQLite {
       while true {
         let result = sqlite3_step(statement)
         if result == SQLITE_DONE { break }
-        guard result == SQLITE_ROW else { throw databaseError(database, fallback: .schemaIncompatible) }
+        guard result == SQLITE_ROW else { throw databaseError(database, fallback: .schema) }
         if let text = sqlite3_column_text(statement, 1) {
           columns.insert(String(cString: text))
         }
       }
     }
     guard requiredColumns.isSubset(of: columns) else {
-      throw QuickSaveDatabaseError.schemaIncompatible
+      throw QuickSaveDatabaseError.failure(stage: .schema, sqliteCode: SQLITE_SCHEMA)
     }
 
     var indexIsCompatible = false
@@ -177,11 +208,11 @@ enum SaveLinkQuickSaveSQLite {
           sql.contains("onsaved_content(normalized_url)") &&
           sql.contains("wherecontent_type='link'anddeleted_atisnull")
       } else if result != SQLITE_DONE {
-        throw databaseError(database, fallback: .schemaIncompatible)
+        throw databaseError(database, fallback: .schema)
       }
     }
     guard indexIsCompatible else {
-      throw QuickSaveDatabaseError.schemaIncompatible
+      throw QuickSaveDatabaseError.failure(stage: .schema, sqliteCode: SQLITE_SCHEMA)
     }
   }
 
@@ -194,7 +225,7 @@ enum SaveLinkQuickSaveSQLite {
       let result = sqlite3_step(statement)
       if result == SQLITE_ROW { return true }
       if result == SQLITE_DONE { return false }
-      throw databaseError(database, fallback: .writeFailed)
+      throw databaseError(database, fallback: .write)
     }
   }
 
@@ -204,8 +235,9 @@ enum SaveLinkQuickSaveSQLite {
       in: database
     ) { statement in
       let createdAt = Int64(Date().timeIntervalSince1970 * 1_000)
-      guard sqlite3_bind_int64(statement, 1, createdAt) == SQLITE_OK else {
-        throw QuickSaveDatabaseError.writeFailed
+      let timestampBindResult = sqlite3_bind_int64(statement, 1, createdAt)
+      guard timestampBindResult == SQLITE_OK else {
+        throw QuickSaveDatabaseError.failure(stage: .write, sqliteCode: timestampBindResult)
       }
       try bind(link.url, to: 2, in: statement)
       try bind(link.url, to: 3, in: statement)
@@ -213,7 +245,7 @@ enum SaveLinkQuickSaveSQLite {
       try bind(link.domain, to: 5, in: statement)
       let result = sqlite3_step(statement)
       guard result == SQLITE_DONE else {
-        throw databaseError(database, fallback: .writeFailed, result: result)
+        throw databaseError(database, fallback: .write, result: result)
       }
     }
   }
@@ -221,7 +253,7 @@ enum SaveLinkQuickSaveSQLite {
   private static func execute(_ sql: String, in database: OpaquePointer) throws {
     let result = sqlite3_exec(database, sql, nil, nil, nil)
     guard result == SQLITE_OK else {
-      throw databaseError(database, fallback: .transactionFailed, result: result)
+      throw databaseError(database, fallback: .transaction, result: result)
     }
   }
 
@@ -233,7 +265,7 @@ enum SaveLinkQuickSaveSQLite {
     var statement: OpaquePointer?
     let result = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
     guard result == SQLITE_OK, let statement else {
-      throw databaseError(database, fallback: .schemaIncompatible, result: result)
+      throw databaseError(database, fallback: .schema, result: result)
     }
     defer { sqlite3_finalize(statement) }
     return try body(statement)
@@ -242,13 +274,13 @@ enum SaveLinkQuickSaveSQLite {
   private static func bind(_ value: String, to index: Int32, in statement: OpaquePointer) throws {
     let result = value.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) }
     guard result == SQLITE_OK else {
-      throw QuickSaveDatabaseError.writeFailed
+      throw QuickSaveDatabaseError.failure(stage: .write, sqliteCode: result)
     }
   }
 
   private static func databaseError(
     _ database: OpaquePointer,
-    fallback: QuickSaveDatabaseError,
+    fallback: QuickSaveDatabaseFailureStage,
     result: Int32? = nil
   ) -> QuickSaveDatabaseError {
     databaseError(database: database, fallback: fallback, result: result)
@@ -256,7 +288,7 @@ enum SaveLinkQuickSaveSQLite {
 
   private static func databaseError(
     database: OpaquePointer?,
-    fallback: QuickSaveDatabaseError,
+    fallback: QuickSaveDatabaseFailureStage,
     result: Int32? = nil
   ) -> QuickSaveDatabaseError {
     let code: Int32
@@ -265,7 +297,9 @@ enum SaveLinkQuickSaveSQLite {
     } else {
       code = result ?? SQLITE_ERROR
     }
-    return code == SQLITE_BUSY || code == SQLITE_LOCKED ? .busy : fallback
+    let stage: QuickSaveDatabaseFailureStage =
+      code == SQLITE_BUSY || code == SQLITE_LOCKED ? .busy : fallback
+    return .failure(stage: stage, sqliteCode: code)
   }
 
   private static func fallbackTitle(path: String, domain: String) -> String {
@@ -281,13 +315,4 @@ enum SaveLinkQuickSaveSQLite {
     }
     return String(domain.prefix(120))
   }
-}
-
-private enum QuickSaveDatabaseError: Error {
-  case openFailed
-  case pathUnavailable
-  case schemaIncompatible
-  case busy
-  case transactionFailed
-  case writeFailed
 }

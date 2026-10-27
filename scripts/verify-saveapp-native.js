@@ -15,12 +15,15 @@ const prohibitedDependencies = [
 ];
 
 const expectedVersions = {
-  expo: '~58.0.19',
+  expo: '~58.0.20',
   'expo-asset': '~58.0.18',
   'expo-crypto': '~58.0.7',
-  'expo-widgets': '~58.0.23',
+  'expo-dev-client': '~58.0.16',
+  'expo-file-system': '~58.0.12',
+  'expo-router': '~58.0.27',
+  'expo-widgets': '~58.0.24',
   'react-native-screens': '4.30.0',
-  '@expo/ui': '~58.0.23',
+  '@expo/ui': '~58.0.24',
 };
 
 function fail(message) {
@@ -47,6 +50,7 @@ const checks = [
   ['plugins/withStarterToolbarSync.js', 'StarterToolbarMorphExperimentVariant'],
   ['plugins/withSaveLinkQuickSave.js', 'saveapp_configure_expo_widgets_quick_save'],
   ['scripts/patch-expo-ui-bottom-sheet.js', 'ignoresSafeArea(.container, edges: .bottom)'],
+  ['scripts/patch-expo-ui-bottom-sheet.js', "EXPECTED_UI_VERSION = '58.0.24'"],
   ['.github/workflows/swift-preflight.yml', 'CODE_SIGNING_ALLOWED=NO'],
   ['.github/workflows/native-sim.yml', 'native-sim-template-version: 20'],
 ];
@@ -261,7 +265,7 @@ if (!fs.existsSync(autolinkingCli)) {
       if (
         !widgetsPod ||
         !widgetsModule.swiftModuleNames?.includes('ExpoWidgets') ||
-        widgetsModule.packageVersion !== '~58.0.23' && widgetsModule.packageVersion !== '58.0.23'
+        widgetsModule.packageVersion !== '~58.0.24' && widgetsModule.packageVersion !== '58.0.24'
       ) {
         fail('Expo SDK 58 did not resolve the pinned ExpoWidgets native module');
       }

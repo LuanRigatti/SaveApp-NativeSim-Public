@@ -11,7 +11,12 @@ import {
   writeActivityLinkAuthorization,
 } from './activityLinkAuthorization';
 
-type SaveLinkActivityProps = { iconUri: string; quickSaveStatus: 'ready' };
+type SaveLinkActivityProps = {
+  iconUri: string;
+  composeUrl: string;
+  expandedHomeUrl: string;
+  quickSaveStatus: 'ready';
+};
 type NativeActivity = {
   end: (dismissalPolicy: 'immediate') => Promise<void>;
   getId: () => string;
@@ -75,12 +80,18 @@ const reconcileInstances = createActivityReconciler({
     const { randomUUID } = require('expo-crypto') as typeof import('expo-crypto');
     const token = randomUUID();
     await writeActivityLinkAuthorization({ token, activityId: null });
-    const url = Linking.createURL('/links/compose', {
+    const composeUrl = Linking.createURL('/links/compose', {
       queryParams: { source: 'dynamic-island', activityToken: token },
+    });
+    const expandedHomeUrl = Linking.createURL('/', {
+      queryParams: { source: 'dynamic-island-expanded' },
     });
     let activity: StartedActivity | null = null;
     try {
-      activity = getActivityFactory().start({ iconUri, quickSaveStatus: 'ready' }, url);
+      activity = getActivityFactory().start(
+        { iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },
+        expandedHomeUrl,
+      );
       await writeActivityLinkAuthorization({ token, activityId: activity.getId() });
     } catch (error) {
       if (activity) await activity.end('immediate').catch(() => undefined);

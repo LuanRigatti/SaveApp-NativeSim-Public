@@ -152,7 +152,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
   test('checks the App Group icon location before ActivityKit and preserves its native failure', () => {
     const iconPreparationIndex = managerSource.indexOf('const iconUri = await getSharedAppIconUri();');
     const activityStartIndex = managerSource.indexOf(
-      "activity = getActivityFactory().start({ iconUri, quickSaveStatus: 'ready' }, url);",
+      "{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,",
     );
 
     expect(iconPreparationIndex).toBeGreaterThanOrEqual(0);
@@ -195,6 +195,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource).toContain('expandedTrailing:');
     expect(layoutSource).toContain('target="saveapp.quickSave"');
     expect(layoutSource).toContain('expandedCenter: (');
+    expect(layoutSource).toContain("<Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>" );
+    expect(layoutSource.match(/<Link destination=\{props\.expandedHomeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
     expect(layoutSource).not.toContain('compactTrailing:');
     expect(layoutSource).not.toContain('expandedBottom:');
     expect(layoutSource).toContain("clipShape('roundedRectangle'");
@@ -211,12 +213,50 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource).not.toContain('circle.fill');
     expect(layoutSource).not.toMatch(/clipboard|https?:|normalizedUrl|props\.url/i);
     expect(managerSource).toContain("Linking.createURL('/links/compose'");
+    expect(managerSource).toContain("Linking.createURL('/',");
+    expect(managerSource).toContain("source: 'dynamic-island-expanded'");
     expect(managerSource).toContain('activityToken: token');
     expect(managerSource).toContain('randomUUID()');
     expect(managerSource).toContain('widgetsDirectory');
     expect(managerSource).toContain('saveapp-live-activity-icon.png');
     expect(managerSource).toContain('isAuthorizedSaveLinkActivityURL');
     expect(authorizationSource).toContain('ACTIVITY_LINK_AUTHORIZATION_KEY');
+  });
+
+  test('region Links route compact taps to the tokenized composer and expanded content to Home', () => {
+    const homeSource = readSource('../src/app/(tabs)/index.tsx');
+    const homeStateSource = readSource('../src/features/home-content/clipboardLinkOfferState.ts');
+    const banner = layoutSource.match(/banner: \(([\s\S]*?)\n\s*\),\n\s*compactLeading:/)?.[1] ?? '';
+    const compactLeading = layoutSource.match(/compactLeading: \(([\s\S]*?)\n\s*\),\n\s*minimal:/)?.[1] ?? '';
+    const minimal = layoutSource.match(/minimal: \(([\s\S]*?)\n\s*\),\n\s*expandedLeading:/)?.[1] ?? '';
+    const expandedTrailing = layoutSource.match(/expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*\};/)?.[1] ?? '';
+
+    expect(homeSource).toContain("routeSource === 'dynamic-island-expanded'");
+    expect(homeSource).toContain('beginDynamicIslandClipboardFlow()');
+    expect(homeSource).toContain('getClipboardURLDetectionSnapshot()');
+    expect(homeSource).toContain('suppressClipboardLinkOfferForChangeCount(snapshot.changeCount)');
+    expect(homeSource).toContain('suppressClipboardLinkOfferUntilClipboardChanges()');
+    expect(homeSource).toContain('!isDynamicIslandExpandedHomeFlow');
+    expect(homeSource).toContain("router.replace('/')");
+    expect(homeStateSource).toContain('suppressCurrentClipboardOffer(changeCount: number)');
+    expect(homeStateSource).toContain('suppressCurrentClipboardOfferUntilChange()');
+    expect(homeSource).toContain('refresh: refreshSavedContent');
+    expect(homeSource).toContain('void refreshSavedContent();');
+    expect(homeSource).not.toContain('void refreshSavedContent().catch');
+
+    expect(managerSource).toContain('activity = getActivityFactory().start(');
+    expect(managerSource).toContain('composeUrl');
+    expect(managerSource).toContain('activityToken: token');
+    expect(managerSource).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,");
+    expect(layoutSource).toContain('compactLeading: (');
+    expect(layoutSource).toContain('minimal: (');
+    expect(banner).not.toContain('<Link');
+    expect(compactLeading).toContain('<Link destination={props.composeUrl}');
+    expect(minimal).toContain('<Link destination={props.composeUrl}');
+    expect(expandedTrailing).toContain('target="saveapp.quickSave"');
+    expect(layoutSource.match(/<Link destination=\{props\.composeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
+    expect(managerSource).toContain("Linking.createURL('/links/compose'");
+    expect(managerSource).toContain("Linking.createURL('/',");
   });
 
   test('reads clipboard only on the explicit activity deep link and opens the existing composer', () => {

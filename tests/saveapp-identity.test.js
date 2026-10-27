@@ -24,9 +24,16 @@ describe('SaveApp identity and template boundary', () => {
     const rootPackage = lockfile.packages[''];
     expect(rootPackage.dependencies).toEqual(packageJson.dependencies);
     expect(rootPackage.devDependencies).toEqual(packageJson.devDependencies);
-    expect(packageJson.dependencies.expo).toBe('~58.0.19');
+    expect(packageJson.dependencies.expo).toBe('~58.0.20');
     expect(packageJson.dependencies['react-native-screens']).toBe('4.30.0');
-    expect(packageJson.dependencies['@expo/ui']).toBe('~58.0.23');
+    expect(packageJson.dependencies['@expo/ui']).toBe('~58.0.24');
+    expect(packageJson.dependencies['expo-dev-client']).toBe('~58.0.16');
+    expect(packageJson.dependencies['expo-file-system']).toBe('~58.0.12');
+    expect(packageJson.dependencies['expo-router']).toBe('~58.0.27');
+    expect(packageJson.dependencies['expo-widgets']).toBe('~58.0.24');
+    const bottomSheetPatch = fs.readFileSync(path.join(root, 'scripts/patch-expo-ui-bottom-sheet.js'), 'utf8');
+    expect(bottomSheetPatch).toContain("EXPECTED_UI_VERSION = '58.0.24'");
+    expect(bottomSheetPatch).toContain("uiVersion !== EXPECTED_UI_VERSION");
   });
 
   test('has no business service dependencies', () => {

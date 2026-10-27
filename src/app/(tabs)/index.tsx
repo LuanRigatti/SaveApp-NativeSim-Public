@@ -1,4 +1,4 @@
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
 
@@ -16,7 +16,12 @@ import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentP
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
 import { areHomeFeedSourcesReady } from '@/features/home-content/homeFeed';
 import { prepareClipboardLinkCandidate } from '@/features/home-content/clipboardLinkOffer';
-import { useClipboardLinkOffer } from '@/features/home-content/useClipboardLinkOffer';
+import {
+  beginDynamicIslandClipboardFlow,
+  suppressClipboardLinkOfferForChangeCount,
+  suppressClipboardLinkOfferUntilClipboardChanges,
+  useClipboardLinkOffer,
+} from '@/features/home-content/useClipboardLinkOffer';
 import { useLocalPhotoLibrary } from '@/features/photos/LocalPhotoLibraryProvider';
 import { useLocalDocumentLibrary } from '@/features/documents/LocalDocumentLibraryProvider';
 import HomeFolderFilterButton from '@/features/home-folders/HomeFolderFilterButton';
@@ -32,18 +37,27 @@ import { useHomeFolderAuthorization } from '@/features/home-folders/useHomeFolde
 import { useHomeSettingsSheet } from '@/features/home-content/HomeSettingsSheetProvider';
 import { useAppSafeAreaInsets } from '@/providers';
 import { useAppTheme } from '@/theme';
+import { getClipboardURLDetectionSnapshot } from '../../../modules/clipboard-url-detection/src';
 
 export default function HomeScreen() {
   const { resolvedMode, theme } = useAppTheme();
   const insets = useAppSafeAreaInsets();
   const router = useRouter();
+  const routeParams = useLocalSearchParams<{ source?: string | string[] }>();
+  const routeSource = Array.isArray(routeParams.source) ? routeParams.source[0] : routeParams.source;
+  const isDynamicIslandExpandedHomeFlow = routeSource === 'dynamic-island-expanded';
   const {
     media,
     isReady: photoLibraryReady,
     importFromPhotoLibrary,
     importVideosFromPhotoLibrary,
   } = useLocalPhotoLibrary();
-  const { contents, isReady: savedContentReady, consumePendingTextReveal } = useLocalSavedContent();
+  const {
+    contents,
+    isReady: savedContentReady,
+    refresh: refreshSavedContent,
+    consumePendingTextReveal,
+  } = useLocalSavedContent();
   const { checklists, isReady: checklistLibraryReady } = useLocalChecklists();
   const {
     documents,
@@ -148,8 +162,40 @@ export default function HomeScreen() {
     setComposerKind('link');
   }, [contents]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!isDynamicIslandExpandedHomeFlow) return undefined;
+
+      const releaseExplicitClipboardFlow = beginDynamicIslandClipboardFlow();
+      let didLoseFocus = false;
+      void getClipboardURLDetectionSnapshot()
+        .then((snapshot) => {
+          if (didLoseFocus) return;
+          if (snapshot) {
+            suppressClipboardLinkOfferForChangeCount(snapshot.changeCount);
+          } else {
+            suppressClipboardLinkOfferUntilClipboardChanges();
+          }
+        })
+        .catch(() => {
+          if (!didLoseFocus) suppressClipboardLinkOfferUntilClipboardChanges();
+        })
+        .finally(() => {
+          if (didLoseFocus) return;
+          releaseExplicitClipboardFlow();
+          router.replace('/');
+        });
+
+      return () => {
+        didLoseFocus = true;
+        releaseExplicitClipboardFlow();
+      };
+    }, [isDynamicIslandExpandedHomeFlow, router]),
+  );
+
   const canOfferClipboardLink = homeFeedReady &&
     isAppActive &&
+    !isDynamicIslandExpandedHomeFlow &&
     composerKind == null &&
     !isClipboardResultAlertActive &&
     !isSettingsSheetPresented &&
@@ -171,10 +217,11 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      void refreshSavedContent();
       const savedTextId = consumePendingTextReveal();
       if (savedTextId != null) setRevealSavedTextId(savedTextId);
       openPendingFolder();
-    }, [consumePendingTextReveal, openPendingFolder]),
+    }, [consumePendingTextReveal, openPendingFolder, refreshSavedContent]),
   );
 
   useEffect(() => {
