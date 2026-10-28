@@ -95,8 +95,19 @@ enum SaveLinkQuickSaveSQLite {
     return NormalizedQuickSaveLink(url: normalizedURL, domain: domain, title: title)
   }
 
-  static func insertOrFindExisting(_ link: NormalizedQuickSaveLink) throws -> QuickSaveInsertResult {
-    let databaseURL = try databaseFileURL()
+  static func insertOrFindExisting(
+    _ link: NormalizedQuickSaveLink,
+    operationID: String
+  ) throws -> QuickSaveInsertResult {
+    logger.notice("event=database.access.started operation=\(operationID, privacy: .public)")
+    let databaseURL = try databaseFileURL(operationID: operationID)
+    let fileExists = FileManager.default.fileExists(atPath: databaseURL.path)
+    let fileIsReadable = fileExists && FileManager.default.isReadableFile(atPath: databaseURL.path)
+    logger.notice("event=database.file.status exists=\(fileExists, privacy: .public) readable=\(fileIsReadable, privacy: .public) operation=\(operationID, privacy: .public)")
+    guard fileExists else {
+      logger.error("event=database.open.result=failed reason=database_missing sqlite_code=\(SQLITE_CANTOPEN, privacy: .public) operation=\(operationID, privacy: .public)")
+      throw QuickSaveDatabaseError.failure(stage: .open, sqliteCode: SQLITE_CANTOPEN)
+    }
     var database: OpaquePointer?
     let openResult = sqlite3_open_v2(
       databaseURL.path,
@@ -106,63 +117,83 @@ enum SaveLinkQuickSaveSQLite {
     )
     guard openResult == SQLITE_OK, let database else {
       if let database { sqlite3_close_v2(database) }
+      logger.error("event=database.open.result=failed sqlite_code=\(openResult, privacy: .public) operation=\(operationID, privacy: .public)")
       throw QuickSaveDatabaseError.failure(stage: .open, sqliteCode: openResult)
     }
     defer { sqlite3_close_v2(database) }
-    logger.info("database.open.result=success location=documents_sqlite")
+    logger.notice("event=database.open.result=success operation=\(operationID, privacy: .public)")
 
     sqlite3_extended_result_codes(database, 1)
-    guard sqlite3_busy_timeout(database, 3_000) == SQLITE_OK else {
+    let busyTimeoutResult = sqlite3_busy_timeout(database, 3_000)
+    guard busyTimeoutResult == SQLITE_OK else {
+      logger.error("event=database.busy_timeout.result=failed sqlite_code=\(sqlite3_errcode(database), privacy: .public) operation=\(operationID, privacy: .public)")
       throw QuickSaveDatabaseError.failure(stage: .busy, sqliteCode: sqlite3_errcode(database))
     }
-    try execute("BEGIN IMMEDIATE;", in: database)
-    logger.info("database.transaction.begin=success")
+    logger.notice("event=database.busy_timeout.result=ready operation=\(operationID, privacy: .public)")
+    try execute("BEGIN IMMEDIATE;", action: "transaction.begin", operationID: operationID, in: database)
     var committed = false
     defer {
       if !committed {
-        sqlite3_exec(database, "ROLLBACK;", nil, nil, nil)
+        logger.notice("event=database.rollback.started operation=\(operationID, privacy: .public)")
+        let rollbackResult = sqlite3_exec(database, "ROLLBACK;", nil, nil, nil)
+        if rollbackResult == SQLITE_OK {
+          logger.notice("event=database.rollback.result=confirmed operation=\(operationID, privacy: .public)")
+        } else {
+          logger.error("event=database.rollback.result=failed sqlite_code=\(sqlite3_errcode(database), privacy: .public) operation=\(operationID, privacy: .public)")
+        }
       }
     }
     // Lock the writer before checking the schema so an in-app migration cannot
     // change it between validation and this intent's insert.
-    try verifyCompatibleSchema(database)
-    logger.info("database.schema=compatible")
+    do {
+      try verifyCompatibleSchema(database, operationID: operationID)
+      logger.notice("event=database.schema.result=compatible operation=\(operationID, privacy: .public)")
+    } catch {
+      logger.error("event=database.schema.result=failed sqlite_code=\(sqlite3_errcode(database), privacy: .public) operation=\(operationID, privacy: .public)")
+      throw error
+    }
 
-    if try containsActiveLink(link.url, in: database) {
-      try execute("COMMIT;", in: database)
+    if try containsActiveLink(link.url, operationID: operationID, in: database) {
+      try execute("COMMIT;", action: "commit", operationID: operationID, in: database)
       committed = true
-      logger.info("database.commit.result=success outcome=already_saved")
+      logger.notice("event=database.commit.confirmed outcome=already_saved operation=\(operationID, privacy: .public)")
       return .alreadySaved
     }
 
     do {
-      try insert(link, in: database)
+      try insert(link, operationID: operationID, in: database)
     } catch {
       // The partial unique index is the final guard against a concurrent JS/native insert.
-      if try containsActiveLink(link.url, in: database) {
-        try execute("COMMIT;", in: database)
+      if try containsActiveLink(link.url, operationID: operationID, in: database) {
+        try execute("COMMIT;", action: "commit", operationID: operationID, in: database)
         committed = true
-        logger.info("database.commit.result=success outcome=already_saved_after_conflict")
+        logger.notice("event=database.commit.confirmed outcome=already_saved_after_conflict operation=\(operationID, privacy: .public)")
         return .alreadySaved
       }
       throw error
     }
 
-    try execute("COMMIT;", in: database)
+    try execute("COMMIT;", action: "commit", operationID: operationID, in: database)
     committed = true
-    logger.info("database.commit.result=success outcome=inserted")
+    logger.notice("event=database.commit.confirmed outcome=inserted operation=\(operationID, privacy: .public)")
     return .inserted
   }
 
-  private static func databaseFileURL() throws -> URL {
+  private static func databaseFileURL(operationID: String) throws -> URL {
     guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+      logger.error("event=database.container.result=unavailable operation=\(operationID, privacy: .public)")
       throw QuickSaveDatabaseError.failure(stage: .path, sqliteCode: nil)
     }
-    return documents.appendingPathComponent("SQLite", isDirectory: true)
+    let sqliteDirectory = documents.appendingPathComponent("SQLite", isDirectory: true)
+    var isDirectory: ObjCBool = false
+    let directoryExists = FileManager.default.fileExists(atPath: sqliteDirectory.path, isDirectory: &isDirectory)
+    logger.notice("event=database.container.result=available sqlite_directory_exists=\(directoryExists && isDirectory.boolValue, privacy: .public) operation=\(operationID, privacy: .public)")
+    return sqliteDirectory
       .appendingPathComponent(databaseName, isDirectory: false)
   }
 
-  private static func verifyCompatibleSchema(_ database: OpaquePointer) throws {
+  private static func verifyCompatibleSchema(_ database: OpaquePointer, operationID: String) throws {
+    logger.notice("event=database.schema.validation_started operation=\(operationID, privacy: .public)")
     var migrations: Set<Int64> = []
     try withStatement(
       "SELECT version FROM saveapp_schema_migrations WHERE version IN (1, 9);",
@@ -175,7 +206,9 @@ enum SaveLinkQuickSaveSQLite {
         migrations.insert(sqlite3_column_int64(statement, 0))
       }
     }
-    guard requiredMigrations.isSubset(of: migrations) else {
+    let migrationsCompatible = requiredMigrations.isSubset(of: migrations)
+    logger.notice("event=database.schema.migrations migrations_v1=\(migrations.contains(1), privacy: .public) migration_v9=\(migrations.contains(9), privacy: .public) operation=\(operationID, privacy: .public)")
+    guard migrationsCompatible else {
       throw QuickSaveDatabaseError.failure(stage: .schema, sqliteCode: SQLITE_SCHEMA)
     }
 
@@ -190,7 +223,9 @@ enum SaveLinkQuickSaveSQLite {
         }
       }
     }
-    guard requiredColumns.isSubset(of: columns) else {
+    let columnsCompatible = requiredColumns.isSubset(of: columns)
+    logger.notice("event=database.schema.columns_compatible value=\(columnsCompatible, privacy: .public) operation=\(operationID, privacy: .public)")
+    guard columnsCompatible else {
       throw QuickSaveDatabaseError.failure(stage: .schema, sqliteCode: SQLITE_SCHEMA)
     }
 
@@ -211,25 +246,42 @@ enum SaveLinkQuickSaveSQLite {
         throw databaseError(database, fallback: .schema)
       }
     }
+    logger.notice("event=database.schema.unique_index_compatible value=\(indexIsCompatible, privacy: .public) operation=\(operationID, privacy: .public)")
     guard indexIsCompatible else {
       throw QuickSaveDatabaseError.failure(stage: .schema, sqliteCode: SQLITE_SCHEMA)
     }
   }
 
-  private static func containsActiveLink(_ normalizedURL: String, in database: OpaquePointer) throws -> Bool {
+  private static func containsActiveLink(
+    _ normalizedURL: String,
+    operationID: String,
+    in database: OpaquePointer
+  ) throws -> Bool {
+    logger.notice("event=database.duplicate_check.started operation=\(operationID, privacy: .public)")
     try withStatement(
       "SELECT 1 FROM saved_content WHERE content_type = 'link' AND normalized_url = ? AND deleted_at IS NULL LIMIT 1;",
       in: database
     ) { statement in
       try bind(normalizedURL, to: 1, in: statement)
       let result = sqlite3_step(statement)
-      if result == SQLITE_ROW { return true }
-      if result == SQLITE_DONE { return false }
+      if result == SQLITE_ROW {
+        logger.notice("event=database.duplicate_check.result=found operation=\(operationID, privacy: .public)")
+        return true
+      }
+      if result == SQLITE_DONE {
+        logger.notice("event=database.duplicate_check.result=not_found operation=\(operationID, privacy: .public)")
+        return false
+      }
       throw databaseError(database, fallback: .write)
     }
   }
 
-  private static func insert(_ link: NormalizedQuickSaveLink, in database: OpaquePointer) throws {
+  private static func insert(
+    _ link: NormalizedQuickSaveLink,
+    operationID: String,
+    in database: OpaquePointer
+  ) throws {
+    logger.notice("event=database.insert.started operation=\(operationID, privacy: .public)")
     try withStatement(
       "INSERT INTO saved_content (content_type, created_at, url, normalized_url, title, description, domain, image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content) VALUES ('link', ?, ?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL);",
       in: database
@@ -245,16 +297,26 @@ enum SaveLinkQuickSaveSQLite {
       try bind(link.domain, to: 5, in: statement)
       let result = sqlite3_step(statement)
       guard result == SQLITE_DONE else {
+        logger.error("event=database.insert.result=failed sqlite_code=\(sqlite3_extended_errcode(database), privacy: .public) operation=\(operationID, privacy: .public)")
         throw databaseError(database, fallback: .write, result: result)
       }
+      logger.notice("event=database.insert.result=statement_completed operation=\(operationID, privacy: .public)")
     }
   }
 
-  private static func execute(_ sql: String, in database: OpaquePointer) throws {
+  private static func execute(
+    _ sql: String,
+    action: String,
+    operationID: String,
+    in database: OpaquePointer
+  ) throws {
+    logger.notice("event=database.\(action).started operation=\(operationID, privacy: .public)")
     let result = sqlite3_exec(database, sql, nil, nil, nil)
     guard result == SQLITE_OK else {
+      logger.error("event=database.\(action).result=failed sqlite_code=\(sqlite3_extended_errcode(database), privacy: .public) operation=\(operationID, privacy: .public)")
       throw databaseError(database, fallback: .transaction, result: result)
     }
+    logger.notice("event=database.\(action).result=acquired operation=\(operationID, privacy: .public)")
   }
 
   private static func withStatement<T>(

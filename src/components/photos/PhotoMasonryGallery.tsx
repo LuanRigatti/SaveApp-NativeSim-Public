@@ -100,6 +100,7 @@ import { listSavedTagAssignments, listSavedTags, setSavedTagAssociation } from '
 import { getVisibleSavedTagDots } from '@/features/home-tags/tagPresentation';
 import type { SavedTag, SavedTagAssignment, SavedTagItemReference } from '@/features/home-tags/tagTypes';
 import { getAccentColorTokens } from '@/theme/colors';
+import { recordSaveAppDiagnosticEvent } from '../../../modules/clipboard-url-detection/src';
 
 const LIST_THUMBNAIL_IMAGE_RADIUS = 14;
 
@@ -297,6 +298,7 @@ export function PhotoMasonryGallery({
   const scrollOffsetRef = useRef(0);
   const pendingScrollRestoreRef = useRef<number | null>(null);
   const previousViewModeRef = useRef(viewMode);
+  const lastLoggedCatalogVisibilityKeyRef = useRef<string | null>(null);
   const currentFolderFilterKey = favoritesOnly
     ? 'favorites'
     : folderFilter.kind === 'folder'
@@ -597,6 +599,42 @@ export function PhotoMasonryGallery({
     () => buildHomeGalleryEntriesWhenReady(filteredItems, now, isInitialFeedReady && homeFoldersReady),
     [filteredItems, homeFoldersReady, isInitialFeedReady, now],
   );
+  const hasVisibleLinkAfterFilters = filteredItems.some(
+    (item) => 'contentType' in item && item.contentType === 'link',
+  );
+  const hasCatalogLink = contents.some((item) => item.contentType === 'link');
+
+  useEffect(() => {
+    const filterEvent = favoritesOnly
+      ? 'home.filter.favorites'
+      : folderFilter.kind === 'folder'
+        ? 'home.filter.folder'
+        : 'home.filter.all';
+    const visibilityKey = [
+      isInitialFeedReady && homeFoldersReady,
+      hidden,
+      hasCatalogLink,
+      favoritesOnly,
+      folderFilter.kind,
+      Boolean(searchQuery.trim()),
+      hasVisibleLinkAfterFilters,
+    ].join(':');
+    if (lastLoggedCatalogVisibilityKeyRef.current === visibilityKey) return;
+    lastLoggedCatalogVisibilityKeyRef.current = visibilityKey;
+    recordSaveAppDiagnosticEvent(filterEvent);
+
+    if (!isInitialFeedReady || !homeFoldersReady) {
+      recordSaveAppDiagnosticEvent('home.gallery.awaiting_data');
+    } else if (hidden) {
+      recordSaveAppDiagnosticEvent('home.gallery.content_hidden');
+    } else if (!hasCatalogLink) {
+      recordSaveAppDiagnosticEvent('home.gallery.no_links_in_catalog');
+    } else {
+      recordSaveAppDiagnosticEvent(hasVisibleLinkAfterFilters
+        ? 'home.gallery.links_visible'
+        : 'home.gallery.links_filtered_out');
+    }
+  }, [favoritesOnly, folderFilter.kind, hasCatalogLink, hasVisibleLinkAfterFilters, hidden, homeFoldersReady, isInitialFeedReady, searchQuery]);
 
   useLayoutEffect(() => {
     tagQueryScopeKeyRef.current = tagQueryScopeKey;

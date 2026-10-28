@@ -11,6 +11,7 @@ import { savedContentRowToModel, type SavedContentRow } from './savedContentCata
 import { downloadLinkPreviewImage, getLinkPreview } from './linkPreview';
 import { saveLinkWithPreview, saveTextContent } from './contentSavePipeline';
 import type { SavedHomeContent, SavedLink, SavedText } from './homeContentTypes';
+import { recordSaveAppDiagnosticEvent } from '../../../modules/clipboard-url-detection/src';
 
 const PREVIEW_DIRECTORY = 'home-content/link-previews';
 const SAFE_PREVIEW_PATH =
@@ -144,23 +145,33 @@ export async function saveSavedText(text: string, signal?: AbortSignal): Promise
 }
 
 export async function listSavedHomeContent(): Promise<SavedHomeContent[]> {
-  const database = await getSaveAppDatabase();
-  const rows = await database.getAllAsync<SavedContentRow>(
-    'SELECT id, content_type, created_at, url, normalized_url, title, description, domain, image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content FROM saved_content WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC;',
-  );
-  return rows.flatMap((row) => {
-    try {
-      const saved = savedContentRowToModel(row, {
-        isSafePreviewPath: (path) => SAFE_PREVIEW_PATH.test(path),
-        fileExists: (path) => fileForPreviewPath(path).exists,
-        uriForPath: (path) => fileForPreviewPath(path).uri,
-      });
-      return saved ? [saved] : [];
-    } catch {
-      // Reading never deletes a row or file; an invalid preview only falls back to text.
-      return [];
-    }
-  });
+  recordSaveAppDiagnosticEvent('home.catalog.query_started');
+  try {
+    const database = await getSaveAppDatabase();
+    const rows = await database.getAllAsync<SavedContentRow>(
+      'SELECT id, content_type, created_at, url, normalized_url, title, description, domain, image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content FROM saved_content WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC;',
+    );
+    const contents = rows.flatMap((row) => {
+      try {
+        const saved = savedContentRowToModel(row, {
+          isSafePreviewPath: (path) => SAFE_PREVIEW_PATH.test(path),
+          fileExists: (path) => fileForPreviewPath(path).exists,
+          uriForPath: (path) => fileForPreviewPath(path).uri,
+        });
+        return saved ? [saved] : [];
+      } catch {
+        // Reading never deletes a row or file; an invalid preview only falls back to text.
+        return [];
+      }
+    });
+    recordSaveAppDiagnosticEvent(contents.some((item) => item.contentType === 'link')
+      ? 'home.catalog.query_completed_links_present'
+      : 'home.catalog.query_completed_links_absent');
+    return contents;
+  } catch (error) {
+    recordSaveAppDiagnosticEvent('home.catalog.query_failed');
+    throw error;
+  }
 }
 
 export async function getSavedText(id: number): Promise<SavedText | null> {

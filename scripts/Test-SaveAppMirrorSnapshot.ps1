@@ -37,6 +37,7 @@ $requiredSnapshotFiles = @(
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
   '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
   '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs',
+  '.github/native-sim/oslog-capture.sh',
   'tests/SaveAppSecurity.Tests.ps1','tests/SaveAppSecurity.Simulations.ps1',
   'tests/dynamic-island-contract.test.js','tests/dynamic-island-quick-save-contract.test.js',
   'tests/quick-save-xcodeproj-contract.rb',

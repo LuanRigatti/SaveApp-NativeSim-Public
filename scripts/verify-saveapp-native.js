@@ -162,6 +162,7 @@ if (!fs.existsSync(mirrorSecurityPath) || !fs.existsSync(mirrorScriptPath) || !f
   const mirrorScriptSource = fs.readFileSync(mirrorScriptPath, 'utf8');
   const snapshotGateSource = fs.readFileSync(snapshotGatePath, 'utf8');
   const requiredMirrorDependencies = [
+    "'.github/native-sim/oslog-capture.sh'",
     "'scripts/verify-saveapp-simulator-build-settings.js'",
     "'scripts/Test-SaveAppMirrorSnapshot.ps1'",
     "'scripts/SaveAppMirrorSecurity.psm1'",
@@ -196,6 +197,28 @@ if (!fs.existsSync(mirrorSecurityPath) || !fs.existsSync(mirrorScriptPath) || !f
     publicPushIndex <= snapshotGateIndex
   ) {
     fail('the complete isolated mirror snapshot gate must run before public copy, staging, or push');
+  }
+}
+
+const saveAppOSLogCapturePath = path.join(root, '.github', 'native-sim', 'oslog-capture.sh');
+if (!fs.existsSync(saveAppOSLogCapturePath)) {
+  fail('the exact SaveApp OSLog capture helper is missing from the NativeSim snapshot');
+} else {
+  const captureHelperSource = fs.readFileSync(saveAppOSLogCapturePath, 'utf8');
+  const captureMarkers = [
+    'saveapp_capture_preflight()',
+    'saveapp_capture_start()',
+    'saveapp_capture_stop_stream()',
+    'saveapp_capture_finish()',
+    'subsystem BEGINSWITH "com.luanrigatti.saveapp"',
+    'age -r "$SAVEAPP_LOG_AGE_RECIPIENT"',
+    'ciphertext_sha256',
+    'artifact_ready=true',
+  ];
+  if (captureMarkers.some((marker) => !captureHelperSource.includes(marker)) ||
+      captureHelperSource.includes('echo "$SAVEAPP_LOG_AGE_RECIPIENT"') ||
+      captureHelperSource.includes('cat "$SAVEAPP_CAPTURE_RAW"')) {
+    fail('SaveApp OSLog capture must remain subsystem-scoped, encrypted, and free of plaintext log output');
   }
 }
 
@@ -287,7 +310,7 @@ if (fs.existsSync(clipboardDetectorPath)) {
   if (
     !clipboardDetectorSource.includes('detectedPatterns(for: [probableWebURL])') ||
     !clipboardDetectorSource.includes('pasteboard.changeCount') ||
-    /(?:UIPasteboard\.general\.)?(?:string|url|urls|items|itemProviders|detectedValues)\b/.test(clipboardDetectorSource)
+    /(?:UIPasteboard\.general|pasteboard)\.(?:string|url|urls|items|itemProviders|detectedValues)\b/.test(clipboardDetectorSource)
   ) {
     fail('clipboard detector must use pattern/change-count metadata without reading pasteboard values');
   }
@@ -378,14 +401,14 @@ if (
   !quickSaveAppIntentsPackageSource.includes('ExpoWidgetsQuickSaveAppIntentsPackage.self') ||
   !quickSaveAppIntentsPackageSource.includes('import ExpoWidgets') ||
   !quickSaveIntentSource.includes('UIPasteboard.general') ||
-  !quickSaveIntentSource.includes('insertOrFindExisting(normalized)') ||
+  !quickSaveIntentSource.includes('insertOrFindExisting(normalized, operationID: operationID)') ||
   !quickSaveButtonSource.includes('props.target == saveAppQuickSaveTarget') ||
   !quickSaveButtonSource.includes('SaveLinkQuickSaveIntent(activityID: props.source)') ||
   !widgetsRendererSource.includes('buttonProps.source = name') ||
   !widgetsLiveActivitySource.includes('WidgetsDynamicView(name: context.activityID') ||
   !quickSaveSQLiteSource.includes('saveapp-photos.db') ||
   !quickSaveSQLiteSource.includes('BEGIN IMMEDIATE;') ||
-  quickSaveSQLiteSource.indexOf('BEGIN IMMEDIATE;') > quickSaveSQLiteSource.indexOf('try verifyCompatibleSchema(database)') ||
+  quickSaveSQLiteSource.indexOf('BEGIN IMMEDIATE;') > quickSaveSQLiteSource.indexOf('try verifyCompatibleSchema(database, operationID: operationID)') ||
   quickSaveSQLiteSource.includes('SQLITE_OPEN_CREATE') ||
   !quickSavePodHelperSource.includes('project.native_targets.select') ||
   !quickSavePodHelperSource.includes('PBXSourcesBuildPhase') ||

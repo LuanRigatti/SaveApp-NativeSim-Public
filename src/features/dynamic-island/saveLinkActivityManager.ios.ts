@@ -90,7 +90,7 @@ const reconcileInstances = createActivityReconciler({
     try {
       activity = getActivityFactory().start(
         { iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },
-        expandedHomeUrl,
+        composeUrl,
       );
       await writeActivityLinkAuthorization({ token, activityId: activity.getId() });
     } catch (error) {

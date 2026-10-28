@@ -1,6 +1,7 @@
 import SwiftUI
 import ExpoModulesCore
 import ExpoUI
+import OSLog
 
 final class ButtonProps: ExpoUI.ButtonProps {
   @Field var source: String?
@@ -39,6 +40,8 @@ struct WidgetButtonView: ExpoSwiftUI.View {
 @available(iOS 17.0, *)
 struct LiveActivityButtonView: ExpoSwiftUI.View {
   @ObservedObject var props: ButtonProps
+  @State private var lastLoggedQuickSaveStatus: String?
+  private let diagnosticLogger = Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.renderer")
 
   private var quickSaveSymbol: String {
     props.systemImage ?? "arrow.down.to.line"
@@ -54,6 +57,25 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
 
   private var quickSaveIsFailure: Bool {
     quickSaveSymbol == "exclamationmark" || quickSaveSymbol == "arrow.clockwise"
+  }
+
+  private var diagnosticStatus: String {
+    switch props.label {
+    case "Salvar link": return "ready"
+    case "Salvando link": return "processing"
+    case "Link salvo": return "saved"
+    case "Link já salvo": return "alreadySaved"
+    case "Nenhum link válido": return "invalid"
+    case "Erro ao salvar link": return "failed"
+    default: return "unknown"
+    }
+  }
+
+  private func logObservedStatusIfChanged() {
+    let status = diagnosticStatus
+    guard lastLoggedQuickSaveStatus != status else { return }
+    lastLoggedQuickSaveStatus = status
+    diagnosticLogger.notice("event=renderer.status.observed state=\(status, privacy: .public)")
   }
 
   private var quickSaveBackground: Color {
@@ -114,6 +136,8 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
       .disabled(quickSaveIsProcessing)
       .animation(.easeInOut(duration: 0.2), value: quickSaveSymbol)
       .padding(.top, 8)
+      .onAppear { logObservedStatusIfChanged() }
+      .onChange(of: diagnosticStatus) { _, _ in logObservedStatusIfChanged() }
     } else {
       SwiftUI.Button(
         role: props.role?.toNativeRole(),

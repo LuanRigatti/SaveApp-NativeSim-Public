@@ -53,20 +53,16 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
       </HStack>
     ),
     compactLeading: (
-      <Link destination={props.composeUrl} modifiers={[tint('#FFFFFF')]}>
-        <Image
-          uiImage={props.iconUri}
-          modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
-        />
-      </Link>
+      <Image
+        uiImage={props.iconUri}
+        modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
+      />
     ),
     minimal: (
-      <Link destination={props.composeUrl} modifiers={[tint('#FFFFFF')]}>
-        <Image
-          uiImage={props.iconUri}
-          modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
-        />
-      </Link>
+      <Image
+        uiImage={props.iconUri}
+        modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
+      />
     ),
     expandedLeading: (
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>

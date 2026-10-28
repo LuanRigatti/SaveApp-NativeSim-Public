@@ -5,7 +5,10 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 
-import { getClipboardURLDetectionSnapshot } from '../../../modules/clipboard-url-detection/src';
+import {
+  getClipboardURLDetectionSnapshot,
+  recordSaveAppDiagnosticEvent,
+} from '../../../modules/clipboard-url-detection/src';
 import { wasClipboardChangeHandledByQuickSave } from './clipboardLinkOffer';
 import { clipboardLinkOfferState } from './clipboardLinkOfferState';
 
@@ -17,6 +20,7 @@ function persistHandledClipboardChangeCount(changeCount: number): void {
     .catch(() => undefined)
     .then(() => AsyncStorage.setItem(LAST_HANDLED_CHANGE_COUNT_KEY, String(changeCount)))
     .catch(() => {
+      recordSaveAppDiagnosticEvent('clipboard.offer.marker_persistence_failed');
       console.warn('[SaveApp] clipboard_offer.marker_persistence_failed');
     });
 }
@@ -81,6 +85,7 @@ export function useClipboardLinkOffer({
     const appState = AppState.currentState;
     if (appState != null && appState !== 'active') return;
 
+    recordSaveAppDiagnosticEvent('clipboard.offer.check_started');
     isCheckingRef.current = true;
     try {
       const snapshot = await getClipboardURLDetectionSnapshot();
@@ -92,6 +97,7 @@ export function useClipboardLinkOffer({
         clipboardLinkOfferState.hasExplicitFlow() ||
         isReadingClipboardRef.current
       ) {
+        if (!snapshot) recordSaveAppDiagnosticEvent('clipboard.offer.snapshot_unavailable');
         return;
       }
 
@@ -101,6 +107,7 @@ export function useClipboardLinkOffer({
         snapshot.systemUptime,
         snapshot.quickSaveHandledSystemUptime,
       )) {
+        recordSaveAppDiagnosticEvent('clipboard.offer.quick_save_marker_matched');
         markClipboardLinkChangeCountHandled(snapshot.changeCount);
         return;
       }
@@ -110,15 +117,18 @@ export function useClipboardLinkOffer({
         snapshot.hasProbableWebURL,
         snapshot.changeCount,
       )) {
+        recordSaveAppDiagnosticEvent('clipboard.offer.no_candidate');
         return;
       }
 
       const offeredChangeCount = snapshot.changeCount;
       markClipboardLinkChangeCountHandled(offeredChangeCount);
       isAlertVisibleRef.current = true;
+      recordSaveAppDiagnosticEvent('clipboard.offer.presented');
 
       const dismissOffer = () => {
         isAlertVisibleRef.current = false;
+        recordSaveAppDiagnosticEvent('clipboard.offer.dismissed');
         checkClipboardRef.current();
       };
 
@@ -132,23 +142,38 @@ export function useClipboardLinkOffer({
             onPress: () => {
               isAlertVisibleRef.current = false;
               isReadingClipboardRef.current = true;
+              recordSaveAppDiagnosticEvent('clipboard.offer.save_selected');
               void (async () => {
                 let candidateWasDispatched = false;
                 try {
+                  recordSaveAppDiagnosticEvent('clipboard.offer.read_started');
                   const currentSnapshot = await getClipboardURLDetectionSnapshot();
-                  if (!currentSnapshot || currentSnapshot.changeCount !== offeredChangeCount) return;
+                  if (!currentSnapshot || currentSnapshot.changeCount !== offeredChangeCount) {
+                    recordSaveAppDiagnosticEvent('clipboard.offer.change_count_changed');
+                    return;
+                  }
 
+                  recordSaveAppDiagnosticEvent(snapshot.hasURLItem
+                    ? 'clipboard.offer.read_url'
+                    : 'clipboard.offer.read_text');
                   const clipboardText = snapshot.hasURLItem
                     ? await Clipboard.getUrlAsync()
                     : await Clipboard.getStringAsync();
                   const latestSnapshot = await getClipboardURLDetectionSnapshot();
-                  if (!latestSnapshot || latestSnapshot.changeCount !== offeredChangeCount) return;
+                  if (!latestSnapshot || latestSnapshot.changeCount !== offeredChangeCount) {
+                    recordSaveAppDiagnosticEvent('clipboard.offer.change_count_changed');
+                    return;
+                  }
                   if (clipboardText?.trim()) {
                     onSaveCandidateRef.current(clipboardText);
                     candidateWasDispatched = true;
+                    recordSaveAppDiagnosticEvent('clipboard.offer.candidate_dispatched');
+                  } else {
+                    recordSaveAppDiagnosticEvent('clipboard.offer.read_empty');
                   }
                 } catch {
                   // iOS may deny paste access; do not retry or expose clipboard contents.
+                  recordSaveAppDiagnosticEvent('clipboard.offer.read_failed');
                 } finally {
                   isReadingClipboardRef.current = false;
                   // A dispatched candidate may have opened another native alert or the composer.
@@ -162,6 +187,7 @@ export function useClipboardLinkOffer({
       );
     } catch {
       // Clipboard type and pattern detection are best-effort and never read values here.
+      recordSaveAppDiagnosticEvent('clipboard.offer.snapshot_unavailable');
     } finally {
       isCheckingRef.current = false;
     }
@@ -193,6 +219,7 @@ export function useClipboardLinkOffer({
       })
       .catch(() => {
         // A failed preference read only removes persisted suppression for this launch.
+        recordSaveAppDiagnosticEvent('clipboard.offer.marker_persistence_failed');
       })
       .finally(() => {
         if (!mounted) return;

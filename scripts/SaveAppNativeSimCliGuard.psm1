@@ -136,6 +136,274 @@ function Assert-SaveAppNativeSimExportBehavior {
   return $true
 }
 
+function Assert-SaveAppOSLogCaptureConfiguration {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][bool]$CaptureRequested,
+    [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Variables
+  )
+
+  $enabledEntries = @($Variables | Where-Object { [string]$_.name -ceq 'SAVEAPP_OSLOG_CAPTURE_ENABLED' })
+  $recipientEntries = @($Variables | Where-Object { [string]$_.name -ceq 'SAVEAPP_LOG_AGE_RECIPIENT' })
+  if ($enabledEntries.Count -gt 1 -or $recipientEntries.Count -gt 1) {
+    throw 'SaveApp OSLog capture configuration contains duplicate repository variables.'
+  }
+
+  $enabledValue = if ($enabledEntries.Count -eq 1) { [string]$enabledEntries[0].value } else { '' }
+  if ($enabledValue -notin @('', 'true', 'false')) {
+    throw 'SaveApp OSLog capture enablement must be exactly true or false.'
+  }
+  $enabled = $enabledValue -ceq 'true'
+  if ($enabled -ne $CaptureRequested) {
+    throw 'SaveApp OSLog capture opt-in and launcher -CaptureOSLog option must agree.'
+  }
+
+  $recipient = if ($recipientEntries.Count -eq 1) { [string]$recipientEntries[0].value } else { '' }
+  if ($enabled -and ($recipient -notmatch '^age1[0-9a-z]{20,100}$')) {
+    throw 'SaveApp OSLog capture requires one valid public age recipient variable.'
+  }
+
+  return [pscustomobject]@{
+    CaptureEnabled = $enabled
+    RecipientConfigured = [bool]$recipient
+  }
+}
+
+function Get-SaveAppSimulatorStatusTarget {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$AuthenticatedUrl)
+
+  $validatedUrl = Assert-SaveAppSimulatorUrl -Url $AuthenticatedUrl
+  $uri = [Uri]$validatedUrl
+  return $uri.GetLeftPart([UriPartial]::Authority)
+}
+
+function New-SaveAppCaptureReadinessResult {
+  param([string]$State,[string]$Reason,[string]$Session = '')
+  return [pscustomobject]@{ State = $State; Reason = $Reason; Session = $Session }
+}
+
+function Test-SaveAppNativeSimTransportReadiness {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$ExpectedRunId,
+    [Parameter(Mandatory)][int]$ExpectedAttempt,
+    [Parameter(Mandatory)][string]$ExpectedSha,
+    [Parameter(Mandatory)][string]$ExpectedBareUrl,
+    [AllowNull()][object]$Run,
+    [AllowEmptyCollection()][object[]]$Statuses = @()
+  )
+
+  if ($ExpectedRunId -notmatch '^\d+$' -or $ExpectedAttempt -ne 1 -or
+      $ExpectedSha -notmatch '^[0-9a-fA-F]{40}$' -or
+      $ExpectedBareUrl -notmatch '^https://[a-z0-9-]+\.trycloudflare\.com$') {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'invalid_transport_identity'
+  }
+  if ($null -eq $Run) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'run_not_visible'
+  }
+
+  $runAttempt = 0
+  if ([string]$Run.id -cne $ExpectedRunId -or
+      -not [int]::TryParse([string]$Run.run_attempt,[ref]$runAttempt) -or $runAttempt -ne $ExpectedAttempt -or
+      [string]$Run.path -cne '.github/workflows/native-sim.yml' -or
+      [string]$Run.event -cne 'workflow_dispatch' -or
+      [string]$Run.head_branch -cne 'main' -or
+      [string]$Run.head_sha -cne $ExpectedSha) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'run_identity_mismatch'
+  }
+  if ([string]$Run.status -cne 'in_progress' -or $null -ne $Run.conclusion) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'run_not_active'
+  }
+
+  $titleMatch = [regex]::Match([string]$Run.display_title,'^native-sim (?<session>[a-f0-9]{8}) · release · (?<minutes>[0-9]{1,3})m$')
+  if (-not $titleMatch.Success) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'session_identity_missing'
+  }
+  $session = $titleMatch.Groups['session'].Value
+  $expectedContext = "native-sim/$session"
+  $expectedDescription = "SaveApp transport ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
+  $statusesForContext = @($Statuses | Where-Object { [string]$_.context -ceq $expectedContext })
+  if ($statusesForContext.Count -eq 0) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'transport_status_not_visible' -Session $session
+  }
+
+  $parsedStatuses = [Collections.Generic.List[object]]::new()
+  foreach ($status in $statusesForContext) {
+    $createdAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse([string]$status.created_at,[ref]$createdAt)) {
+      return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'transport_status_timestamp_invalid' -Session $session
+    }
+    $parsedStatuses.Add([pscustomobject]@{ Status = $status; CreatedAt = $createdAt })
+  }
+  $latestStatus = @($parsedStatuses | Sort-Object -Property CreatedAt -Descending | Select-Object -First 1)[0].Status
+  if ([string]$latestStatus.state -cne 'success' -or
+      [string]$latestStatus.description -cne $expectedDescription -or
+      [string]$latestStatus.target_url -cne $ExpectedBareUrl) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'current_transport_status_missing' -Session $session
+  }
+
+  $runCreatedAt = [DateTimeOffset]::MinValue
+  $statusCreatedAt = [DateTimeOffset]::MinValue
+  if (-not [DateTimeOffset]::TryParse([string]$Run.created_at,[ref]$runCreatedAt) -or
+      -not [DateTimeOffset]::TryParse([string]$latestStatus.created_at,[ref]$statusCreatedAt)) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'transport_timestamp_invalid' -Session $session
+  }
+  if ($statusCreatedAt -lt $runCreatedAt) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'stale_transport_status' -Session $session
+  }
+
+  return New-SaveAppCaptureReadinessResult -State 'ready' -Reason 'exact_run_transport_ready' -Session $session
+}
+
+function Test-SaveAppNativeSimCaptureReadiness {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][bool]$CaptureRequested,
+    [Parameter(Mandatory)][string]$ExpectedRunId,
+    [Parameter(Mandatory)][int]$ExpectedAttempt,
+    [Parameter(Mandatory)][string]$ExpectedSha,
+    [Parameter(Mandatory)][string]$ExpectedBareUrl,
+    [AllowNull()][object]$Run,
+    [AllowEmptyCollection()][object[]]$Jobs = @(),
+    [AllowEmptyCollection()][object[]]$Statuses = @()
+  )
+
+  if (-not $CaptureRequested) {
+    return New-SaveAppCaptureReadinessResult -State 'ready' -Reason 'capture_not_requested'
+  }
+
+  if ($ExpectedRunId -notmatch '^\d+$' -or $ExpectedAttempt -ne 1 -or $ExpectedSha -notmatch '^[0-9a-fA-F]{40}$' -or
+      $ExpectedBareUrl -notmatch '^https://[a-z0-9-]+\.trycloudflare\.com$') {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'invalid_expected_identity'
+  }
+  if ($null -eq $Run) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'run_not_visible'
+  }
+
+  $runId = [string]$Run.id
+  $runAttempt = 0
+  if (-not [int]::TryParse([string]$Run.run_attempt,[ref]$runAttempt) -or
+      $runId -cne $ExpectedRunId -or $runAttempt -ne $ExpectedAttempt -or
+      [string]$Run.path -cne '.github/workflows/native-sim.yml' -or
+      [string]$Run.event -cne 'workflow_dispatch' -or [string]$Run.head_branch -cne 'main' -or
+      [string]$Run.head_sha -cne $ExpectedSha) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'run_identity_mismatch'
+  }
+  if ([string]$Run.status -cne 'in_progress' -or $null -ne $Run.conclusion) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'run_not_active'
+  }
+
+  $displayTitle = [string]$Run.display_title
+  $titleMatch = [regex]::Match($displayTitle,'^native-sim (?<session>[a-f0-9]{8}) · release · (?<minutes>[0-9]{1,3})m$')
+  if (-not $titleMatch.Success) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'session_identity_missing'
+  }
+  $minutes = 0
+  if (-not [int]::TryParse($titleMatch.Groups['minutes'].Value,[ref]$minutes) -or $minutes -lt 1 -or $minutes -gt 350) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'session_duration_invalid'
+  }
+  $session = $titleMatch.Groups['session'].Value
+  $expectedContext = "native-sim-capture/$session"
+  $expectedDescription = "SaveApp OSLog capture ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
+
+  $runCreatedAt = [DateTimeOffset]::MinValue
+  if (-not [DateTimeOffset]::TryParse([string]$Run.created_at,[ref]$runCreatedAt)) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'run_timestamp_invalid' -Session $session
+  }
+
+  $transport = Test-SaveAppNativeSimTransportReadiness `
+    -ExpectedRunId $ExpectedRunId `
+    -ExpectedAttempt $ExpectedAttempt `
+    -ExpectedSha $ExpectedSha `
+    -ExpectedBareUrl $ExpectedBareUrl `
+    -Run $Run `
+    -Statuses $Statuses
+  if ($transport.State -ne 'ready') { return $transport }
+
+  $contextStatuses = @($Statuses | Where-Object { [string]$_.context -ceq $expectedContext })
+  if ($contextStatuses.Count -eq 0) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'capture_status_not_visible' -Session $session
+  }
+  $parsedStatuses = [Collections.Generic.List[object]]::new()
+  foreach ($status in $contextStatuses) {
+    $createdAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse([string]$status.created_at,[ref]$createdAt)) {
+      return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'session_status_timestamp_invalid' -Session $session
+    }
+    $parsedStatuses.Add([pscustomobject]@{ Status = $status; CreatedAt = $createdAt })
+  }
+  $latestStatus = @($parsedStatuses | Sort-Object -Property CreatedAt -Descending | Select-Object -First 1)[0].Status
+  if ([string]$latestStatus.state -ceq 'failure') {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'capture_status_failed' -Session $session
+  }
+  if ([string]$latestStatus.state -cne 'success' -or
+      [string]$latestStatus.description -cne $expectedDescription -or
+      [string]$latestStatus.target_url -cne $ExpectedBareUrl) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'current_capture_ready_status_missing' -Session $session
+  }
+  $statusCreatedAt = [DateTimeOffset]::MinValue
+  if (-not [DateTimeOffset]::TryParse([string]$latestStatus.created_at,[ref]$statusCreatedAt) -or $statusCreatedAt -lt $runCreatedAt) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'stale_session_status' -Session $session
+  }
+
+  $matchingJobs = @($Jobs | Where-Object { [string]$_.name -ceq 'Build and stream SaveApp' })
+  if ($matchingJobs.Count -eq 0) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'simulator_job_not_visible' -Session $session
+  }
+  if ($matchingJobs.Count -ne 1) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'simulator_job_ambiguous' -Session $session
+  }
+  $job = $matchingJobs[0]
+  if ([string]$job.run_id -cne $ExpectedRunId -or [string]$job.head_sha -cne $ExpectedSha -or
+      ($job.PSObject.Properties.Name -contains 'run_attempt' -and [int]$job.run_attempt -ne $ExpectedAttempt)) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'simulator_job_identity_mismatch' -Session $session
+  }
+
+  $stepNames = @(
+    'Start SaveApp OSLog capture',
+    'Verify SaveApp OSLog capture probe',
+    'Publish SaveApp capture ready status',
+    'Keep the stream available'
+  )
+  $stepResults = @{}
+  foreach ($name in $stepNames) {
+    $matchingSteps = @($job.steps | Where-Object { [string]$_.name -ceq $name })
+    if ($matchingSteps.Count -eq 0) {
+      return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'required_capture_step_not_visible' -Session $session
+    }
+    if ($matchingSteps.Count -ne 1) {
+      return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'required_capture_step_ambiguous' -Session $session
+    }
+    $stepResults[$name] = $matchingSteps[0]
+    $step = $matchingSteps[0]
+    if ([string]$step.status -ceq 'completed' -and [string]$step.conclusion -cne 'success') {
+      return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'required_capture_step_failed' -Session $session
+    }
+  }
+
+  foreach ($name in @('Start SaveApp OSLog capture','Verify SaveApp OSLog capture probe','Publish SaveApp capture ready status')) {
+    if ([string]$stepResults[$name].status -cne 'completed' -or [string]$stepResults[$name].conclusion -cne 'success') {
+      return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'capture_not_confirmed_by_steps' -Session $session
+    }
+  }
+  if ([string]$stepResults['Keep the stream available'].status -cne 'in_progress') {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'simulator_stream_not_active' -Session $session
+  }
+
+  $probeCompletedAt = [DateTimeOffset]::MinValue
+  $captureStatusCreatedAt = [DateTimeOffset]::MinValue
+  if (-not [DateTimeOffset]::TryParse([string]$stepResults['Verify SaveApp OSLog capture probe'].completed_at,[ref]$probeCompletedAt) -or
+      -not [DateTimeOffset]::TryParse([string]$latestStatus.created_at,[ref]$captureStatusCreatedAt)) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'capture_probe_timestamp_not_visible' -Session $session
+  }
+  if ($captureStatusCreatedAt -lt $probeCompletedAt) {
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'capture_status_precedes_probe' -Session $session
+  }
+
+  return New-SaveAppCaptureReadinessResult -State 'ready' -Reason 'exact_attempt_transport_capture_probe_and_stream_confirmed' -Session $session
+}
+
 function Assert-SaveAppSimulatorArchive {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Path)
@@ -318,4 +586,4 @@ process.stdout.write(JSON.stringify({ changed }) + '\n');
   }
 }
 
-Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview
+Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppOSLogCaptureConfiguration,Get-SaveAppSimulatorStatusTarget,Test-SaveAppNativeSimCaptureReadiness,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview

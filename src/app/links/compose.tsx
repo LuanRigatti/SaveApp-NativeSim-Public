@@ -12,7 +12,10 @@ import {
 } from '@/features/home-content/useClipboardLinkOffer';
 import { isAuthorizedSaveLinkActivityURL } from '@/features/dynamic-island/saveLinkActivityManager';
 import { useAppTheme } from '@/theme';
-import { getClipboardURLDetectionSnapshot } from '../../../modules/clipboard-url-detection/src';
+import {
+  getClipboardURLDetectionSnapshot,
+  recordSaveAppDiagnosticEvent,
+} from '../../../modules/clipboard-url-detection/src';
 
 export default function DynamicIslandLinkComposerRoute() {
   const router = useRouter();
@@ -30,25 +33,50 @@ export default function DynamicIslandLinkComposerRoute() {
   }, [source]);
 
   useEffect(() => {
+    if (isPrepared) recordSaveAppDiagnosticEvent('navigation.composer.presented');
+  }, [isPrepared]);
+
+  useEffect(() => {
     if (!isReady || didPrepare.current) return;
     didPrepare.current = true;
+    recordSaveAppDiagnosticEvent('navigation.composer.route_opened');
+    recordSaveAppDiagnosticEvent(source === 'dynamic-island'
+      ? 'navigation.composer.dynamic_island_source'
+      : 'navigation.composer.other_source');
+    if (typeof params.activityToken === 'string' && params.activityToken.length > 0) {
+      recordSaveAppDiagnosticEvent('navigation.composer.token_present');
+    } else if (params.activityToken == null) {
+      recordSaveAppDiagnosticEvent('navigation.composer.token_missing');
+    } else {
+      recordSaveAppDiagnosticEvent('navigation.composer.token_malformed');
+    }
 
     void (async () => {
       let nextInitialLink: string | null = null;
-      if (
-        Platform.OS === 'ios' &&
-        source === 'dynamic-island' &&
-        await isAuthorizedSaveLinkActivityURL(params.activityToken)
-      ) {
+      const isActivitySource = Platform.OS === 'ios' && source === 'dynamic-island';
+      const isAuthorized = isActivitySource && await isAuthorizedSaveLinkActivityURL(params.activityToken);
+      if (isActivitySource) {
+        recordSaveAppDiagnosticEvent(isAuthorized
+          ? 'navigation.composer.token_valid'
+          : 'navigation.composer.token_invalid');
+      }
+
+      if (isAuthorized) {
         try {
+          recordSaveAppDiagnosticEvent('navigation.composer.clipboard_read_started');
           const beforeRead = await getClipboardURLDetectionSnapshot();
           markClipboardLinkChangeCountHandled(beforeRead?.changeCount);
+          recordSaveAppDiagnosticEvent(beforeRead?.hasURLItem
+            ? 'navigation.composer.clipboard_read_url'
+            : 'navigation.composer.clipboard_read_text');
           const clipboardText = beforeRead?.hasURLItem
             ? await Clipboard.getUrlAsync()
             : await Clipboard.getStringAsync();
           const afterRead = await getClipboardURLDetectionSnapshot();
 
-          if (clipboardText && beforeRead?.changeCount === afterRead?.changeCount) {
+          if (beforeRead?.changeCount !== afterRead?.changeCount) {
+            recordSaveAppDiagnosticEvent('navigation.composer.clipboard_changed');
+          } else if (clipboardText?.trim()) {
             const existingURLs = new Set(
               contents.flatMap((content) =>
                 content.contentType === 'link' ? [content.normalizedUrl] : [],
@@ -57,15 +85,22 @@ export default function DynamicIslandLinkComposerRoute() {
             const candidate = prepareClipboardLinkCandidate(clipboardText, existingURLs);
             if (candidate.status === 'ready') {
               nextInitialLink = candidate.normalizedURL;
+              recordSaveAppDiagnosticEvent('navigation.composer.candidate_valid');
             } else if (candidate.status === 'duplicate') {
+              recordSaveAppDiagnosticEvent('navigation.composer.candidate_duplicate');
               Alert.alert('Link já salvo', 'Este link já está na sua biblioteca.', [
                 { text: 'OK', onPress: () => router.replace('/') },
               ]);
               return;
+            } else if (candidate.status === 'invalid') {
+              recordSaveAppDiagnosticEvent('navigation.composer.candidate_invalid');
             }
+          } else {
+            recordSaveAppDiagnosticEvent('navigation.composer.clipboard_empty');
           }
         } catch {
           // If paste access is denied or unavailable, open the ordinary empty composer.
+          recordSaveAppDiagnosticEvent('navigation.composer.clipboard_read_failed');
         }
       }
 

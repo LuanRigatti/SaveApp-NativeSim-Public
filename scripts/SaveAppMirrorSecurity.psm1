@@ -9,6 +9,7 @@ function Assert-SaveAppSafeContent {
 
   $secretPatterns = @(
     '-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----',
+    '(?i)\bAGE-SECRET-KEY-1[023456789ACDEFGHJKLMNPQRSTUVWXYZ]{40,}\b',
     '(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}',
     '\bAKIA[0-9A-Z]{16}\b','\bAIza[0-9A-Za-z_-]{35}\b','\bsk-[A-Za-z0-9_-]{24,}\b',
     '(?i)(?:password|token|secret|api[_-]?key)\s*[:=]\s*([A-Za-z0-9_./+=-]{24,})'
@@ -138,7 +139,8 @@ function Get-SaveAppMirrorAllowlist {
     'scripts/SaveAppMirrorSecurity.psm1','scripts/SaveAppNativeSimCliGuard.psm1',
     'tests/quick-save-xcodeproj-contract.rb',
     '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
-    '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs'
+    '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs',
+    '.github/native-sim/oslog-capture.sh'
   )
   $allowedDirectories = @('assets','src','docs','.agents/skills','tests')
   $requiredFiles = @(
@@ -152,7 +154,8 @@ function Get-SaveAppMirrorAllowlist {
     'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
-    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+    '.github/native-sim/oslog-capture.sh'
   )
   foreach ($required in $requiredFiles) {
     if ($allowedFiles -notcontains $required) {

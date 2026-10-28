@@ -18,6 +18,11 @@ const clipboardNative = readSource('../modules/clipboard-url-detection/ios/SaveA
 const clipboardModule = readSource('../modules/clipboard-url-detection/src/index.ts');
 const clipboardOffer = readSource('../src/features/home-content/useClipboardLinkOffer.ts');
 const savedContentProvider = readSource('../src/features/home-content/LocalSavedContentProvider.tsx');
+const savedContentLibrary = readSource('../src/features/home-content/savedContentLibrary.ts');
+const homeGallery = readSource('../src/components/photos/PhotoMasonryGallery.tsx');
+const homeScreen = readSource('../src/app/(tabs)/index.tsx');
+const composerRoute = readSource('../src/app/links/compose.tsx');
+const expoSQLiteModule = readFileSync(join(__dirname, '../node_modules/expo-sqlite/ios/SQLiteModule.swift'), 'utf8');
 const expoWidgetsRenderer = readFileSync(
   join(__dirname, '../node_modules/expo-widgets/ios/Widgets/ViewRenderer.swift'),
   'utf8',
@@ -177,7 +182,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('Activity<LiveActivityAttributes>.activities');
     expect(quickSaveIntent).toContain('activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntent).not.toMatch(/console\.|print\(|clipboard\.value.*(props|ContentState)/i);
-    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,");
+    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("source: 'dynamic-island-expanded'");
@@ -221,8 +226,8 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).toContain('.padding(.top, 8)');
     expect(quickSaveBranch).not.toMatch(/\b(?:Text|Label)\(/);
     expect(quickSaveIntent).toContain('terminalStatusDisplayNanoseconds: UInt64 = 5_000_000_000');
-    expect(quickSaveIntent).toContain('guard didSubmitResultStatus else { return }');
-    expect(quickSaveIntent).toContain('try? await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
+    expect(quickSaveIntent).toContain('guard didSubmitResultStatus else {');
+    expect(quickSaveIntent).toContain('try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
     const resultSubmitIndex = quickSaveIntent.indexOf('let didSubmitResultStatus = await updateActivity');
     const displayWindowIndex = quickSaveIntent.indexOf('Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
     const readyResetIndex = quickSaveIntent.indexOf('status: .ready', displayWindowIndex);
@@ -232,23 +237,25 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
   });
 
   test('reads clipboard only after the explicit intent and reports success only after SQLite commit', () => {
-    const intentReadIndex = quickSaveIntent.indexOf('readClipboardAfterExplicitAction()');
-    const sqliteInsertIndex = quickSaveIntent.indexOf('insertOrFindExisting(normalized)');
+    const intentReadIndex = quickSaveIntent.indexOf('readClipboardAfterExplicitAction(operationID: operationID)');
+    const sqliteInsertIndex = quickSaveIntent.indexOf('insertOrFindExisting(normalized, operationID: operationID)');
     const savedStatusIndex = quickSaveIntent.indexOf('status: .saved');
     expect(intentReadIndex).toBeGreaterThanOrEqual(0);
     expect(sqliteInsertIndex).toBeGreaterThan(intentReadIndex);
     expect(savedStatusIndex).toBeGreaterThan(sqliteInsertIndex);
     expect(quickSaveIntent).toContain('UIPasteboard.general');
-    expect(quickSaveIntent).toContain('pasteboard.hasURLs || pasteboard.hasStrings');
+    expect(quickSaveIntent).toContain('let hasURL = pasteboard.hasURLs');
+    expect(quickSaveIntent).toContain('let hasString = pasteboard.hasStrings');
+    expect(quickSaveIntent).toContain('guard hasURL || hasString else {');
     expect(quickSaveIntent).toContain('pasteboard.changeCount == changeCount');
     expect(quickSaveIntent).toContain('SaveLinkQuickSaveSQLite.normalize(clipboard.value)');
-    expect(quickSaveIntent).toContain('ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount)');
+    expect(quickSaveIntent).toContain('ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)');
     expect(quickSaveIntent).toContain('Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.intent")');
     expect(quickSaveIntent).not.toMatch(/logger\.(?:info|notice|error)\([^\n]*(?:clipboard\.value|normalized\.url|link\.url)/i);
-    expect(quickSaveIntent).toContain('activity_update.result=skipped');
-    expect(quickSaveIntent).toContain('database_stage=');
-    expect(quickSaveIntent).toContain('clipboard_marker.result=written');
-    expect(quickSaveIntent).toContain('clipboard_marker.result=failed reason=synchronization_unconfirmed');
+    expect(quickSaveIntent).toContain('event=activity.lookup.result=not_found');
+    expect(quickSaveIntent).toContain('stage=sqlite_');
+    expect(quickSaveIntent).toContain('event=clipboard_marker.result=written');
+    expect(quickSaveIntent).toContain('event=clipboard_marker.result=failed reason=synchronization_unconfirmed');
 
     expect(quickSaveSQLite).toContain('FileManager.default.urls(for: .documentDirectory');
     expect(quickSaveSQLite).toContain('appendingPathComponent("SQLite"');
@@ -261,7 +268,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveSQLite).toContain('rangeOfCharacter(from: .controlCharacters) == nil');
     expect(quickSaveSQLite).toContain('requiredMigrations: Set<Int64> = [1, 9]');
     expect(quickSaveSQLite.indexOf('BEGIN IMMEDIATE;')).toBeLessThan(
-      quickSaveSQLite.indexOf('try verifyCompatibleSchema(database)'),
+      quickSaveSQLite.indexOf('try verifyCompatibleSchema(database, operationID: operationID)'),
     );
     expect(quickSaveSQLite).toContain('BEGIN IMMEDIATE;');
     expect(quickSaveSQLite).toContain('sqlite3_exec(database, "ROLLBACK;"');
@@ -271,13 +278,16 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveSQLite).toContain('return .inserted');
     expect(quickSaveSQLite).toContain('return .alreadySaved');
     expect(quickSaveSQLite).toContain('Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.sqlite")');
-    expect(quickSaveSQLite).toContain('database.commit.result=success outcome=inserted');
+    expect(quickSaveSQLite).toContain('event=database.commit.confirmed outcome=inserted');
+    expect(quickSaveSQLite).toContain('event=database.insert.result=statement_completed');
+    expect(quickSaveSQLite).toContain('action: "commit"');
+    expect(quickSaveSQLite).toContain('event=database.rollback.result=confirmed');
     expect(quickSaveSQLite).toContain('diagnosticStage');
     expect(quickSaveSQLite).toContain('diagnosticSQLiteCode');
     expect(quickSaveSQLite).not.toMatch(/URLSession|URLRequest|withTask\(|fetch\(/);
     expect(quickSaveSQLite).not.toMatch(/CREATE TABLE|ALTER TABLE|DROP TABLE/);
 
-    expect(quickSaveIntent.indexOf('insertOrFindExisting(normalized)')).toBeLessThan(
+    expect(quickSaveIntent.indexOf('insertOrFindExisting(normalized, operationID: operationID)')).toBeLessThan(
       quickSaveIntent.indexOf('status: .saved'),
     );
     expect(quickSaveIntent).toContain('status: .alreadySaved');
@@ -287,8 +297,10 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('requestGenerationByActivity');
     expect(quickSaveIntent).toContain('activeActivityIDs.insert(activityID).inserted');
     expect(quickSaveIntent).toContain('if requestGenerationByActivity[activityID] == generation');
-    expect(quickSaveIntent).toContain('database_stage=');
+    expect(quickSaveIntent).toContain('stage=sqlite_');
     expect(quickSaveIntent).toContain('sqlite_code=');
+    expect(quickSaveIntent).toContain('event=intent.perform.entered');
+    expect(quickSaveIntent).toContain('event=intent.rejected reason=already_processing');
     expect(quickSaveIntent).toContain('generation: generation');
     expect(quickSaveIntent).toContain('$0.id == activityID');
     expect(quickSaveIntent).toContain('$0.content.state.name == "SaveAppSaveLink"');
@@ -306,7 +318,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(clipboardOffer).toContain('wasClipboardChangeHandledByQuickSave(');
     expect(savedContentProvider).toContain("state === 'active'");
     expect(savedContentProvider).toContain('home.catalog.refresh_failed');
-    expect(savedContentProvider).toContain('home.catalog.initial_load_failed');
+    expect(savedContentProvider).toContain('home.catalog.initialize_failed');
     expect(savedContentProvider).toContain('home.catalog.refresh_after_delete_failed');
     expect(savedContentProvider).not.toMatch(/console\.warn\([^\n]*(?:error|clipboard|url|path)/i);
     expect(savedContentProvider).toContain('refreshPromiseRef.current');
@@ -314,21 +326,71 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(clipboardOffer).not.toMatch(/console\.warn\([^\n]*(?:clipboardText|url|path)/i);
   });
 
-  test('uses one Home fallback URL while explicit compact and minimal links keep the authorized composer route', () => {
+  test('restores the tokenized composer as the island fallback while expanded regions link to Home', () => {
     const compactLeading = activityLayout.match(/compactLeading: \(([\s\S]*?)\n\s*\),\n\s*minimal:/)?.[1] ?? '';
     const minimal = activityLayout.match(/minimal: \(([\s\S]*?)\n\s*\),\n\s*expandedLeading:/)?.[1] ?? '';
     const expandedTrailing = activityLayout.match(/expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*\};/)?.[1] ?? '';
 
-    expect(compactLeading).toContain('<Link destination={props.composeUrl}');
-    expect(minimal).toContain('<Link destination={props.composeUrl}');
+    expect(compactLeading).not.toContain('<Link');
+    expect(minimal).not.toContain('<Link');
     expect(activityLayout).toContain('<Link destination={props.expandedHomeUrl}');
     expect(expandedTrailing).toContain('target="saveapp.quickSave"');
     expect(activityManager).toContain('start: (props: SaveLinkActivityProps, url?: string)');
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
-    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,");
+    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(expoWidgetsActivity).toContain('return island.widgetURL(url)');
     expect(expoWidgetsActivity).toContain('Only apply widgetURL when the activity has one');
+  });
+
+  test('uses only allowlisted OSLog event codes and keeps diagnostics free of sensitive payloads', () => {
+    const declaredEventBlock = clipboardModule.match(/SAVEAPP_DIAGNOSTIC_EVENTS\s*=\s*\[([\s\S]*?)\] as const/)?.[1] ?? '';
+    const nativeAllowedEventBlock = clipboardNative.match(/allowedEvents:\s*Set<String>\s*=\s*\[([\s\S]*?)\n\s*\]/)?.[1] ?? '';
+    const declaredEvents = [...declaredEventBlock.matchAll(/'([a-z][a-z_.]+)'/g)].map((match) => match[1]);
+    const nativeAllowedEvents = [...nativeAllowedEventBlock.matchAll(/"([a-z][a-z_.]+)"/g)].map((match) => match[1]);
+
+    expect(declaredEvents.length).toBeGreaterThan(40);
+    expect(new Set(declaredEvents).size).toBe(declaredEvents.length);
+    expect(new Set(nativeAllowedEvents)).toEqual(new Set(declaredEvents));
+    expect(clipboardModule).toContain('recordSaveAppDiagnosticEvent(event: SaveAppDiagnosticEvent)');
+    expect(clipboardNative).toContain('guard SaveAppClipboardDiagnostics.allowedEvents.contains(event) else { return }');
+    expect(clipboardNative).toContain('Logger(subsystem: "com.luanrigatti.saveapp", category: "diagnostics")');
+    expect(clipboardNative).toContain('SaveAppClipboardDiagnostics.logger.notice("event=\\(event, privacy: .public)")');
+    expect(clipboardNative).not.toMatch(/\.logger\.info\(/);
+    expect(quickSaveIntent).not.toMatch(/\.logger\.info\(/);
+    expect(quickSaveSQLite).not.toMatch(/\.logger\.info\(/);
+    expect(quickSaveButton).not.toMatch(/diagnosticLogger\.info\(/);
+    expect(clipboardNative).not.toMatch(/logger\.(?:info|notice|error)\([^\n]*(?:pasteboard\.(?:string|url)|clipboardText|normalizedURL|token|activityID)/i);
+    expect(quickSaveIntent).not.toMatch(/logger\.(?:info|notice|error)\([^\n]*(?:clipboard\.value|normalized\.url|link\.url|\\\(activityID,\s*privacy:\s*\.public)/i);
+    expect(quickSaveSQLite).not.toMatch(/logger\.(?:info|notice|error)\([^\n]*(?:normalizedURL|link\.url|databaseURL\.path)/i);
+  });
+
+  test('traces clipboard sources, Home reads, filters, and tokenized composer without recording content', () => {
+    expect(expoSQLiteModule).toContain('appContext?.config.documentDirectory?.appendingPathComponent("SQLite").standardized.path');
+    expect(quickSaveSQLite).toContain('appendingPathComponent("SQLite", isDirectory: true)');
+    expect(quickSaveSQLite).toContain('appendingPathComponent(databaseName, isDirectory: false)');
+    expect(savedContentLibrary).toContain('home.catalog.query_started');
+    expect(savedContentLibrary).toContain('home.catalog.query_completed_links_present');
+    expect(savedContentLibrary).toContain('home.catalog.query_completed_links_absent');
+    expect(savedContentLibrary).toContain('home.catalog.query_failed');
+    expect(savedContentLibrary).toContain('deleted_at IS NULL ORDER BY created_at DESC, id DESC');
+    expect(savedContentProvider).toContain('home.catalog.initialize_started');
+    expect(savedContentProvider).toContain('home.catalog.refresh_from_home_focus');
+    expect(savedContentProvider).toContain('home.catalog.app_foreground');
+    expect(homeScreen).toContain('navigation.home.expanded_deep_link_received');
+    expect(homeScreen).toContain('home.filter.favorites');
+    expect(homeScreen).toContain('home.filter.folder');
+    expect(homeScreen).toContain('home.filter.all');
+    expect(homeGallery).toContain('home.gallery.links_visible');
+    expect(homeGallery).toContain('home.gallery.links_filtered_out');
+    expect(homeGallery).toContain('home.gallery.no_links_in_catalog');
+    expect(homeGallery).toContain('home.gallery.content_hidden');
+    expect(composerRoute).toContain('navigation.composer.token_present');
+    expect(composerRoute).toContain('navigation.composer.token_valid');
+    expect(composerRoute).toContain('navigation.composer.token_invalid');
+    expect(composerRoute).toContain('navigation.composer.candidate_valid');
+    expect(composerRoute).not.toMatch(/recordSaveAppDiagnosticEvent\([^\n]*(?:activityToken|clipboardText|normalizedURL)/i);
+    expect(homeGallery).not.toMatch(/recordSaveAppDiagnosticEvent\([^\n]*(?:item\.id|folder\.id|searchQuery)/i);
   });
 
   test('mirrors the config plugin and exact local native sources without broadening module paths', () => {

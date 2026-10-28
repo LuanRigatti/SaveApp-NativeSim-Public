@@ -30,13 +30,18 @@ struct SaveLinkQuickSaveIntent: LiveActivityIntent {
   }
 
   func perform() async throws -> some IntentResult {
+    let hasActivityID = activityID?.isEmpty == false
+    SaveAppQuickSaveLog.logger.notice("event=intent.perform.entered activity_id_present=\(hasActivityID, privacy: .public)")
     guard let activityID, !activityID.isEmpty else {
-      SaveAppQuickSaveLog.logger.error("intent.result=failed reason=missing_activity_id")
+      SaveAppQuickSaveLog.logger.error("event=intent.rejected reason=missing_activity_id")
       return .result()
     }
 
-    SaveAppQuickSaveLog.logger.info("intent.result=started")
-    await SaveLinkQuickSaveCoordinator.shared.perform(activityID: activityID)
+    SaveAppQuickSaveLog.logger.notice("event=intent.activity_id.validated")
+    let operationID = String(UUID().uuidString.prefix(8))
+    SaveAppQuickSaveLog.logger.notice("event=intent.operation.started operation=\(operationID, privacy: .public)")
+    await SaveLinkQuickSaveCoordinator.shared.perform(activityID: activityID, operationID: operationID)
+    SaveAppQuickSaveLog.logger.notice("event=intent.perform.returned operation=\(operationID, privacy: .public)")
     return .result()
   }
 }
@@ -57,9 +62,9 @@ private actor SaveLinkQuickSaveCoordinator {
   private var activeActivityIDs = Set<String>()
   private var requestGenerationByActivity: [String: UInt64] = [:]
 
-  func perform(activityID: String) async {
+  func perform(activityID: String, operationID: String) async {
     guard activeActivityIDs.insert(activityID).inserted else {
-      SaveAppQuickSaveLog.logger.notice("intent.result=ignored reason=already_processing")
+      SaveAppQuickSaveLog.logger.notice("event=intent.rejected reason=already_processing operation=\(operationID, privacy: .public)")
       return
     }
     let generation = (requestGenerationByActivity[activityID] ?? 0) &+ 1
@@ -72,88 +77,115 @@ private actor SaveLinkQuickSaveCoordinator {
       }
     }
 
-    await updateActivity(activityID: activityID, status: .processing)
-    SaveAppQuickSaveLog.logger.info("quick_save.stage=clipboard_read_started")
+    SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.accepted operation=\(operationID, privacy: .public)")
+    _ = await updateActivity(activityID: activityID, status: .processing, operationID: operationID)
 
     let clipboard: ClipboardQuickSaveInput
-    switch await readClipboardAfterExplicitAction() {
+    switch await readClipboardAfterExplicitAction(operationID: operationID) {
     case .value(let input):
       clipboard = input
-      SaveAppQuickSaveLog.logger.info("quick_save.stage=clipboard_read_validated")
     case .empty:
-      SaveAppQuickSaveLog.logger.notice("quick_save.result=invalid reason=clipboard_empty")
-      await finish(activityID: activityID, status: .invalid, generation: generation)
+      SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=clipboard_empty operation=\(operationID, privacy: .public)")
+      await finish(activityID: activityID, status: .invalid, generation: generation, operationID: operationID)
       return
     case .unavailable:
       // The system may deny or defer pasteboard access. Keep this distinct from
       // an invalid URL so the UI offers a truthful retry state.
-      SaveAppQuickSaveLog.logger.error("quick_save.result=failed reason=clipboard_unavailable")
-      await finish(activityID: activityID, status: .failed, generation: generation)
+      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=clipboard_read reason=unavailable operation=\(operationID, privacy: .public)")
+      await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
       return
     }
 
     guard let normalized = SaveLinkQuickSaveSQLite.normalize(clipboard.value) else {
-      SaveAppQuickSaveLog.logger.notice("quick_save.result=invalid reason=url_rejected")
-      await finish(activityID: activityID, status: .invalid, generation: generation)
+      SaveAppQuickSaveLog.logger.notice("event=clipboard.validation.result=invalid operation=\(operationID, privacy: .public)")
+      SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=url_invalid operation=\(operationID, privacy: .public)")
+      await finish(activityID: activityID, status: .invalid, generation: generation, operationID: operationID)
       return
     }
 
-    SaveAppQuickSaveLog.logger.info("quick_save.stage=database_insert_started")
+    SaveAppQuickSaveLog.logger.notice("event=clipboard.validation.result=http_or_https operation=\(operationID, privacy: .public)")
     do {
-      let result = try SaveLinkQuickSaveSQLite.insertOrFindExisting(normalized)
+      let result = try SaveLinkQuickSaveSQLite.insertOrFindExisting(normalized, operationID: operationID)
       switch result {
       case .inserted:
-        let markerWritten = ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount)
-        SaveAppQuickSaveLog.logger.info("quick_save.result=committed marker_written=\(markerWritten, privacy: .public)")
-        await finish(activityID: activityID, status: .saved, generation: generation)
+        SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=sqlite_commit_confirmed operation=\(operationID, privacy: .public)")
+        ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)
+        await finish(activityID: activityID, status: .saved, generation: generation, operationID: operationID)
       case .alreadySaved:
-        let markerWritten = ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount)
-        SaveAppQuickSaveLog.logger.info("quick_save.result=already_saved marker_written=\(markerWritten, privacy: .public)")
-        await finish(activityID: activityID, status: .alreadySaved, generation: generation)
+        SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=duplicate_confirmed operation=\(operationID, privacy: .public)")
+        ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)
+        await finish(activityID: activityID, status: .alreadySaved, generation: generation, operationID: operationID)
       }
     } catch let error as QuickSaveDatabaseError {
-      SaveAppQuickSaveLog.logger.error("quick_save.result=failed database_stage=\(error.diagnosticStage, privacy: .public) sqlite_code=\(error.diagnosticSQLiteCode, privacy: .public)")
-      await finish(activityID: activityID, status: .failed, generation: generation)
+      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=sqlite_\(error.diagnosticStage, privacy: .public) sqlite_code=\(error.diagnosticSQLiteCode, privacy: .public) operation=\(operationID, privacy: .public)")
+      await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
     } catch {
-      SaveAppQuickSaveLog.logger.error("quick_save.result=failed database_stage=unexpected")
-      await finish(activityID: activityID, status: .failed, generation: generation)
+      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=sqlite_unexpected operation=\(operationID, privacy: .public)")
+      await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
     }
   }
 
   private func finish(
     activityID: String,
     status: SaveLinkQuickSaveStatus,
-    generation: UInt64
+    generation: UInt64,
+    operationID: String
   ) async {
-    let didSubmitResultStatus = await updateActivity(activityID: activityID, status: status)
+    let didSubmitResultStatus = await updateActivity(activityID: activityID, status: status, operationID: operationID)
     activeActivityIDs.remove(activityID)
-    guard didSubmitResultStatus else { return }
+    guard didSubmitResultStatus else {
+      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.visual_update_unavailable operation=\(operationID, privacy: .public)")
+      return
+    }
 
     // Keep the committed result on screen longer to give ActivityKit time to render it.
     // This is best-effort; ActivityKit does not confirm that a submitted update was displayed.
-    try? await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)
-    guard requestGenerationByActivity[activityID] == generation,
-          !activeActivityIDs.contains(activityID) else {
+    SaveAppQuickSaveLog.logger.notice("event=activity.result_display.wait_started operation=\(operationID, privacy: .public)")
+    do {
+      try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)
+    } catch {
+      SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.skipped reason=wait_cancelled operation=\(operationID, privacy: .public)")
       return
     }
-    _ = await updateActivity(activityID: activityID, status: .ready)
+    guard requestGenerationByActivity[activityID] == generation,
+          !activeActivityIDs.contains(activityID) else {
+      SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.skipped reason=newer_operation operation=\(operationID, privacy: .public)")
+      return
+    }
+    SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.started operation=\(operationID, privacy: .public)")
+    _ = await updateActivity(activityID: activityID, status: .ready, operationID: operationID)
   }
 
-  private func updateActivity(activityID: String, status: SaveLinkQuickSaveStatus) async -> Bool {
+  private func updateActivity(
+    activityID: String,
+    status: SaveLinkQuickSaveStatus,
+    operationID: String
+  ) async -> Bool {
+    SaveAppQuickSaveLog.logger.notice("event=activity.lookup.started requested_state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
     guard let activity = Activity<LiveActivityAttributes>.activities.first(where: {
             $0.id == activityID && $0.content.state.name == "SaveAppSaveLink"
-          }),
-          let propsJSON = activity.content.state.props,
-          let propsData = propsJSON.data(using: .utf8),
-          var props = (try? JSONSerialization.jsonObject(with: propsData)) as? [String: Any] else {
-      SaveAppQuickSaveLog.logger.error("activity_update.result=skipped reason=activity_or_props_not_found")
+          }) else {
+      SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found operation=\(operationID, privacy: .public)")
       return false
     }
+
+    SaveAppQuickSaveLog.logger.notice("event=activity.lookup.result=found operation=\(operationID, privacy: .public)")
+    guard let propsJSON = activity.content.state.props,
+          let propsData = propsJSON.data(using: .utf8) else {
+      SaveAppQuickSaveLog.logger.error("event=activity.props.result=missing operation=\(operationID, privacy: .public)")
+      return false
+    }
+    guard var props = (try? JSONSerialization.jsonObject(with: propsData)) as? [String: Any] else {
+      SaveAppQuickSaveLog.logger.error("event=activity.props.result=decode_failed operation=\(operationID, privacy: .public)")
+      return false
+    }
+    let previousStatus = props["quickSaveStatus"] as? String ?? "unknown"
+    SaveAppQuickSaveLog.logger.notice("event=activity.state.transition previous=\(previousStatus, privacy: .public) requested=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
 
     props["quickSaveStatus"] = status.rawValue
     guard let updatedData = try? JSONSerialization.data(withJSONObject: props, options: [.sortedKeys]),
           let updatedProps = String(data: updatedData, encoding: .utf8) else {
-      SaveAppQuickSaveLog.logger.error("activity_update.result=failed reason=props_serialization")
+      SaveAppQuickSaveLog.logger.error("event=activity.update.result=serialization_failed operation=\(operationID, privacy: .public)")
       return false
     }
 
@@ -161,25 +193,51 @@ private actor SaveLinkQuickSaveCoordinator {
       name: activity.content.state.name,
       props: updatedProps
     )
+    SaveAppQuickSaveLog.logger.notice("event=activity.update.started state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
     await activity.update(ActivityContent(state: state, staleDate: nil))
-    SaveAppQuickSaveLog.logger.info("activity_update.result=submitted state=\(status.rawValue, privacy: .public)")
+    SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
     return true
   }
 
   @MainActor
-  private func readClipboardAfterExplicitAction() -> ClipboardQuickSaveReadResult {
+  private func readClipboardAfterExplicitAction(operationID: String) -> ClipboardQuickSaveReadResult {
+    SaveAppQuickSaveLog.logger.notice("event=clipboard.read.started source=live_activity_intent operation=\(operationID, privacy: .public)")
     let pasteboard = UIPasteboard.general
     let changeCount = pasteboard.changeCount
-    guard pasteboard.hasURLs || pasteboard.hasStrings else {
+    let hasURL = pasteboard.hasURLs
+    let hasString = pasteboard.hasStrings
+    guard hasURL || hasString else {
+      SaveAppQuickSaveLog.logger.notice("event=clipboard.read.result=empty type=none operation=\(operationID, privacy: .public)")
       return .empty
     }
 
-    let value = pasteboard.url?.absoluteString ?? pasteboard.string
-    guard pasteboard.changeCount == changeCount, let value else {
+    let value: String?
+    let kind: ClipboardQuickSaveInput.Kind
+    if hasURL, let url = pasteboard.url {
+      kind = .url
+      value = url.absoluteString
+    } else if hasString {
+      kind = .string
+      value = pasteboard.string
+    } else {
+      SaveAppQuickSaveLog.logger.error("event=clipboard.read.result=unavailable reason=declared_type_missing_value operation=\(operationID, privacy: .public)")
       return .unavailable
     }
-    guard !value.isEmpty else { return .empty }
-    return .value(ClipboardQuickSaveInput(value: value, changeCount: changeCount))
+    SaveAppQuickSaveLog.logger.notice("event=clipboard.read.type=\(kind.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
+    guard pasteboard.changeCount == changeCount else {
+      SaveAppQuickSaveLog.logger.notice("event=clipboard.read.result=unavailable reason=change_count_changed operation=\(operationID, privacy: .public)")
+      return .unavailable
+    }
+    guard let value else {
+      SaveAppQuickSaveLog.logger.error("event=clipboard.read.result=unavailable reason=value_missing operation=\(operationID, privacy: .public)")
+      return .unavailable
+    }
+    guard !value.isEmpty else {
+      SaveAppQuickSaveLog.logger.notice("event=clipboard.read.result=empty type=\(kind.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
+      return .empty
+    }
+    SaveAppQuickSaveLog.logger.notice("event=clipboard.read.result=completed operation=\(operationID, privacy: .public)")
+    return .value(ClipboardQuickSaveInput(value: value, changeCount: changeCount, kind: kind))
   }
 }
 
@@ -190,18 +248,24 @@ private enum ClipboardQuickSaveReadResult: Sendable {
 }
 
 private struct ClipboardQuickSaveInput: Sendable {
+  enum Kind: String, Sendable {
+    case url
+    case string
+  }
+
   let value: String
   let changeCount: Int
+  let kind: Kind
 }
 
 private enum ClipboardQuickSaveMarker {
   static let appGroupIdentifier = "group.com.luanrigatti.saveapp"
   static let userDefaultsKey = "saveapp.dynamic-island.quick-save-clipboard-event-v1"
 
-  static func markHandled(changeCount: Int) -> Bool {
+  static func markHandled(changeCount: Int, operationID: String) {
     guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
-      SaveAppQuickSaveLog.logger.error("clipboard_marker.result=unavailable")
-      return false
+      SaveAppQuickSaveLog.logger.error("event=clipboard_marker.result=unavailable operation=\(operationID, privacy: .public)")
+      return
     }
     defaults.set(
       [
@@ -210,12 +274,10 @@ private enum ClipboardQuickSaveMarker {
       ],
       forKey: userDefaultsKey
     )
-    let synchronized = defaults.synchronize()
-    if synchronized {
-      SaveAppQuickSaveLog.logger.info("clipboard_marker.result=written")
+    if defaults.synchronize() {
+      SaveAppQuickSaveLog.logger.notice("event=clipboard_marker.result=written operation=\(operationID, privacy: .public)")
     } else {
-      SaveAppQuickSaveLog.logger.error("clipboard_marker.result=failed reason=synchronization_unconfirmed")
+      SaveAppQuickSaveLog.logger.error("event=clipboard_marker.result=failed reason=synchronization_unconfirmed operation=\(operationID, privacy: .public)")
     }
-    return synchronized
   }
 }

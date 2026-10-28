@@ -18,6 +18,51 @@ function Assert-Refused {
   Assert-True $refused $Message
 }
 
+function New-SaveAppCaptureReadinessFixture {
+  $sha = 'a' * 40
+  $run = [pscustomobject]@{
+    id = '987654321'
+    run_attempt = 1
+    path = '.github/workflows/native-sim.yml'
+    event = 'workflow_dispatch'
+    head_branch = 'main'
+    head_sha = $sha
+    status = 'in_progress'
+    conclusion = $null
+    display_title = 'native-sim a1b2c3d4 · release · 120m'
+    created_at = '2026-10-27T12:00:00Z'
+    run_started_at = '2026-10-27T12:00:30Z'
+  }
+  $transportStatus = [pscustomobject]@{
+    context = 'native-sim/a1b2c3d4'
+    state = 'success'
+    description = "SaveApp transport ready session=a1b2c3d4 run=$($run.id) attempt=1 sha=$sha"
+    target_url = 'https://capture-probe.trycloudflare.com'
+    created_at = '2026-10-27T12:01:00Z'
+  }
+  $captureStatus = [pscustomobject]@{
+    context = 'native-sim-capture/a1b2c3d4'
+    state = 'success'
+    description = "SaveApp OSLog capture ready session=a1b2c3d4 run=$($run.id) attempt=1 sha=$sha"
+    target_url = 'https://capture-probe.trycloudflare.com'
+    created_at = '2026-10-27T12:02:00Z'
+  }
+  $steps = @(
+    [pscustomobject]@{ name='Start SaveApp OSLog capture'; status='completed'; conclusion='success'; completed_at='2026-10-27T12:01:30Z' },
+    [pscustomobject]@{ name='Verify SaveApp OSLog capture probe'; status='completed'; conclusion='success'; completed_at='2026-10-27T12:01:50Z' },
+    [pscustomobject]@{ name='Publish SaveApp capture ready status'; status='completed'; conclusion='success'; completed_at='2026-10-27T12:02:01Z' },
+    [pscustomobject]@{ name='Keep the stream available'; status='in_progress'; conclusion=$null }
+  )
+  $job = [pscustomobject]@{
+    name = 'Build and stream SaveApp'
+    run_id = $run.id
+    run_attempt = 1
+    head_sha = $sha
+    steps = $steps
+  }
+  return [pscustomobject]@{ Run=$run; Jobs=@($job); Statuses=@($transportStatus,$captureStatus); Sha=$sha; BareUrl=$transportStatus.target_url }
+}
+
 function Invoke-GitChecked {
   param([string]$Root,[string[]]$Arguments)
   $result = & git -C $Root @Arguments 2>&1
@@ -536,6 +581,145 @@ try {
   $preflight = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Invoke-SaveAppSwiftPreflight.ps1') -Raw
   $launcher = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Start-SaveAppNativeSim.ps1') -Raw
   $mirrorScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\mirror-saveapp.ps1') -Raw
+  $oslogCapturePath = '.github/native-sim/oslog-capture.sh'
+  $oslogCaptureHelper = Get-Content -LiteralPath (Join-Path $repositoryRoot ($oslogCapturePath -replace '/', '\')) -Raw
+  Assert-True ($productionAllowedFiles -contains $oslogCapturePath -and
+    (Test-SaveAppMirrorAllowedRelativePath -RelativePath $oslogCapturePath `
+      -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories)) 'SaveApp OSLog capture helper is an exact allowlisted path'
+  Assert-True (Assert-SaveAppSafeContent -RelativePath $oslogCapturePath -Content $oslogCaptureHelper) 'SaveApp OSLog capture helper passes the existing content scanner'
+  Assert-Refused {
+    Assert-SaveAppSafeContent -RelativePath $oslogCapturePath -Content ($oslogCaptureHelper + "`nAGE-SECRET-KEY-1" + ('A' * 58))
+  } 'the existing credential scanner still blocks age private identities inside the allowlisted OSLog helper'
+
+  $disabledCaptureConfig = Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables @()
+  Assert-True (-not $disabledCaptureConfig.CaptureEnabled) 'OSLog capture remains disabled when no explicit repository opt-in exists'
+  $validCaptureVariables = @(
+    [pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' },
+    [pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value=('age1' + ('a' * 40)) }
+  )
+  $enabledCaptureConfig = Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables $validCaptureVariables
+  Assert-True ($enabledCaptureConfig.CaptureEnabled -and $enabledCaptureConfig.RecipientConfigured -and
+    -not ($enabledCaptureConfig | ConvertTo-Json -Compress).Contains(('age1' + ('a' * 40))) -and
+    -not ($enabledCaptureConfig.PSObject.Properties.Name -contains 'Recipient')) 'explicit capture opt-in validates a public recipient without returning or printing its value'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables $validCaptureVariables } 'enabled repository capture cannot be launched without -CaptureOSLog'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @() } 'the launcher cannot request capture when repository opt-in is absent'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @([pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' }) } 'enabled capture requires the public age recipient variable'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @([pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' },[pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value='private-or-invalid' }) } 'capture rejects a malformed or private-key value without exposing it'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables @([pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' },[pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' }) } 'capture configuration rejects duplicate control variables'
+
+  $captureFixture = New-SaveAppCaptureReadinessFixture
+  $readyResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $captureFixture.Sha `
+    -ExpectedBareUrl $captureFixture.BareUrl -Run $captureFixture.Run `
+    -Jobs $captureFixture.Jobs -Statuses $captureFixture.Statuses
+  Assert-True ($readyResult.State -eq 'ready' -and $readyResult.Session -eq 'a1b2c3d4') 'capture becomes ready only with the exact active run, successful probe, status, and live stream'
+
+  $earlyFixture = New-SaveAppCaptureReadinessFixture
+  $earlyFixture.Statuses = @($earlyFixture.Statuses | Where-Object { $_.context -eq 'native-sim/a1b2c3d4' })
+  $earlyResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $earlyFixture.Sha `
+    -ExpectedBareUrl $earlyFixture.BareUrl -Run $earlyFixture.Run `
+    -Jobs $earlyFixture.Jobs -Statuses $earlyFixture.Statuses
+  Assert-True ($earlyResult.State -eq 'waiting') 'the early CLI transport success cannot confirm OSLog capture readiness by itself'
+
+  $unstartedFixture = New-SaveAppCaptureReadinessFixture
+  $unstartedFixture.Jobs[0].steps[0].status = 'in_progress'
+  $unstartedFixture.Jobs[0].steps[0].conclusion = $null
+  $unstartedResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $unstartedFixture.Sha `
+    -ExpectedBareUrl $unstartedFixture.BareUrl -Run $unstartedFixture.Run `
+    -Jobs $unstartedFixture.Jobs -Statuses $unstartedFixture.Statuses
+  Assert-True ($unstartedResult.State -eq 'waiting') 'a running collector without a completed probe is not ready'
+
+  $failedCaptureFixture = New-SaveAppCaptureReadinessFixture
+  $failedCaptureFixture.Jobs[0].steps[1].conclusion = 'failure'
+  $failedCaptureResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $failedCaptureFixture.Sha `
+    -ExpectedBareUrl $failedCaptureFixture.BareUrl -Run $failedCaptureFixture.Run `
+    -Jobs $failedCaptureFixture.Jobs -Statuses $failedCaptureFixture.Statuses
+  Assert-True ($failedCaptureResult.State -eq 'failed') 'a failed OSLog start/probe step blocks session readiness'
+
+  $failedCaptureStatusFixture = New-SaveAppCaptureReadinessFixture
+  $failedCaptureStatusFixture.Statuses[1].state = 'failure'
+  $failedCaptureStatusResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $failedCaptureStatusFixture.Sha `
+    -ExpectedBareUrl $failedCaptureStatusFixture.BareUrl -Run $failedCaptureStatusFixture.Run `
+    -Jobs $failedCaptureStatusFixture.Jobs -Statuses $failedCaptureStatusFixture.Statuses
+  Assert-True ($failedCaptureStatusResult.State -eq 'failed') 'an explicit capture failure status blocks readiness'
+
+  $wrongTransportFixture = New-SaveAppCaptureReadinessFixture
+  $wrongTransportFixture.Statuses[0].description = 'SaveApp transport ready for another run'
+  $wrongTransportResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $wrongTransportFixture.Sha `
+    -ExpectedBareUrl $wrongTransportFixture.BareUrl -Run $wrongTransportFixture.Run `
+    -Jobs $wrongTransportFixture.Jobs -Statuses $wrongTransportFixture.Statuses
+  Assert-True ($wrongTransportResult.State -eq 'waiting') 'capture readiness also requires the exact current-run transport handshake'
+
+  $captureBeforeProbeFixture = New-SaveAppCaptureReadinessFixture
+  $captureBeforeProbeFixture.Statuses[1].created_at = '2026-10-27T12:01:40Z'
+  $captureBeforeProbeResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $captureBeforeProbeFixture.Sha `
+    -ExpectedBareUrl $captureBeforeProbeFixture.BareUrl -Run $captureBeforeProbeFixture.Run `
+    -Jobs $captureBeforeProbeFixture.Jobs -Statuses $captureBeforeProbeFixture.Statuses
+  Assert-True ($captureBeforeProbeResult.State -eq 'waiting') 'a readiness status timestamp preceding the completed OSLog probe cannot release links'
+
+  $oldStatusFixture = New-SaveAppCaptureReadinessFixture
+  $oldStatus = [pscustomobject]@{
+    context = 'native-sim-capture/a1b2c3d4'; state='success';
+    description = "SaveApp OSLog capture ready session=a1b2c3d4 run=$($oldStatusFixture.Run.id) attempt=1 sha=$($oldStatusFixture.Sha)";
+    target_url = $oldStatusFixture.BareUrl; created_at = '2026-10-26T12:02:00Z'
+  }
+  $oldStatusFixture.Statuses = @($oldStatusFixture.Statuses[0],$oldStatus)
+  $oldStatusResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $oldStatusFixture.Sha `
+    -ExpectedBareUrl $oldStatusFixture.BareUrl -Run $oldStatusFixture.Run `
+    -Jobs $oldStatusFixture.Jobs -Statuses $oldStatusFixture.Statuses
+  Assert-True ($oldStatusResult.State -ne 'ready') 'an old status for the same commit and session context is rejected'
+
+  $staleTransportFixture = New-SaveAppCaptureReadinessFixture
+  $staleTransportFixture.Statuses[0].created_at = '2026-10-26T12:01:00Z'
+  $staleTransportResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $staleTransportFixture.Sha `
+    -ExpectedBareUrl $staleTransportFixture.BareUrl -Run $staleTransportFixture.Run `
+    -Jobs $staleTransportFixture.Jobs -Statuses $staleTransportFixture.Statuses
+  Assert-True ($staleTransportResult.State -ne 'ready') 'a previous transport status is rejected even when its SHA is unchanged'
+
+  $wrongRunFixture = New-SaveAppCaptureReadinessFixture
+  $wrongRunFixture.Run.id = '987654322'
+  $wrongRunResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $wrongRunFixture.Sha `
+    -ExpectedBareUrl $wrongRunFixture.BareUrl -Run $wrongRunFixture.Run `
+    -Jobs $wrongRunFixture.Jobs -Statuses $wrongRunFixture.Statuses
+  Assert-True ($wrongRunResult.State -eq 'failed') 'readiness rejects the wrong Actions run ID'
+
+  $wrongAttemptFixture = New-SaveAppCaptureReadinessFixture
+  $wrongAttemptFixture.Run.run_attempt = 2
+  $wrongAttemptResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $wrongAttemptFixture.Sha `
+    -ExpectedBareUrl $wrongAttemptFixture.BareUrl -Run $wrongAttemptFixture.Run `
+    -Jobs $wrongAttemptFixture.Jobs -Statuses $wrongAttemptFixture.Statuses
+  Assert-True ($wrongAttemptResult.State -eq 'failed') 'readiness rejects a run attempt different from the expected initial attempt'
+
+  $wrongShaFixture = New-SaveAppCaptureReadinessFixture
+  $wrongShaFixture.Run.head_sha = 'b' * 40
+  $wrongShaResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+    -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $wrongShaFixture.Sha `
+    -ExpectedBareUrl $wrongShaFixture.BareUrl -Run $wrongShaFixture.Run `
+    -Jobs $wrongShaFixture.Jobs -Statuses $wrongShaFixture.Statuses
+  Assert-True ($wrongShaResult.State -eq 'failed') 'readiness rejects a workflow run built from another SHA'
+
+  $normalReadiness = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $false `
+    -ExpectedRunId 'not-used' -ExpectedAttempt 0 -ExpectedSha 'not-used' -ExpectedBareUrl 'not-used' -Run $null
+  Assert-True ($normalReadiness.State -eq 'ready' -and $normalReadiness.Reason -eq 'capture_not_requested') 'ordinary NativeSim remains ready without OSLog-specific gates'
+
+  $missingConfigurationFailsClosed = $false
+  try { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @() | Out-Null }
+  catch { $missingConfigurationFailsClosed = $true }
+  Assert-True $missingConfigurationFailsClosed 'capture requested without valid repository opt-in/recipient fails before session readiness'
+
+  Assert-True ($launcher.Contains('[switch]$CaptureOSLog') -and
+    $launcher.Contains('Get-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureOSLog.IsPresent') -and
+    $launcher.Contains('no mirror, Preflight, or NativeSim session was started.')) 'official launcher validates capture opt-in before mirror publication or remote gates'
   $launcherMirrorIndex = $launcher.IndexOf('& pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $mirrorScript -Publish',[StringComparison]::Ordinal)
   $launcherMirrorFailureIndex = $launcher.IndexOf('Sanitized SaveApp mirror did not complete successfully; Preflight and NativeSim were not started.',[StringComparison]::Ordinal)
   $launcherPreflightIndex = $launcher.IndexOf('& $preflightScript -PassThru',[StringComparison]::Ordinal)
@@ -588,6 +772,15 @@ try {
     $simulatorSigningStep.Contains('CODE_SIGNING_ALLOWED=YES') -and
     $simulatorSigningStep.Contains('verify_app_group_signature "$APP" "SaveApp"') -and
     $simulatorSigningStep.Contains('verify_app_group_signature "$APPEX" "ExpoWidgetsTarget"')) 'NativeSim verifies effective target entitlements, re-signs the extension before the app, and retains both final App Group signature gates without deep signing'
+  $transportStepMatch = [regex]::Match($workflow,'(?ms)^\s*- name: Open tunnel and publish protected status\s+(?<step>.*?)(?=^\s*- name:|\z)')
+  $transportStep = if ($transportStepMatch.Success) { $transportStepMatch.Groups['step'].Value } else { '' }
+  $captureReadyStepMatch = [regex]::Match($workflow,'(?ms)^\s*- name: Publish SaveApp capture ready status\s+(?<step>.*?)(?=^\s*- name:|\z)')
+  $captureReadyStep = if ($captureReadyStepMatch.Success) { $captureReadyStepMatch.Groups['step'].Value } else { '' }
+  Assert-True ($workflow.Contains('CAPTURE_STATUS_CONTEXT: native-sim-capture/${{ inputs.session }}') -and
+    $transportStep.Contains('if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = ''true'' ]') -and
+    $transportStep.Contains('SaveApp transport ready session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA') -and
+    $captureReadyStep.Contains('SaveApp OSLog capture ready session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA') -and
+    $workflow.IndexOf('Publish SaveApp capture ready status',[StringComparison]::Ordinal) -gt $workflow.IndexOf('Verify SaveApp OSLog capture probe',[StringComparison]::Ordinal)) 'capture sessions publish a separate exact-run readiness status only after the live capture probe; normal sessions retain post-launch readiness'
   $maskStepStart = $workflow.IndexOf('- name: Mask stream access key',[StringComparison]::Ordinal)
   $maskStepEnd = $workflow.IndexOf('- name:', $maskStepStart + 1,[StringComparison]::Ordinal)
   $maskStep = if ($maskStepStart -ge 0 -and $maskStepEnd -gt $maskStepStart) { $workflow.Substring($maskStepStart,$maskStepEnd - $maskStepStart) } else { '' }

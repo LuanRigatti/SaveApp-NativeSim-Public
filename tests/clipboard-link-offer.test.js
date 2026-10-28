@@ -69,7 +69,7 @@ describe('clipboard link offers', () => {
     expect(detectorSource).toContain('detectedPatterns(for: [probableWebURL])');
     expect(detectorSource).toContain('pasteboard.changeCount');
     expect(detectorSource).toContain('pasteboard.hasURLs');
-    expect(detectorSource).not.toMatch(/(?:UIPasteboard\.general\.)?(?:string|url|urls|items|itemProviders|detectedValues)\b/);
+    expect(detectorSource).not.toMatch(/(?:UIPasteboard\.general|pasteboard)\.(?:string|url|urls|items|itemProviders|detectedValues)\b/);
     expect(hookSource).toContain("console.warn('[SaveApp] clipboard_offer.marker_persistence_failed')");
     expect(hookSource).not.toMatch(/console\.(?:log|warn|error)\([^\n]*(?:clipboardText|snapshot\.url|normalizedURL|candidate)/i);
     expect(hookSource).toContain('clipboardLinkOfferState.hasExplicitFlow()');

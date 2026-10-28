@@ -21,11 +21,14 @@ import { requestConfirmedSavedContentDeletion } from './contentDeletionPipeline'
 import { consumePendingTextReveal } from './textComposerNavigation';
 import type { SavedHomeContent } from './homeContentTypes';
 import { moveSavedItemToRecentlyDeleted } from '@/features/home-trash/trashLibrary';
+import { recordSaveAppDiagnosticEvent } from '../../../modules/clipboard-url-detection/src';
+
+type HomeContentRefreshReason = 'home_focus' | 'app_foreground';
 
 type SavedContentContextValue = {
   contents: SavedHomeContent[];
   isReady: boolean;
-  refresh: () => Promise<void>;
+  refresh: (reason?: HomeContentRefreshReason) => Promise<void>;
   saveLink: (url: string, signal?: AbortSignal) => Promise<void>;
   saveText: (text: string, signal?: AbortSignal) => Promise<void>;
   consumePendingTextReveal: () => number | null;
@@ -49,11 +52,18 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
 
   const initialize = useCallback((): Promise<void> => {
     if (!initializationRef.current) {
+      recordSaveAppDiagnosticEvent('home.catalog.initialize_started');
       initializationRef.current = listSavedHomeContent()
-        .then(setContents)
+        .then((nextContents) => {
+          setContents(nextContents);
+          recordSaveAppDiagnosticEvent('home.catalog.initialize_completed');
+          recordSaveAppDiagnosticEvent(nextContents.some((item) => item.contentType === 'link')
+            ? 'home.catalog.state_updated_links_present'
+            : 'home.catalog.state_updated_links_absent');
+        })
         .catch((error: unknown) => {
           initializationRef.current = null;
-          console.warn('[SaveApp] home.catalog.initial_load_failed');
+          recordSaveAppDiagnosticEvent('home.catalog.initialize_failed');
           throw error;
         })
         .finally(() => setIsReady(true));
@@ -61,8 +71,17 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
     return initializationRef.current;
   }, []);
 
-  const refresh = useCallback((): Promise<void> => {
-    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+  const refresh = useCallback((reason?: HomeContentRefreshReason): Promise<void> => {
+    recordSaveAppDiagnosticEvent('home.catalog.refresh_requested');
+    if (reason === 'home_focus') {
+      recordSaveAppDiagnosticEvent('home.catalog.refresh_from_home_focus');
+    } else if (reason === 'app_foreground') {
+      recordSaveAppDiagnosticEvent('home.catalog.app_foreground');
+    }
+    if (refreshPromiseRef.current) {
+      recordSaveAppDiagnosticEvent('home.catalog.refresh_coalesced');
+      return refreshPromiseRef.current;
+    }
 
     let initializedBeforeRefresh = false;
     const refreshPromise = initialize()
@@ -73,10 +92,14 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
       .then((nextContents) => {
         setContents(nextContents);
         setIsReady(true);
+        recordSaveAppDiagnosticEvent('home.catalog.refresh_completed');
+        recordSaveAppDiagnosticEvent(nextContents.some((item) => item.contentType === 'link')
+          ? 'home.catalog.state_updated_links_present'
+          : 'home.catalog.state_updated_links_absent');
       })
       .catch(() => {
-        // Initialization reports its own failure; only the follow-up catalog query is a refresh failure.
-        if (initializedBeforeRefresh) console.warn('[SaveApp] home.catalog.refresh_failed');
+        // Keep the last successfully rendered catalog, but expose a fixed native diagnostic.
+        if (initializedBeforeRefresh) recordSaveAppDiagnosticEvent('home.catalog.refresh_failed');
       })
       .finally(() => {
         if (refreshPromiseRef.current === refreshPromise) refreshPromiseRef.current = null;
@@ -87,7 +110,7 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void refresh();
+      if (state === 'active') void refresh('app_foreground');
     });
     return () => subscription.remove();
   }, [refresh]);

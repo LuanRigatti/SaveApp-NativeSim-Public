@@ -37,7 +37,10 @@ import { useHomeFolderAuthorization } from '@/features/home-folders/useHomeFolde
 import { useHomeSettingsSheet } from '@/features/home-content/HomeSettingsSheetProvider';
 import { useAppSafeAreaInsets } from '@/providers';
 import { useAppTheme } from '@/theme';
-import { getClipboardURLDetectionSnapshot } from '../../../modules/clipboard-url-detection/src';
+import {
+  getClipboardURLDetectionSnapshot,
+  recordSaveAppDiagnosticEvent,
+} from '../../../modules/clipboard-url-detection/src';
 
 export default function HomeScreen() {
   const { resolvedMode, theme } = useAppTheme();
@@ -142,8 +145,12 @@ export default function HomeScreen() {
       contents.flatMap((content) => content.contentType === 'link' ? [content.normalizedUrl] : []),
     );
     const candidate = prepareClipboardLinkCandidate(clipboardText, savedNormalizedURLs);
-    if (candidate.status === 'empty') return;
+    if (candidate.status === 'empty') {
+      recordSaveAppDiagnosticEvent('clipboard.offer.read_empty');
+      return;
+    }
     if (candidate.status === 'invalid') {
+      recordSaveAppDiagnosticEvent('clipboard.offer.candidate_invalid');
       setIsClipboardResultAlertActive(true);
       Alert.alert('Link inválido', 'Copie um endereço HTTP ou HTTPS para adicioná-lo ao SaveApp.', [
         { text: 'OK', onPress: () => setIsClipboardResultAlertActive(false) },
@@ -151,6 +158,7 @@ export default function HomeScreen() {
       return;
     }
     if (candidate.status === 'duplicate') {
+      recordSaveAppDiagnosticEvent('clipboard.offer.candidate_duplicate');
       setIsClipboardResultAlertActive(true);
       Alert.alert('Link já salvo', 'Este link já está na sua biblioteca.', [
         { text: 'OK', onPress: () => setIsClipboardResultAlertActive(false) },
@@ -158,14 +166,24 @@ export default function HomeScreen() {
       return;
     }
 
+    recordSaveAppDiagnosticEvent('clipboard.offer.candidate_received');
     setComposerInitialLink(candidate.normalizedURL);
     setComposerKind('link');
   }, [contents]);
 
   useFocusEffect(
     useCallback(() => {
+      recordSaveAppDiagnosticEvent('navigation.home.focused');
+      if (favoritesOnly) {
+        recordSaveAppDiagnosticEvent('home.filter.favorites');
+      } else if (selection.kind === 'folder') {
+        recordSaveAppDiagnosticEvent('home.filter.folder');
+      } else {
+        recordSaveAppDiagnosticEvent('home.filter.all');
+      }
       if (!isDynamicIslandExpandedHomeFlow) return undefined;
 
+      recordSaveAppDiagnosticEvent('navigation.home.expanded_deep_link_received');
       const releaseExplicitClipboardFlow = beginDynamicIslandClipboardFlow();
       let didLoseFocus = false;
       void getClipboardURLDetectionSnapshot()
@@ -173,12 +191,17 @@ export default function HomeScreen() {
           if (didLoseFocus) return;
           if (snapshot) {
             suppressClipboardLinkOfferForChangeCount(snapshot.changeCount);
+            recordSaveAppDiagnosticEvent('navigation.home.clipboard_suppressed');
           } else {
             suppressClipboardLinkOfferUntilClipboardChanges();
+            recordSaveAppDiagnosticEvent('navigation.home.clipboard_suppressed');
           }
         })
         .catch(() => {
-          if (!didLoseFocus) suppressClipboardLinkOfferUntilClipboardChanges();
+          if (!didLoseFocus) {
+            suppressClipboardLinkOfferUntilClipboardChanges();
+            recordSaveAppDiagnosticEvent('navigation.home.clipboard_suppression_failed');
+          }
         })
         .finally(() => {
           if (didLoseFocus) return;
@@ -190,7 +213,7 @@ export default function HomeScreen() {
         didLoseFocus = true;
         releaseExplicitClipboardFlow();
       };
-    }, [isDynamicIslandExpandedHomeFlow, router]),
+    }, [favoritesOnly, isDynamicIslandExpandedHomeFlow, router, selection.kind]),
   );
 
   const canOfferClipboardLink = homeFeedReady &&
@@ -217,7 +240,7 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void refreshSavedContent();
+      void refreshSavedContent('home_focus');
       const savedTextId = consumePendingTextReveal();
       if (savedTextId != null) setRevealSavedTextId(savedTextId);
       openPendingFolder();

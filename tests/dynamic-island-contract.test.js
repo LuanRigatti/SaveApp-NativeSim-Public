@@ -152,7 +152,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
   test('checks the App Group icon location before ActivityKit and preserves its native failure', () => {
     const iconPreparationIndex = managerSource.indexOf('const iconUri = await getSharedAppIconUri();');
     const activityStartIndex = managerSource.indexOf(
-      "{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,",
+      "{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,",
     );
 
     expect(iconPreparationIndex).toBeGreaterThanOrEqual(0);
@@ -223,7 +223,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(authorizationSource).toContain('ACTIVITY_LINK_AUTHORIZATION_KEY');
   });
 
-  test('region Links route compact taps to the tokenized composer and expanded content to Home', () => {
+  test('activity fallback routes compact and minimal taps to the tokenized composer while expanded content links to Home', () => {
     const homeSource = readSource('../src/app/(tabs)/index.tsx');
     const homeStateSource = readSource('../src/features/home-content/clipboardLinkOfferState.ts');
     const banner = layoutSource.match(/banner: \(([\s\S]*?)\n\s*\),\n\s*compactLeading:/)?.[1] ?? '';
@@ -241,20 +241,20 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(homeStateSource).toContain('suppressCurrentClipboardOffer(changeCount: number)');
     expect(homeStateSource).toContain('suppressCurrentClipboardOfferUntilChange()');
     expect(homeSource).toContain('refresh: refreshSavedContent');
-    expect(homeSource).toContain('void refreshSavedContent();');
+    expect(homeSource).toContain("refreshSavedContent('home_focus')");
     expect(homeSource).not.toContain('void refreshSavedContent().catch');
 
     expect(managerSource).toContain('activity = getActivityFactory().start(');
     expect(managerSource).toContain('composeUrl');
     expect(managerSource).toContain('activityToken: token');
-    expect(managerSource).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        expandedHomeUrl,");
+    expect(managerSource).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(layoutSource).toContain('compactLeading: (');
     expect(layoutSource).toContain('minimal: (');
     expect(banner).not.toContain('<Link');
-    expect(compactLeading).toContain('<Link destination={props.composeUrl}');
-    expect(minimal).toContain('<Link destination={props.composeUrl}');
+    expect(compactLeading).not.toContain('<Link');
+    expect(minimal).not.toContain('<Link');
     expect(expandedTrailing).toContain('target="saveapp.quickSave"');
-    expect(layoutSource.match(/<Link destination=\{props\.composeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
+    expect(layoutSource.match(/<Link destination=\{props\.composeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toBeNull();
     expect(managerSource).toContain("Linking.createURL('/links/compose'");
     expect(managerSource).toContain("Linking.createURL('/',");
   });

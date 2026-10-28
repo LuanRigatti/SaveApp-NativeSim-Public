@@ -2,7 +2,8 @@
 param(
   [ValidateRange(1, 350)][int]$Minutes = 120,
   [string]$Device = 'iPhone 17 Pro',
-  [string]$Scheme = 'SaveApp'
+  [string]$Scheme = 'SaveApp',
+  [switch]$CaptureOSLog
 )
 
 Set-StrictMode -Version Latest
@@ -37,6 +38,89 @@ function Invoke-GhText {
   $output = & gh @GhArguments 2>&1
   if ($LASTEXITCODE -ne 0) { throw "gh $($GhArguments -join ' ') failed: $output" }
   return (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+}
+
+function Get-SaveAppOSLogCaptureConfiguration {
+  param([bool]$CaptureRequested)
+
+  $variableNames = @(& gh api --paginate --jq '.variables[].name' "repos/$repo/actions/variables?per_page=100" 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw 'Could not safely inspect SaveApp NativeSim capture opt-in; no mirror, Preflight, or NativeSim session was started.' }
+  $variableNames = @($variableNames | ForEach-Object { [string]$_ })
+  $variables = [Collections.Generic.List[object]]::new()
+
+  if ($variableNames -ccontains 'SAVEAPP_OSLOG_CAPTURE_ENABLED') {
+    $value = & gh api --jq '.value' "repos/$repo/actions/variables/SAVEAPP_OSLOG_CAPTURE_ENABLED" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not safely read the SaveApp OSLog capture opt-in; no session was started.' }
+    $variables.Add([pscustomobject]@{ name = 'SAVEAPP_OSLOG_CAPTURE_ENABLED'; value = [string]$value })
+  }
+
+  $enabled = @($variables | Where-Object { $_.value -ceq 'true' }).Count -eq 1
+  if ($enabled -and $variableNames -ccontains 'SAVEAPP_LOG_AGE_RECIPIENT') {
+    $recipient = & gh api --jq '.value' "repos/$repo/actions/variables/SAVEAPP_LOG_AGE_RECIPIENT" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not safely read the SaveApp OSLog encryption configuration; no session was started.' }
+    $variables.Add([pscustomobject]@{ name = 'SAVEAPP_LOG_AGE_RECIPIENT'; value = [string]$recipient })
+  }
+
+  return (Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureRequested -Variables @($variables.ToArray()))
+}
+
+function Get-SaveAppOSLogReadinessSnapshot {
+  param(
+    [Parameter(Mandatory)][string]$RunId,
+    [Parameter(Mandatory)][int]$Attempt,
+    [Parameter(Mandatory)][string]$Sha,
+    [Parameter(Mandatory)][string]$BareUrl
+  )
+
+  $runJson = Invoke-GhText @('api',"repos/$repo/actions/runs/$RunId")
+  $run = $runJson | ConvertFrom-Json
+  $jobsJson = Invoke-GhText @('api',"repos/$repo/actions/runs/$RunId/attempts/$Attempt/jobs?per_page=100")
+  $jobs = @(($jobsJson | ConvertFrom-Json).jobs)
+  $statusesJson = Invoke-GhText @('api',"repos/$repo/commits/$Sha/statuses?per_page=100")
+  $statuses = @($statusesJson | ConvertFrom-Json)
+  $result = Test-SaveAppNativeSimCaptureReadiness `
+    -CaptureRequested $true `
+    -ExpectedRunId $RunId `
+    -ExpectedAttempt $Attempt `
+    -ExpectedSha $Sha `
+    -ExpectedBareUrl $BareUrl `
+    -Run $run `
+    -Jobs $jobs `
+    -Statuses $statuses
+
+  return [pscustomobject]@{ Result = $result; Run = $run; Jobs = $jobs }
+}
+
+function Get-SaveAppOSLogReadinessDeadline {
+  param(
+    [Parameter(Mandatory)][object]$Run,
+    [AllowEmptyCollection()][object[]]$Jobs = @()
+  )
+
+  $runCreatedAt = [DateTimeOffset]::MinValue
+  if (-not [DateTimeOffset]::TryParse([string]$Run.created_at,[ref]$runCreatedAt)) {
+    throw 'NativeSim run creation time is unavailable; capture readiness cannot use a bounded deadline.'
+  }
+
+  # Bound queueing separately. Once the job starts, allow its complete 360-minute
+  # workflow timeout plus 15 minutes for final API propagation and status checks.
+  $deadline = $runCreatedAt.AddMinutes(120)
+  $jobStarts = @($Jobs | Where-Object { [string]$_.name -ceq 'Build and stream SaveApp' })
+  $startValues = @()
+  if ($Run.PSObject.Properties.Name -contains 'run_started_at' -and $Run.run_started_at) {
+    $startValues += [string]$Run.run_started_at
+  }
+  foreach ($job in $jobStarts) {
+    if ($job.started_at) { $startValues += [string]$job.started_at }
+  }
+  foreach ($value in $startValues) {
+    $startedAt = [DateTimeOffset]::MinValue
+    if ([DateTimeOffset]::TryParse($value,[ref]$startedAt)) {
+      $candidate = $startedAt.AddMinutes(375)
+      if ($candidate -gt $deadline) { $deadline = $candidate }
+    }
+  }
+  return $deadline
 }
 
 function Assert-Repository {
@@ -152,6 +236,12 @@ try {
   $sourceSha = Assert-Repository -Root $sourceRoot -Slug $sourceRepo -ExpectedBranch 'main'
   if ((Get-RepoVisibility $sourceRepo).ToUpperInvariant() -ne 'PRIVATE') { throw 'LuanRigatti/SaveApp must be PRIVATE.' }
   Write-Output "Private SaveApp is clean and synchronized at $sourceSha."
+  $captureConfiguration = Get-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureOSLog.IsPresent
+  if ($captureConfiguration.CaptureEnabled) {
+    Write-Output 'SaveApp OSLog capture opt-in verified; the public age recipient remains undisplayed.'
+  } else {
+    Write-Output 'SaveApp OSLog capture is disabled for this NativeSim session.'
+  }
 
   $securityTests = Join-Path $sourceRoot 'tests\SaveAppSecurity.Tests.ps1'
   if (-not (Test-Path -LiteralPath $securityTests -PathType Leaf)) { throw 'SaveApp security simulation tests are missing; mirror and NativeSim were not started.' }
@@ -293,7 +383,7 @@ try {
   if (-not $nativeProcess.Start()) { throw 'Could not start the installed NativeSim CLI.' }
   $nativeProcess.BeginOutputReadLine()
   $nativeProcess.BeginErrorReadLine()
-  Write-Output "NativeSim dispatched for public main SHA $mirrorSha with a $Minutes-minute session; waiting only for its two links."
+  Write-Output "NativeSim dispatched for public main SHA $mirrorSha with a $Minutes-minute session; the CLI transport URL will remain withheld until the requested readiness gates pass."
 
   $linkDeadline = [DateTimeOffset]::UtcNow.AddMinutes(50)
   $runId = $null
@@ -354,12 +444,53 @@ try {
       [string]$run.html_url -ne $actionsUrl) {
     throw "NativeSim run $runId does not match the exact public repository, workflow, branch, SHA, and CLI Actions URL."
   }
+
+  $verifiedJobs = @()
+  if ($captureConfiguration.CaptureEnabled) {
+    $expectedAttempt = 1
+    $expectedBareUrl = Get-SaveAppSimulatorStatusTarget -AuthenticatedUrl $simulatorUrl
+    $readinessDeadline = Get-SaveAppOSLogReadinessDeadline -Run $run
+    $readiness = $null
+    do {
+      try {
+        $snapshot = Get-SaveAppOSLogReadinessSnapshot `
+          -RunId $runId `
+          -Attempt $expectedAttempt `
+          -Sha $mirrorSha `
+          -BareUrl $expectedBareUrl
+        $readiness = $snapshot.Result
+        $run = $snapshot.Run
+        $verifiedJobs = $snapshot.Jobs
+        $readinessDeadline = Get-SaveAppOSLogReadinessDeadline -Run $run -Jobs $verifiedJobs
+      } catch {
+        $readiness = [pscustomobject]@{ State = 'waiting'; Reason = 'github_readiness_api_unavailable'; Session = '' }
+      }
+
+      if ($readiness.State -eq 'ready') { break }
+      if ($readiness.State -eq 'failed') {
+        throw "SaveApp OSLog capture readiness verification failed ($($readiness.Reason)); authenticated session links were withheld."
+      }
+      if ($run -and [string]$run.status -ceq 'completed') {
+        throw 'NativeSim run completed before OSLog capture readiness was verified; authenticated session links were withheld.'
+      }
+      if ([DateTimeOffset]::UtcNow -ge $readinessDeadline) { break }
+      Start-Sleep -Seconds 20
+    } while ([DateTimeOffset]::UtcNow -lt $readinessDeadline)
+
+    if (-not $readiness -or $readiness.State -ne 'ready') {
+      $reason = if ($readiness) { [string]$readiness.Reason } else { 'readiness_not_confirmed' }
+      throw "SaveApp OSLog capture did not become ready before the bounded queue/build deadline ($reason); authenticated session links were withheld."
+    }
+  }
+
   $initialStatus = [string]$run.status
   $initialConclusion = [string]$run.conclusion
   $activeStep = $null
   try {
-    $jobsJson = Invoke-GhText @('api',"repos/$repo/actions/runs/$runId/jobs?per_page=100")
-    $jobs = @(($jobsJson | ConvertFrom-Json).jobs)
+    $jobs = if ($captureConfiguration.CaptureEnabled) { $verifiedJobs } else {
+      $jobsJson = Invoke-GhText @('api',"repos/$repo/actions/runs/$runId/attempts/$([int]$run.run_attempt)/jobs?per_page=100")
+      @(($jobsJson | ConvertFrom-Json).jobs)
+    }
     foreach ($job in $jobs) {
       $step = @($job.steps | Where-Object { $_.status -eq 'in_progress' } | Select-Object -First 1)
       if ($step.Count -gt 0) { $activeStep = [string]$step[0].name; break }
