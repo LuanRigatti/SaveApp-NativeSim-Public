@@ -13,6 +13,75 @@ function Normalize-NativeSimGateContent {
   return $normalized.Replace("`r`n","`n").Replace("`r","`n")
 }
 
+function ConvertTo-SaveAppNativeSimDateTimeOffset {
+  [CmdletBinding()]
+  param([AllowNull()][object]$Value)
+
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [DateTimeOffset]) { return $Value.ToUniversalTime() }
+  if ($Value -is [DateTime]) {
+    switch ($Value.Kind) {
+      ([DateTimeKind]::Utc) { return [DateTimeOffset]::new($Value) }
+      ([DateTimeKind]::Local) { return ([DateTimeOffset]::new($Value)).ToUniversalTime() }
+      default {
+        # GitHub API timestamps are UTC/offset ISO values. ConvertFrom-Json can
+        # produce Unspecified DateTime values on some PowerShell/.NET versions.
+        return [DateTimeOffset]::new([DateTime]::SpecifyKind($Value,[DateTimeKind]::Utc))
+      }
+    }
+  }
+  if ($Value -isnot [string]) { return $null }
+
+  $text = $Value.Trim()
+  if ($text -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$') {
+    return $null
+  }
+
+  $parsed = [DateTimeOffset]::MinValue
+  if ([DateTimeOffset]::TryParse(
+      $text,
+      [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None,
+      [ref]$parsed)) {
+    return $parsed.ToUniversalTime()
+  }
+  return $null
+}
+
+function Get-SaveAppOSLogReadinessDeadline {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][object]$Run,
+    [AllowEmptyCollection()][object[]]$Jobs = @()
+  )
+
+  $runCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $Run.created_at
+  if ($null -eq $runCreatedAt) {
+    throw 'NativeSim run creation time is unavailable or invalid; capture readiness cannot use a bounded deadline.'
+  }
+
+  # Bound queueing separately. Once the job starts, allow its complete 360-minute
+  # workflow timeout plus 15 minutes for final API propagation and status checks.
+  $deadline = $runCreatedAt.AddMinutes(120)
+  $jobStarts = @($Jobs | Where-Object { [string]$_.name -ceq 'Build and stream SaveApp' })
+  $startValues = [Collections.Generic.List[object]]::new()
+  if ($Run.PSObject.Properties.Name -contains 'run_started_at' -and $null -ne $Run.run_started_at) {
+    $startValues.Add($Run.run_started_at)
+  }
+  foreach ($job in $jobStarts) {
+    if ($null -ne $job.started_at) { $startValues.Add($job.started_at) }
+  }
+  foreach ($value in $startValues) {
+    $startedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $value
+    if ($null -eq $startedAt) {
+      throw 'NativeSim run or job start time is invalid; capture readiness cannot use a bounded deadline.'
+    }
+    $candidate = $startedAt.AddMinutes(375)
+    if ($candidate -gt $deadline) { $deadline = $candidate }
+  }
+  return $deadline
+}
+
 function Remove-SaveAppNativeSimEventSubscriptions {
   [CmdletBinding()]
   param(
@@ -230,8 +299,8 @@ function Test-SaveAppNativeSimTransportReadiness {
 
   $parsedStatuses = [Collections.Generic.List[object]]::new()
   foreach ($status in $statusesForContext) {
-    $createdAt = [DateTimeOffset]::MinValue
-    if (-not [DateTimeOffset]::TryParse([string]$status.created_at,[ref]$createdAt)) {
+    $createdAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $status.created_at
+    if ($null -eq $createdAt) {
       return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'transport_status_timestamp_invalid' -Session $session
     }
     $parsedStatuses.Add([pscustomobject]@{ Status = $status; CreatedAt = $createdAt })
@@ -243,10 +312,9 @@ function Test-SaveAppNativeSimTransportReadiness {
     return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'current_transport_status_missing' -Session $session
   }
 
-  $runCreatedAt = [DateTimeOffset]::MinValue
-  $statusCreatedAt = [DateTimeOffset]::MinValue
-  if (-not [DateTimeOffset]::TryParse([string]$Run.created_at,[ref]$runCreatedAt) -or
-      -not [DateTimeOffset]::TryParse([string]$latestStatus.created_at,[ref]$statusCreatedAt)) {
+  $runCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $Run.created_at
+  $statusCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $latestStatus.created_at
+  if ($null -eq $runCreatedAt -or $null -eq $statusCreatedAt) {
     return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'transport_timestamp_invalid' -Session $session
   }
   if ($statusCreatedAt -lt $runCreatedAt) {
@@ -307,8 +375,8 @@ function Test-SaveAppNativeSimCaptureReadiness {
   $expectedContext = "native-sim-capture/$session"
   $expectedDescription = "SaveApp OSLog capture ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
 
-  $runCreatedAt = [DateTimeOffset]::MinValue
-  if (-not [DateTimeOffset]::TryParse([string]$Run.created_at,[ref]$runCreatedAt)) {
+  $runCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $Run.created_at
+  if ($null -eq $runCreatedAt) {
     return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'run_timestamp_invalid' -Session $session
   }
 
@@ -327,8 +395,8 @@ function Test-SaveAppNativeSimCaptureReadiness {
   }
   $parsedStatuses = [Collections.Generic.List[object]]::new()
   foreach ($status in $contextStatuses) {
-    $createdAt = [DateTimeOffset]::MinValue
-    if (-not [DateTimeOffset]::TryParse([string]$status.created_at,[ref]$createdAt)) {
+    $createdAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $status.created_at
+    if ($null -eq $createdAt) {
       return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'session_status_timestamp_invalid' -Session $session
     }
     $parsedStatuses.Add([pscustomobject]@{ Status = $status; CreatedAt = $createdAt })
@@ -342,8 +410,8 @@ function Test-SaveAppNativeSimCaptureReadiness {
       [string]$latestStatus.target_url -cne $ExpectedBareUrl) {
     return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'current_capture_ready_status_missing' -Session $session
   }
-  $statusCreatedAt = [DateTimeOffset]::MinValue
-  if (-not [DateTimeOffset]::TryParse([string]$latestStatus.created_at,[ref]$statusCreatedAt) -or $statusCreatedAt -lt $runCreatedAt) {
+  $statusCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $latestStatus.created_at
+  if ($null -eq $statusCreatedAt -or $statusCreatedAt -lt $runCreatedAt) {
     return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'stale_session_status' -Session $session
   }
 
@@ -391,10 +459,9 @@ function Test-SaveAppNativeSimCaptureReadiness {
     return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'simulator_stream_not_active' -Session $session
   }
 
-  $probeCompletedAt = [DateTimeOffset]::MinValue
-  $captureStatusCreatedAt = [DateTimeOffset]::MinValue
-  if (-not [DateTimeOffset]::TryParse([string]$stepResults['Verify SaveApp OSLog capture probe'].completed_at,[ref]$probeCompletedAt) -or
-      -not [DateTimeOffset]::TryParse([string]$latestStatus.created_at,[ref]$captureStatusCreatedAt)) {
+  $probeCompletedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $stepResults['Verify SaveApp OSLog capture probe'].completed_at
+  $captureStatusCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $latestStatus.created_at
+  if ($null -eq $probeCompletedAt -or $null -eq $captureStatusCreatedAt) {
     return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'capture_probe_timestamp_not_visible' -Session $session
   }
   if ($captureStatusCreatedAt -lt $probeCompletedAt) {
@@ -586,4 +653,4 @@ process.stdout.write(JSON.stringify({ changed }) + '\n');
   }
 }
 
-Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppOSLogCaptureConfiguration,Get-SaveAppSimulatorStatusTarget,Test-SaveAppNativeSimCaptureReadiness,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview
+Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppOSLogCaptureConfiguration,Get-SaveAppSimulatorStatusTarget,ConvertTo-SaveAppNativeSimDateTimeOffset,Get-SaveAppOSLogReadinessDeadline,Test-SaveAppNativeSimCaptureReadiness,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview

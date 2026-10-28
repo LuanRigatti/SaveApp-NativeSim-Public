@@ -72,7 +72,7 @@ describe('SaveApp OSLog NativeSim capture integration', () => {
   test('launcher withholds links until exact-run capture readiness with a bounded build-aware deadline', () => {
     const snapshotStart = launcher.indexOf('function Get-SaveAppOSLogReadinessSnapshot');
     const snapshotEnd = launcher.indexOf('\nfunction ', snapshotStart + 1);
-    const deadlineStart = launcher.indexOf('function Get-SaveAppOSLogReadinessDeadline');
+    const deadlineStart = cliGuard.indexOf('function Get-SaveAppOSLogReadinessDeadline');
     const readinessStart = launcher.indexOf('$readinessDeadline = Get-SaveAppOSLogReadinessDeadline -Run $run');
     const simulatorOutput = launcher.indexOf('Authenticated Simulator: $simulatorUrl', readinessStart);
     const snapshotBlock = launcher.slice(snapshotStart, snapshotEnd);
@@ -81,8 +81,12 @@ describe('SaveApp OSLog NativeSim capture integration', () => {
     expect(snapshotBlock).toContain('/attempts/$Attempt/jobs?per_page=100');
     expect(snapshotBlock).toContain('commits/$Sha/statuses?per_page=100');
     expect(deadlineStart).toBeGreaterThanOrEqual(0);
-    expect(launcher.slice(deadlineStart, readinessStart)).toContain('AddMinutes(120)');
-    expect(launcher.slice(deadlineStart, readinessStart)).toContain('AddMinutes(375)');
+    expect(cliGuard.slice(deadlineStart)).toContain('AddMinutes(120)');
+    expect(cliGuard.slice(deadlineStart)).toContain('AddMinutes(375)');
+    expect(cliGuard).toContain('ConvertTo-SaveAppNativeSimDateTimeOffset');
+    expect(cliGuard).toContain('[Globalization.CultureInfo]::InvariantCulture');
+    expect(launcher).not.toContain('function Get-SaveAppOSLogReadinessDeadline');
+    expect(launcher).toContain('Get-SaveAppOSLogReadinessDeadline -Run $run');
     expect(readinessStart).toBeGreaterThan(snapshotEnd);
     expect(readinessBlock).toContain('Start-Sleep -Seconds 20');
     expect(readinessBlock).toContain('Get-SaveAppOSLogReadinessDeadline -Run $run -Jobs $verifiedJobs');

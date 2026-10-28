@@ -91,38 +91,6 @@ function Get-SaveAppOSLogReadinessSnapshot {
   return [pscustomobject]@{ Result = $result; Run = $run; Jobs = $jobs }
 }
 
-function Get-SaveAppOSLogReadinessDeadline {
-  param(
-    [Parameter(Mandatory)][object]$Run,
-    [AllowEmptyCollection()][object[]]$Jobs = @()
-  )
-
-  $runCreatedAt = [DateTimeOffset]::MinValue
-  if (-not [DateTimeOffset]::TryParse([string]$Run.created_at,[ref]$runCreatedAt)) {
-    throw 'NativeSim run creation time is unavailable; capture readiness cannot use a bounded deadline.'
-  }
-
-  # Bound queueing separately. Once the job starts, allow its complete 360-minute
-  # workflow timeout plus 15 minutes for final API propagation and status checks.
-  $deadline = $runCreatedAt.AddMinutes(120)
-  $jobStarts = @($Jobs | Where-Object { [string]$_.name -ceq 'Build and stream SaveApp' })
-  $startValues = @()
-  if ($Run.PSObject.Properties.Name -contains 'run_started_at' -and $Run.run_started_at) {
-    $startValues += [string]$Run.run_started_at
-  }
-  foreach ($job in $jobStarts) {
-    if ($job.started_at) { $startValues += [string]$job.started_at }
-  }
-  foreach ($value in $startValues) {
-    $startedAt = [DateTimeOffset]::MinValue
-    if ([DateTimeOffset]::TryParse($value,[ref]$startedAt)) {
-      $candidate = $startedAt.AddMinutes(375)
-      if ($candidate -gt $deadline) { $deadline = $candidate }
-    }
-  }
-  return $deadline
-}
-
 function Assert-Repository {
   param([string]$Root,[string]$Slug,[string]$ExpectedBranch)
   $actualRoot = [IO.Path]::GetFullPath((Invoke-GitText $Root @('rev-parse','--show-toplevel')))

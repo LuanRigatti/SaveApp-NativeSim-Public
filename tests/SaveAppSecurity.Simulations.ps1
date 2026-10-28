@@ -608,6 +608,76 @@ try {
   Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables @([pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' },[pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' }) } 'capture configuration rejects duplicate control variables'
 
   $captureFixture = New-SaveAppCaptureReadinessFixture
+  $originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+  $originalUICulture = [Threading.Thread]::CurrentThread.CurrentUICulture
+  try {
+    foreach ($cultureName in @('pt-BR','en-US')) {
+      $testCulture = [Globalization.CultureInfo]::GetCultureInfo($cultureName)
+      [Threading.Thread]::CurrentThread.CurrentCulture = $testCulture
+      [Threading.Thread]::CurrentThread.CurrentUICulture = $testCulture
+
+      $jsonDate = ConvertFrom-Json -InputObject '{"created_at":"2026-10-28T02:04:45Z"}'
+      Assert-True ($jsonDate.created_at -is [DateTime] -and $jsonDate.created_at.Kind -eq [DateTimeKind]::Utc) "GitHub JSON created_at remains a typed UTC DateTime under $cultureName"
+      $parsedJsonDate = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $jsonDate.created_at
+      Assert-True ($parsedJsonDate -eq [DateTimeOffset]::Parse('2026-10-28T02:04:45Z',[Globalization.CultureInfo]::InvariantCulture)) "typed JSON date parses invariantly under $cultureName"
+
+      $offsetDate = ConvertTo-SaveAppNativeSimDateTimeOffset -Value '2026-10-28T05:04:45+03:00'
+      $zuluDate = ConvertTo-SaveAppNativeSimDateTimeOffset -Value '2026-10-28T02:04:45Z'
+      $dateTimeOffset = ConvertTo-SaveAppNativeSimDateTimeOffset -Value ([DateTimeOffset]::Parse('2026-10-28T05:04:45+03:00',[Globalization.CultureInfo]::InvariantCulture))
+      $offsetJsonDate = ConvertFrom-Json -InputObject '{"created_at":"2026-10-28T05:04:45+03:00"}'
+      $parsedOffsetJsonDate = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $offsetJsonDate.created_at
+      Assert-True ($offsetDate -eq $zuluDate -and $dateTimeOffset -eq $zuluDate -and $parsedOffsetJsonDate -eq $zuluDate) "ISO Z, explicit offset, JSON DateTime, and DateTimeOffset identify the same instant under $cultureName"
+      Assert-True ($null -eq (ConvertTo-SaveAppNativeSimDateTimeOffset -Value 'not-a-timestamp') -and
+        $null -eq (ConvertTo-SaveAppNativeSimDateTimeOffset -Value $null)) "invalid and missing timestamps are rejected under $cultureName"
+
+      $jsonFixture = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $captureFixture -Depth 20 -Compress)
+      Assert-True ($jsonFixture.Run.created_at -is [DateTime] -and
+        $jsonFixture.Statuses[0].created_at -is [DateTime] -and
+        $jsonFixture.Jobs[0].steps[1].completed_at -is [DateTime]) "run, status, and job step timestamps use real ConvertFrom-Json DateTime values under $cultureName"
+      $typedReady = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+        -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $jsonFixture.Sha `
+        -ExpectedBareUrl $jsonFixture.BareUrl -Run $jsonFixture.Run `
+        -Jobs $jsonFixture.Jobs -Statuses $jsonFixture.Statuses
+      Assert-True ($typedReady.State -eq 'ready') "complete OSLog readiness accepts actual typed GitHub JSON dates under $cultureName"
+      $testSimulatorUrl = 'https://saveapp-session.trycloudflare.com/?k=abcdefghijklmnopqrstuvwxyz0123456789&mode=stream'
+      Assert-True ((Assert-SaveAppSimulatorUrl -Url $testSimulatorUrl) -ceq $testSimulatorUrl) "validated authenticated simulator URL remains unchanged after typed-date readiness under $cultureName"
+
+      $jobStartJson = ConvertFrom-Json -InputObject '{"started_at":"2026-10-27T12:01:00Z"}'
+      $jsonFixture.Jobs[0] | Add-Member -NotePropertyName started_at -NotePropertyValue $jobStartJson.started_at -Force
+      $deadline = Get-SaveAppOSLogReadinessDeadline -Run $jsonFixture.Run -Jobs $jsonFixture.Jobs
+      $expectedDeadline = ([DateTimeOffset]::new($jobStartJson.started_at)).AddMinutes(375)
+      Assert-True ($deadline -eq $expectedDeadline) "bounded readiness deadline handles typed run/job dates under $cultureName"
+
+      $invalidFixture = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $captureFixture -Depth 20 -Compress)
+      $invalidFixture.Run.created_at = 'invalid'
+      $invalidReady = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+        -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $invalidFixture.Sha `
+        -ExpectedBareUrl $invalidFixture.BareUrl -Run $invalidFixture.Run `
+        -Jobs $invalidFixture.Jobs -Statuses $invalidFixture.Statuses
+      Assert-True ($invalidReady.State -eq 'failed') "invalid run timestamp fails closed under $cultureName"
+      Assert-Refused { Get-SaveAppOSLogReadinessDeadline -Run ([pscustomobject]@{ created_at=$null }) } "missing run timestamp cannot produce a readiness deadline under $cultureName"
+
+      $invalidStatusFixture = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $captureFixture -Depth 20 -Compress)
+      $invalidStatusFixture.Statuses[0].created_at = $null
+      $invalidStatusReady = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+        -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $invalidStatusFixture.Sha `
+        -ExpectedBareUrl $invalidStatusFixture.BareUrl -Run $invalidStatusFixture.Run `
+        -Jobs $invalidStatusFixture.Jobs -Statuses $invalidStatusFixture.Statuses
+      Assert-True ($invalidStatusReady.State -eq 'failed') "missing transport status timestamp fails closed under $cultureName"
+
+      $invalidProbeFixture = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $captureFixture -Depth 20 -Compress)
+      $invalidProbeFixture.Jobs[0].steps[1].completed_at = 'invalid'
+      $invalidProbeReady = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
+        -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $invalidProbeFixture.Sha `
+        -ExpectedBareUrl $invalidProbeFixture.BareUrl -Run $invalidProbeFixture.Run `
+        -Jobs $invalidProbeFixture.Jobs -Statuses $invalidProbeFixture.Statuses
+      Assert-True ($invalidProbeReady.State -ne 'ready') "invalid capture probe completion timestamp cannot release the session under $cultureName"
+    }
+  } finally {
+    [Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture
+    [Threading.Thread]::CurrentThread.CurrentUICulture = $originalUICulture
+  }
+
   $readyResult = Test-SaveAppNativeSimCaptureReadiness -CaptureRequested $true `
     -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $captureFixture.Sha `
     -ExpectedBareUrl $captureFixture.BareUrl -Run $captureFixture.Run `
