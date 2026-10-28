@@ -258,7 +258,7 @@ enum SaveLinkQuickSaveSQLite {
     in database: OpaquePointer
   ) throws -> Bool {
     logger.notice("event=database.duplicate_check.started operation=\(operationID, privacy: .public)")
-    try withStatement(
+    return try withStatement(
       "SELECT 1 FROM saved_content WHERE content_type = 'link' AND normalized_url = ? AND deleted_at IS NULL LIMIT 1;",
       in: database
     ) { statement in

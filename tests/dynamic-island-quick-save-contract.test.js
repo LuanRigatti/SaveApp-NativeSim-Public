@@ -277,6 +277,9 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveSQLite).toContain('COMMIT;');
     expect(quickSaveSQLite).toContain('return .inserted');
     expect(quickSaveSQLite).toContain('return .alreadySaved');
+    expect(quickSaveSQLite).toMatch(
+      /private static func containsActiveLink\([\s\S]*?\) throws -> Bool \{\s*logger\.notice\([^\n]*\)\s*return try withStatement\(/,
+    );
     expect(quickSaveSQLite).toContain('Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.sqlite")');
     expect(quickSaveSQLite).toContain('event=database.commit.confirmed outcome=inserted');
     expect(quickSaveSQLite).toContain('event=database.insert.result=statement_completed');
