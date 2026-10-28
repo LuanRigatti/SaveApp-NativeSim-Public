@@ -8,6 +8,14 @@ let saveAppQuickSaveTarget = "saveapp.quickSave"
 
 private enum SaveAppQuickSaveLog {
   static let logger = Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.intent")
+
+  static var executionRole: String {
+    switch Bundle.main.bundleURL.pathExtension.lowercased() {
+    case "app": return "application"
+    case "appex": return "extension"
+    default: return "other"
+    }
+  }
 }
 
 /// Makes this pod module's App Intents metadata discoverable from the app bundle.
@@ -30,6 +38,7 @@ struct SaveLinkQuickSaveIntent: LiveActivityIntent {
   }
 
   func perform() async throws -> some IntentResult {
+    SaveAppQuickSaveLog.logger.notice("event=intent.execution_context role=\(SaveAppQuickSaveLog.executionRole, privacy: .public)")
     let hasActivityID = activityID?.isEmpty == false
     SaveAppQuickSaveLog.logger.notice("event=intent.perform.entered activity_id_present=\(hasActivityID, privacy: .public)")
     guard let activityID, !activityID.isEmpty else {
@@ -49,8 +58,8 @@ struct SaveLinkQuickSaveIntent: LiveActivityIntent {
 private enum SaveLinkQuickSaveStatus: String {
   case ready
   case processing
-  case saved
-  case alreadySaved
+  case queued
+  case alreadyQueued
   case invalid
   case failed
 }
@@ -105,22 +114,22 @@ private actor SaveLinkQuickSaveCoordinator {
 
     SaveAppQuickSaveLog.logger.notice("event=clipboard.validation.result=http_or_https operation=\(operationID, privacy: .public)")
     do {
-      let result = try SaveLinkQuickSaveSQLite.insertOrFindExisting(normalized, operationID: operationID)
+      let result = try SaveAppQuickSaveQueue.enqueue(normalized)
       switch result {
-      case .inserted:
-        SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=sqlite_commit_confirmed operation=\(operationID, privacy: .public)")
+      case .enqueued:
+        SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=queue_write_confirmed operation=\(operationID, privacy: .public)")
         ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)
-        await finish(activityID: activityID, status: .saved, generation: generation, operationID: operationID)
-      case .alreadySaved:
-        SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=duplicate_confirmed operation=\(operationID, privacy: .public)")
+        await finish(activityID: activityID, status: .queued, generation: generation, operationID: operationID)
+      case .alreadyQueued:
+        SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=already_queued operation=\(operationID, privacy: .public)")
         ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)
-        await finish(activityID: activityID, status: .alreadySaved, generation: generation, operationID: operationID)
+        await finish(activityID: activityID, status: .alreadyQueued, generation: generation, operationID: operationID)
       }
-    } catch let error as QuickSaveDatabaseError {
-      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=sqlite_\(error.diagnosticStage, privacy: .public) sqlite_code=\(error.diagnosticSQLiteCode, privacy: .public) operation=\(operationID, privacy: .public)")
+    } catch let error as QuickSaveQueueFailure {
+      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=queue reason=\(error.diagnosticCode, privacy: .public) operation=\(operationID, privacy: .public)")
       await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
     } catch {
-      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=sqlite_unexpected operation=\(operationID, privacy: .public)")
+      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=queue_unexpected operation=\(operationID, privacy: .public)")
       await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
     }
   }
@@ -162,10 +171,24 @@ private actor SaveLinkQuickSaveCoordinator {
     operationID: String
   ) async -> Bool {
     SaveAppQuickSaveLog.logger.notice("event=activity.lookup.started requested_state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
-    guard let activity = Activity<LiveActivityAttributes>.activities.first(where: {
-            $0.id == activityID && $0.content.state.name == "SaveAppSaveLink"
-          }) else {
-      SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found operation=\(operationID, privacy: .public)")
+    let activities = Activity<LiveActivityAttributes>.activities
+    guard !activities.isEmpty else {
+      SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=no_activity_available operation=\(operationID, privacy: .public)")
+      return false
+    }
+
+    let matchingActivities = activities.filter { $0.id == activityID }
+    guard !matchingActivities.isEmpty else {
+      SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=activity_id_not_found operation=\(operationID, privacy: .public)")
+      return false
+    }
+    guard matchingActivities.count == 1 else {
+      SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=activity_id_ambiguous operation=\(operationID, privacy: .public)")
+      return false
+    }
+    guard let activity = matchingActivities.first,
+          activity.content.state.name == "SaveAppSaveLink" else {
+      SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=state_name_mismatch operation=\(operationID, privacy: .public)")
       return false
     }
 
@@ -195,7 +218,7 @@ private actor SaveLinkQuickSaveCoordinator {
     )
     SaveAppQuickSaveLog.logger.notice("event=activity.update.started state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
     await activity.update(ActivityContent(state: state, staleDate: nil))
-    SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
+    SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
     return true
   }
 

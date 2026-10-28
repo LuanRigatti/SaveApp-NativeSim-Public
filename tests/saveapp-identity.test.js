@@ -20,19 +20,40 @@ describe('SaveApp identity and template boundary', () => {
     expect(appConfig).toContain("'./plugins/withStarterToolbarSync'");
   });
 
-  test('changes no dependency declaration or resolved lock entry', () => {
+  test('pins the authorized Expo SDK 58 patches and preserves React Native versions', () => {
     const rootPackage = lockfile.packages[''];
     expect(rootPackage.dependencies).toEqual(packageJson.dependencies);
     expect(rootPackage.devDependencies).toEqual(packageJson.devDependencies);
-    expect(packageJson.dependencies.expo).toBe('~58.0.20');
+    const expoPatches = {
+      '@expo/ui': ['~58.0.25', '58.0.25'],
+      expo: ['~58.0.21', '58.0.21'],
+      'expo-asset': ['~58.0.19', '58.0.19'],
+      'expo-constants': ['~58.0.14', '58.0.14'],
+      'expo-dev-client': ['~58.0.17', '58.0.17'],
+      'expo-file-system': ['~58.0.13', '58.0.13'],
+      'expo-font': ['~58.0.11', '58.0.11'],
+      'expo-image': ['~58.0.18', '58.0.18'],
+      'expo-image-manipulator': ['~58.0.16', '58.0.16'],
+      'expo-linking': ['~58.0.15', '58.0.15'],
+      'expo-media-library': ['~58.0.13', '58.0.13'],
+      'expo-router': ['~58.0.28', '58.0.28'],
+      'expo-splash-screen': ['~58.0.12', '58.0.12'],
+      'expo-video': ['~58.0.13', '58.0.13'],
+      'expo-widgets': ['~58.0.25', '58.0.25'],
+      'jest-expo': ['~58.0.13', '58.0.13'],
+    };
+
+    for (const [name, [declared, resolved]] of Object.entries(expoPatches)) {
+      const dependencies = name === 'jest-expo' ? packageJson.devDependencies : packageJson.dependencies;
+      expect(dependencies[name]).toBe(declared);
+      expect(lockfile.packages[`node_modules/${name}`]?.version).toBe(resolved);
+    }
+
+    expect(packageJson.dependencies.expo).toBe('~58.0.21');
+    expect(packageJson.dependencies['react-native']).toBe('0.88.0');
     expect(packageJson.dependencies['react-native-screens']).toBe('4.30.0');
-    expect(packageJson.dependencies['@expo/ui']).toBe('~58.0.24');
-    expect(packageJson.dependencies['expo-dev-client']).toBe('~58.0.16');
-    expect(packageJson.dependencies['expo-file-system']).toBe('~58.0.12');
-    expect(packageJson.dependencies['expo-router']).toBe('~58.0.27');
-    expect(packageJson.dependencies['expo-widgets']).toBe('~58.0.24');
     const bottomSheetPatch = fs.readFileSync(path.join(root, 'scripts/patch-expo-ui-bottom-sheet.js'), 'utf8');
-    expect(bottomSheetPatch).toContain("EXPECTED_UI_VERSION = '58.0.24'");
+    expect(bottomSheetPatch).toContain("EXPECTED_UI_VERSION = '58.0.25'");
     expect(bottomSheetPatch).toContain("uiVersion !== EXPECTED_UI_VERSION");
   });
 

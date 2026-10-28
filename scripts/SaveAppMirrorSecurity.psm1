@@ -101,7 +101,8 @@ function Test-SaveAppMirrorBlockedName {
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
-    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift'
   )
   if ($approvedModuleIosFiles -contains $path) { return $false }
 
@@ -127,6 +128,9 @@ function Get-SaveAppMirrorAllowlist {
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
+    'src/features/dynamic-island/quickSaveQueue.ts',
+    'src/features/dynamic-island/quickSaveQueueImportPipeline.ts',
     'plugins/withSaveLinkQuickSave.js',
     'plugins/withStarterToolbarSync.js',
     'scripts/patch-expo-ui-bottom-sheet.js','scripts/patch-expo-module-scan-timeout.js',
@@ -156,6 +160,9 @@ function Get-SaveAppMirrorAllowlist {
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
+    'src/features/dynamic-island/quickSaveQueue.ts',
+    'src/features/dynamic-island/quickSaveQueueImportPipeline.ts',
     '.github/native-sim/oslog-capture.sh',
     '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
   )

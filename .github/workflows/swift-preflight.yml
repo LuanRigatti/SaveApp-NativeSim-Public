@@ -120,6 +120,7 @@ jobs:
             modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift
             modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift
             modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift
+            modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift
           )
 
           for source in "${local_sources[@]}"; do

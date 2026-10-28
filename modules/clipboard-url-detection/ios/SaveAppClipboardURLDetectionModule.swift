@@ -36,7 +36,10 @@ private enum SaveAppClipboardDiagnostics {
     "home.catalog.state_updated_links_present", "home.catalog.state_updated_links_absent",
     "home.gallery.awaiting_data", "home.gallery.content_hidden", "home.gallery.no_links_in_catalog",
     "home.gallery.links_visible", "home.gallery.links_filtered_out",
-    "home.filter.all", "home.filter.folder", "home.filter.favorites"
+    "home.filter.all", "home.filter.folder", "home.filter.favorites",
+    "quick_save.import.started", "quick_save.import.sqlite_commit_confirmed",
+    "quick_save.import.duplicate_confirmed", "quick_save.import.queue_acknowledged",
+    "quick_save.import.failed", "quick_save.import.container_unavailable"
   ]
 }
 

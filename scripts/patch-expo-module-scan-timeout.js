@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const EXPECTED_AUTOLINKING_VERSION = "58.0.15";
+const EXPECTED_AUTOLINKING_VERSION = "58.0.16";
 const SCAN_TIMEOUT_MS = 30_000;
 const AUTOLINKING_PACKAGE_PATH = path.join(
   "node_modules",

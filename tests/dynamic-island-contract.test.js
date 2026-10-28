@@ -205,8 +205,12 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(expandedLeading).toContain('padding({ top: 8 })');
     expect(layoutSource).toContain("multilineTextAlignment('center')");
     expect(layoutSource).toContain('Salvar link');
-    expect(expandedCenter).toContain('Toque para salvar');
+    expect(expandedCenter).not.toContain('Toque para salvar');
     expect(expandedCenter).not.toContain('Toque para abrir');
+    expect(expandedCenter).toContain('{quickSaveCenterSubtitle ? (');
+    expect(layoutSource).toContain("quickSaveStatus === 'queued'");
+    expect(layoutSource).toContain("? 'Link salvo'");
+    expect(layoutSource).toContain("? 'Adicionado à fila'");
     expect(layoutSource).toContain('Toque para abrir');
     expect(layoutSource).not.toContain('Ativo');
     expect(layoutSource).not.toContain('34C759');

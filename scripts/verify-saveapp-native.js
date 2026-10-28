@@ -15,15 +15,25 @@ const prohibitedDependencies = [
 ];
 
 const expectedVersions = {
-  expo: '~58.0.20',
-  'expo-asset': '~58.0.18',
+  '@expo/ui': '~58.0.25',
+  expo: '~58.0.21',
+  'expo-asset': '~58.0.19',
+  'expo-constants': '~58.0.14',
   'expo-crypto': '~58.0.7',
-  'expo-dev-client': '~58.0.16',
-  'expo-file-system': '~58.0.12',
-  'expo-router': '~58.0.27',
-  'expo-widgets': '~58.0.24',
+  'expo-dev-client': '~58.0.17',
+  'expo-file-system': '~58.0.13',
+  'expo-font': '~58.0.11',
+  'expo-image': '~58.0.18',
+  'expo-image-manipulator': '~58.0.16',
+  'expo-linking': '~58.0.15',
+  'expo-media-library': '~58.0.13',
+  'expo-router': '~58.0.28',
+  'expo-splash-screen': '~58.0.12',
+  'expo-video': '~58.0.13',
+  'expo-widgets': '~58.0.25',
   'react-native-screens': '4.30.0',
-  '@expo/ui': '~58.0.24',
+  'react-native': '0.88.0',
+  'jest-expo': '~58.0.13',
 };
 
 function fail(message) {
@@ -38,7 +48,10 @@ for (const name of prohibitedDependencies) {
 }
 
 for (const [name, version] of Object.entries(expectedVersions)) {
-  if (pkg.dependencies?.[name] !== version) {
+  const declaredVersion = name === 'jest-expo'
+    ? pkg.devDependencies?.[name]
+    : pkg.dependencies?.[name];
+  if (declaredVersion !== version) {
     fail(name + ' must remain pinned to ' + version);
   }
 }
@@ -50,7 +63,7 @@ const checks = [
   ['plugins/withStarterToolbarSync.js', 'StarterToolbarMorphExperimentVariant'],
   ['plugins/withSaveLinkQuickSave.js', 'saveapp_configure_expo_widgets_quick_save'],
   ['scripts/patch-expo-ui-bottom-sheet.js', 'ignoresSafeArea(.container, edges: .bottom)'],
-  ['scripts/patch-expo-ui-bottom-sheet.js', "EXPECTED_UI_VERSION = '58.0.24'"],
+  ['scripts/patch-expo-ui-bottom-sheet.js', "EXPECTED_UI_VERSION = '58.0.25'"],
   ['.github/workflows/swift-preflight.yml', 'CODE_SIGNING_ALLOWED=NO'],
   ['.github/workflows/native-sim.yml', 'native-sim-template-version: 20'],
 ];
@@ -173,6 +186,9 @@ if (!fs.existsSync(mirrorSecurityPath) || !fs.existsSync(mirrorScriptPath) || !f
     "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift'",
     "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift'",
     "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'",
+    "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift'",
+    "'src/features/dynamic-island/quickSaveQueue.ts'",
+    "'src/features/dynamic-island/quickSaveQueueImportPipeline.ts'",
   ];
   if (requiredMirrorDependencies.some((marker) => !mirrorSecuritySource.includes(marker))) {
     fail('the exact mirror allowlist omits a required NativeSim helper or local module dependency');
@@ -288,7 +304,7 @@ if (!fs.existsSync(autolinkingCli)) {
       if (
         !widgetsPod ||
         !widgetsModule.swiftModuleNames?.includes('ExpoWidgets') ||
-        widgetsModule.packageVersion !== '~58.0.24' && widgetsModule.packageVersion !== '58.0.24'
+        widgetsModule.packageVersion !== '~58.0.25' && widgetsModule.packageVersion !== '58.0.25'
       ) {
         fail('Expo SDK 58 did not resolve the pinned ExpoWidgets native module');
       }
@@ -371,6 +387,7 @@ const quickSaveNativeSources = [
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+  'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
 ];
 for (const relativePath of quickSaveNativeSources) {
   if (!fs.existsSync(path.join(root, relativePath))) {
@@ -378,8 +395,16 @@ for (const relativePath of quickSaveNativeSources) {
   }
 }
 const quickSaveIntentSource = fs.readFileSync(path.join(root, quickSaveNativeSources[1]), 'utf8');
-const quickSaveSQLiteSource = fs.readFileSync(path.join(root, quickSaveNativeSources[3]), 'utf8');
 const quickSaveButtonSource = fs.readFileSync(path.join(root, quickSaveNativeSources[2]), 'utf8');
+const quickSaveQueueSource = fs.readFileSync(path.join(root, quickSaveNativeSources[4]), 'utf8');
+const quickSaveQueueImportPath = path.join(root, 'src/features/dynamic-island/quickSaveQueue.ts');
+const quickSaveQueueImportSource = fs.existsSync(quickSaveQueueImportPath)
+  ? fs.readFileSync(quickSaveQueueImportPath, 'utf8')
+  : '';
+const quickSaveQueuePipelinePath = path.join(root, 'src/features/dynamic-island/quickSaveQueueImportPipeline.ts');
+const quickSaveQueuePipelineSource = fs.existsSync(quickSaveQueuePipelinePath)
+  ? fs.readFileSync(quickSaveQueuePipelinePath, 'utf8')
+  : '';
 const quickSavePodHelperSource = fs.readFileSync(path.join(root, quickSaveNativeSources[0]), 'utf8');
 const quickSaveXcodeprojTestPath = path.join(root, 'tests/quick-save-xcodeproj-contract.rb');
 const quickSaveAppIntentsPackagePath = path.join(root, 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift');
@@ -401,21 +426,30 @@ if (
   !quickSaveAppIntentsPackageSource.includes('ExpoWidgetsQuickSaveAppIntentsPackage.self') ||
   !quickSaveAppIntentsPackageSource.includes('import ExpoWidgets') ||
   !quickSaveIntentSource.includes('UIPasteboard.general') ||
-  !quickSaveIntentSource.includes('insertOrFindExisting(normalized, operationID: operationID)') ||
+  !quickSaveIntentSource.includes('SaveAppQuickSaveQueue.enqueue(normalized)') ||
+  quickSaveIntentSource.includes('SaveLinkQuickSaveSQLite.insertOrFindExisting') ||
   !quickSaveButtonSource.includes('props.target == saveAppQuickSaveTarget') ||
   !quickSaveButtonSource.includes('SaveLinkQuickSaveIntent(activityID: props.source)') ||
   !widgetsRendererSource.includes('buttonProps.source = name') ||
   !widgetsLiveActivitySource.includes('WidgetsDynamicView(name: context.activityID') ||
-  !quickSaveSQLiteSource.includes('saveapp-photos.db') ||
-  !quickSaveSQLiteSource.includes('BEGIN IMMEDIATE;') ||
-  quickSaveSQLiteSource.indexOf('BEGIN IMMEDIATE;') > quickSaveSQLiteSource.indexOf('try verifyCompatibleSchema(database, operationID: operationID)') ||
-  quickSaveSQLiteSource.includes('SQLITE_OPEN_CREATE') ||
+  !quickSaveQueueSource.includes('FileManager.default.containerURL') ||
+  !quickSaveQueueSource.includes('forSecurityApplicationGroupIdentifier: appGroupIdentifier') ||
+  !quickSaveQueueSource.includes('Darwin.rename(') ||
+  !quickSaveQueueSource.includes('fsync(descriptor)') ||
+  !quickSaveQueueSource.includes('flock(descriptor, LOCK_EX)') ||
+  !quickSaveQueueSource.includes('completeUntilFirstUserAuthentication') ||
+  quickSaveQueueSource.includes('saveapp-photos.db') ||
+  !quickSaveQueueImportSource.includes('Paths.appleSharedContainers[APP_GROUP_IDENTIFIER]') ||
+  !quickSaveQueueImportSource.includes('importQueuedQuickSaveLink') ||
+  !quickSaveQueuePipelineSource.includes('await adapter.acknowledge(entry)') ||
+  !quickSaveQueuePipelineSource.includes("adapter.record('commit_confirmed')") ||
+  !quickSaveQueuePipelineSource.includes("adapter.record('duplicate_confirmed')") ||
   !quickSavePodHelperSource.includes('project.native_targets.select') ||
   !quickSavePodHelperSource.includes('PBXSourcesBuildPhase') ||
   !quickSavePodHelperSource.includes('file_ref.real_path') ||
   !quickSavePodHelperSource.includes('phase.remove_build_file(build_file)')
 ) {
-  fail('quick-save contract must validate the SDK 58 Live Activity route, real native compile target, canonical Xcode file paths, renderer replacement, and locked SQLite transaction');
+  fail('quick-save contract must validate the SDK 58 Live Activity route, real native compile target, canonical Xcode paths, renderer replacement, and durable App Group queue');
 }
 
 const appConfigSource = fs.readFileSync(appConfigPath, 'utf8');

@@ -19,6 +19,7 @@ import {
 import { prependSavedHomeContent } from './homeContentState';
 import { requestConfirmedSavedContentDeletion } from './contentDeletionPipeline';
 import { consumePendingTextReveal } from './textComposerNavigation';
+import { importPendingQuickSaveLinks } from '@/features/dynamic-island/quickSaveQueue';
 import type { SavedHomeContent } from './homeContentTypes';
 import { moveSavedItemToRecentlyDeleted } from '@/features/home-trash/trashLibrary';
 import { recordSaveAppDiagnosticEvent } from '../../../modules/clipboard-url-detection/src';
@@ -53,7 +54,8 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
   const initialize = useCallback((): Promise<void> => {
     if (!initializationRef.current) {
       recordSaveAppDiagnosticEvent('home.catalog.initialize_started');
-      initializationRef.current = listSavedHomeContent()
+      initializationRef.current = importPendingQuickSaveLinks()
+        .then(() => listSavedHomeContent())
         .then((nextContents) => {
           setContents(nextContents);
           recordSaveAppDiagnosticEvent('home.catalog.initialize_completed');
@@ -85,8 +87,9 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
 
     let initializedBeforeRefresh = false;
     const refreshPromise = initialize()
-      .then(() => {
+      .then(async () => {
         initializedBeforeRefresh = true;
+        await importPendingQuickSaveLinks();
         return listSavedHomeContent();
       })
       .then((nextContents) => {

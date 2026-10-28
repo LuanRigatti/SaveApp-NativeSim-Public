@@ -77,6 +77,12 @@ export const SAVEAPP_DIAGNOSTIC_EVENTS = [
   'home.filter.all',
   'home.filter.folder',
   'home.filter.favorites',
+  'quick_save.import.started',
+  'quick_save.import.sqlite_commit_confirmed',
+  'quick_save.import.duplicate_confirmed',
+  'quick_save.import.queue_acknowledged',
+  'quick_save.import.failed',
+  'quick_save.import.container_unavailable',
 ] as const;
 
 export type SaveAppDiagnosticEvent = (typeof SAVEAPP_DIAGNOSTIC_EVENTS)[number];

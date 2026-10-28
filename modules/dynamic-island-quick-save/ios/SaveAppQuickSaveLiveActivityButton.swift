@@ -41,32 +41,34 @@ struct WidgetButtonView: ExpoSwiftUI.View {
 struct LiveActivityButtonView: ExpoSwiftUI.View {
   @ObservedObject var props: ButtonProps
   @State private var lastLoggedQuickSaveStatus: String?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let diagnosticLogger = Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.renderer")
 
-  private var quickSaveSymbol: String {
-    props.systemImage ?? "arrow.down.to.line"
-  }
-
   private var quickSaveIsProcessing: Bool {
-    quickSaveSymbol == "hourglass"
+    diagnosticStatus == "processing"
   }
 
   private var quickSaveIsSuccess: Bool {
-    quickSaveSymbol == "checkmark"
+    diagnosticStatus == "queued"
   }
 
   private var quickSaveIsFailure: Bool {
-    quickSaveSymbol == "exclamationmark" || quickSaveSymbol == "arrow.clockwise"
+    diagnosticStatus == "invalid" || diagnosticStatus == "failed"
+  }
+
+  private var quickSaveIsQueuedDuplicate: Bool {
+    diagnosticStatus == "alreadyQueued" || diagnosticStatus == "alreadySaved"
   }
 
   private var diagnosticStatus: String {
     switch props.label {
     case "Salvar link": return "ready"
     case "Salvando link": return "processing"
-    case "Link salvo": return "saved"
-    case "Link já salvo": return "alreadySaved"
-    case "Nenhum link válido": return "invalid"
-    case "Erro ao salvar link": return "failed"
+    case "Adicionado à fila": return "queued"
+    case "Link já guardado": return "alreadyQueued"
+    case "Já salvo na biblioteca": return "alreadySaved"
+    case "Link inválido": return "invalid"
+    case "Não foi possível salvar": return "failed"
     default: return "unknown"
     }
   }
@@ -80,12 +82,23 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
 
   private var quickSaveBackground: Color {
     if quickSaveIsSuccess {
-      return Color(red: 0.17, green: 0.45, blue: 0.29)
+      return Color(red: 0.13, green: 0.45, blue: 0.27)
+    }
+    if quickSaveIsQueuedDuplicate {
+      return Color(white: 0.30)
     }
     if quickSaveIsFailure {
       return Color(red: 0.62, green: 0.22, blue: 0.21)
     }
-    return Color(white: 0.18)
+    return .clear
+  }
+
+  private var quickSaveSymbolForStatus: String {
+    switch diagnosticStatus {
+    case "invalid": return "exclamationmark"
+    case "failed": return "xmark"
+    default: return "checkmark"
+    }
   }
 
   @ViewBuilder
@@ -108,33 +121,49 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
         intent: SaveLinkQuickSaveIntent(activityID: props.source)
       ) {
         ZStack {
-          RoundedRectangle(cornerRadius: 10, style: .circular)
-            .fill(quickSaveBackground)
-            .overlay {
-              RoundedRectangle(cornerRadius: 10, style: .circular)
-                .strokeBorder(Color.white.opacity(0.09), lineWidth: 0.5)
-            }
-
           if quickSaveIsProcessing {
-            ProgressView()
-              .controlSize(.small)
-              .tint(.white)
+            Circle()
+              .trim(from: 0.08, to: 0.92)
+              .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+              .frame(width: 44, height: 44)
+              .rotationEffect(.degrees(-90))
               .accessibilityHidden(true)
+          } else if quickSaveIsSuccess || quickSaveIsQueuedDuplicate || quickSaveIsFailure {
+            Circle()
+              .fill(quickSaveBackground)
+              .overlay {
+                if reduceMotion {
+                  Image(systemName: quickSaveSymbolForStatus)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .accessibilityHidden(true)
+                } else {
+                  Image(systemName: quickSaveSymbolForStatus)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: quickSaveIsSuccess)
+                    .accessibilityHidden(true)
+                }
+              }
           } else {
-            Image(systemName: quickSaveSymbol)
-              .font(.system(size: 20, weight: .semibold))
-              .foregroundStyle(.white)
-              .contentTransition(.symbolEffect(.replace))
-              .symbolEffect(.bounce, value: quickSaveIsSuccess)
+            Circle()
+              .stroke(Color.white, lineWidth: 2)
+              .overlay {
+                Image(systemName: "checkmark")
+                  .font(.system(size: 18, weight: .medium))
+                  .foregroundStyle(.white)
+                  .accessibilityHidden(true)
+              }
           }
         }
         .frame(width: 44, height: 44)
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .circular))
+        .contentShape(Circle())
       }
       .buttonStyle(.plain)
       .accessibilityLabel(props.label ?? "Salvar link")
       .disabled(quickSaveIsProcessing)
-      .animation(.easeInOut(duration: 0.2), value: quickSaveSymbol)
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: diagnosticStatus)
       .padding(.top, 8)
       .onAppear { logObservedStatusIfChanged() }
       .onChange(of: diagnosticStatus) { _, _ in logObservedStatusIfChanged() }

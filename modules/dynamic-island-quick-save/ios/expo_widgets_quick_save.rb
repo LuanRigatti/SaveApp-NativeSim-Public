@@ -1,7 +1,7 @@
 require 'json'
 require 'pathname'
 
-SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.24'.freeze
+SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.25'.freeze
 SAVEAPP_EXPO_WIDGETS_POD_TARGET = 'ExpoWidgets'.freeze
 SAVEAPP_EXPO_WIDGETS_ALLOWED_PRODUCT_TYPES = [
   'com.apple.product-type.library.static',
@@ -11,7 +11,8 @@ SAVEAPP_EXPO_WIDGETS_RENDERER = 'node_modules/expo-widgets/ios/Widgets/Buttons.s
 SAVEAPP_QUICK_SAVE_SOURCES = [
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
-  'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift'
+  'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+  'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift'
 ].freeze
 
 def saveapp_quick_save_canonical_path(path, context)

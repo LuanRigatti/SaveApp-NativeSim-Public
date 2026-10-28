@@ -10,6 +10,10 @@ const {
 describe("Expo module scan timeout patch", () => {
   let projectRoot;
 
+  test("pins the reviewed SDK 58.0.16 autolinking patch target", () => {
+    expect(EXPECTED_AUTOLINKING_VERSION).toBe("58.0.16");
+  });
+
   function writeScannerFixtures(version = EXPECTED_AUTOLINKING_VERSION) {
     const packageRoot = path.join(
       projectRoot,
@@ -73,7 +77,7 @@ describe("Expo module scan timeout patch", () => {
   });
 
   test("fails closed when the installed Expo Autolinking version changes", () => {
-    writeScannerFixtures("58.0.14");
+    writeScannerFixtures("58.0.15");
 
     expect(() => applyPatch(projectRoot)).toThrow(
       `Expected expo-modules-autolinking ${EXPECTED_AUTOLINKING_VERSION}`,

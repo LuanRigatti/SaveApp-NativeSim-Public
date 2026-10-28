@@ -25,6 +25,7 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     'SaveAppQuickSaveLiveActivityButton.swift',
     'SaveAppQuickSaveIntent.swift',
     'SaveAppQuickSaveSQLite.swift',
+    'SaveAppQuickSaveQueue.swift',
   ].freeze
 
   Fixture = Struct.new(:root, :project, :widgets_target, :unrelated_target, :aggregate_target, :renderer_path)
@@ -114,7 +115,7 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     fixture.project.save
     before = File.binread(project_file_path(fixture.project))
 
-    assert_raises_message(RuntimeError, /source is missing: .*SaveAppQuickSaveSQLite\.swift/) do
+    assert_raises_message(RuntimeError, /source is missing: .*SaveAppQuickSaveQueue\.swift/) do
       saveapp_configure_expo_widgets_quick_save(installer_for(fixture.project), fixture.root)
     end
 
@@ -258,7 +259,7 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     package_root = File.join(root, 'node_modules', 'expo-widgets')
     renderer_path = File.join(package_root, 'ios', 'Widgets', 'Buttons.swift')
     FileUtils.mkdir_p(File.dirname(renderer_path))
-    File.write(File.join(package_root, 'package.json'), JSON.generate({ version: '58.0.24' }))
+    File.write(File.join(package_root, 'package.json'), JSON.generate({ version: '58.0.25' }))
     File.write(renderer_path, "// installed ExpoWidgets renderer fixture\n")
 
     source_paths = QUICK_SAVE_SOURCE_NAMES.map do |name|

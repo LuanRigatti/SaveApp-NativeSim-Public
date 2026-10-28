@@ -10,8 +10,10 @@ import { deleteSavedContentWithPersistence } from './contentDeletionPipeline';
 import { savedContentRowToModel, type SavedContentRow } from './savedContentCatalog';
 import { downloadLinkPreviewImage, getLinkPreview } from './linkPreview';
 import { saveLinkWithPreview, saveTextContent } from './contentSavePipeline';
+import { fallbackLinkTitle, normalizeWebLink } from './linkValidation';
 import type { SavedHomeContent, SavedLink, SavedText } from './homeContentTypes';
 import { recordSaveAppDiagnosticEvent } from '../../../modules/clipboard-url-detection/src';
+import type { PersistedQuickSaveLink } from '@/features/dynamic-island/quickSaveQueueImportPipeline';
 
 const PREVIEW_DIRECTORY = 'home-content/link-previews';
 const SAFE_PREVIEW_PATH =
@@ -117,6 +119,52 @@ export async function saveSavedLink(input: string, signal?: AbortSignal): Promis
       if (result.changes !== 1) throw new Error('The cancelled link insert could not be rolled back.');
     },
   }, signal);
+}
+
+/** Imports a durable App Group queue entry into the existing SQLite catalog without preview networking. */
+export async function importQueuedQuickSaveLink(
+  input: PersistedQuickSaveLink,
+): Promise<'inserted' | 'alreadySaved'> {
+  const normalized = normalizeWebLink(input.url);
+  if (normalized.url !== input.normalizedUrl || input.createdAt <= 0) {
+    throw new Error('Invalid queued quick-save record.');
+  }
+
+  const database = await getSaveAppDatabase();
+  let result: 'inserted' | 'alreadySaved' = 'inserted';
+  await database.withExclusiveTransactionAsync(async (transaction) => {
+    const findExisting = () => transaction.getFirstAsync<{ id: number }>(
+      "SELECT id FROM saved_content WHERE content_type = 'link' AND normalized_url = ? AND deleted_at IS NULL LIMIT 1;",
+      normalized.url,
+    );
+    if (await findExisting()) {
+      result = 'alreadySaved';
+      return;
+    }
+
+    try {
+      await transaction.runAsync(
+        `INSERT INTO saved_content
+           (content_type, created_at, url, normalized_url, title, description, domain,
+            image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content)
+         VALUES ('link', ?, ?, ?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL);`,
+        input.createdAt,
+        normalized.url,
+        normalized.url,
+        fallbackLinkTitle(normalized.url),
+        normalized.domain,
+      );
+    } catch (error) {
+      // The partial unique index remains the final guard against a concurrent manual save.
+      if (await findExisting()) {
+        result = 'alreadySaved';
+        return;
+      }
+      throw error;
+    }
+  });
+
+  return result;
 }
 
 export async function saveSavedText(text: string, signal?: AbortSignal): Promise<SavedText> {

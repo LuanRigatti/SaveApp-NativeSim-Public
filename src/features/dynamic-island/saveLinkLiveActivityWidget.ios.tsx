@@ -4,6 +4,7 @@ import {
   font,
   foregroundStyle,
   frame,
+  lineLimit,
   multilineTextAlignment,
   padding,
   resizable,
@@ -15,7 +16,7 @@ type SaveLinkActivityProps = {
   iconUri: string;
   composeUrl: string;
   expandedHomeUrl: string;
-  quickSaveStatus?: 'ready' | 'processing' | 'saved' | 'alreadySaved' | 'invalid' | 'failed';
+  quickSaveStatus?: 'ready' | 'processing' | 'queued' | 'alreadyQueued' | 'alreadySaved' | 'invalid' | 'failed';
 };
 
 function SaveLinkActivity(props: SaveLinkActivityProps) {
@@ -24,20 +25,42 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
   const quickSaveLabels = {
     ready: 'Salvar link',
     processing: 'Salvando link',
-    saved: 'Link salvo',
-    alreadySaved: 'Link já salvo',
-    invalid: 'Nenhum link válido',
-    failed: 'Erro ao salvar link',
+    queued: 'Adicionado à fila',
+    alreadyQueued: 'Link já guardado',
+    alreadySaved: 'Já salvo na biblioteca',
+    invalid: 'Link inválido',
+    failed: 'Não foi possível salvar',
   } as const;
   const quickSaveSymbols = {
-    ready: 'arrow.down.to.line',
-    processing: 'hourglass',
-    saved: 'checkmark',
+    ready: 'checkmark',
+    processing: 'circle.dotted',
+    queued: 'checkmark',
+    alreadyQueued: 'checkmark',
     alreadySaved: 'checkmark',
     invalid: 'exclamationmark',
-    failed: 'arrow.clockwise',
+    failed: 'xmark',
   } as const;
   const quickSaveStatus = props.quickSaveStatus ?? 'ready';
+  const quickSaveCenterTitle = quickSaveStatus === 'queued'
+    ? 'Link salvo'
+    : quickSaveStatus === 'alreadyQueued'
+      ? 'Link já guardado'
+      : quickSaveStatus === 'alreadySaved'
+        ? 'Já salvo na biblioteca'
+        : quickSaveStatus === 'processing'
+          ? 'Salvando link'
+          : quickSaveStatus === 'invalid'
+            ? 'Link inválido'
+            : quickSaveStatus === 'failed'
+              ? 'Não foi possível salvar'
+              : 'Salvar link';
+  const quickSaveCenterSubtitle = quickSaveStatus === 'queued'
+    ? 'Adicionado à fila'
+    : quickSaveStatus === 'alreadyQueued'
+      ? 'Adicionado anteriormente'
+      : quickSaveStatus === 'alreadySaved'
+        ? 'Confirmado na biblioteca'
+        : undefined;
 
   return {
     banner: (
@@ -84,25 +107,29 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
             modifiers={[
               font({ weight: 'semibold', textStyle: 'headline' }),
               multilineTextAlignment('center'),
+              lineLimit(1),
             ]}
           >
-            Salvar link
+            {quickSaveCenterTitle}
           </Text>
-          <Text
-            modifiers={[
-              font({ textStyle: 'subheadline' }),
-              foregroundStyle('#8E8E93'),
-              multilineTextAlignment('center'),
-            ]}
-          >
-            Toque para salvar
-          </Text>
+          {quickSaveCenterSubtitle ? (
+            <Text
+              modifiers={[
+                font({ textStyle: 'caption' }),
+                foregroundStyle('#8E8E93'),
+                multilineTextAlignment('center'),
+                lineLimit(1),
+              ]}
+            >
+              {quickSaveCenterSubtitle}
+            </Text>
+          ) : null}
         </VStack>
       </Link>
     ),
     expandedTrailing: (
       <Button
-        // The native renderer uses this label for accessibility only.
+        // The native renderer uses these values for accessibility and the circular state UI.
         label={quickSaveLabels[quickSaveStatus]}
         systemImage={quickSaveSymbols[quickSaveStatus]}
         target="saveapp.quickSave"

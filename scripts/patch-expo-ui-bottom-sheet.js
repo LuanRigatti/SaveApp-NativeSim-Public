@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const EXPECTED_UI_VERSION = '58.0.24';
+const EXPECTED_UI_VERSION = '58.0.25';
 const uiPackagePath = path.resolve(__dirname, '..', 'node_modules', '@expo', 'ui', 'package.json');
 const targetFile = path.resolve(
   __dirname,

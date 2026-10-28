@@ -228,6 +228,7 @@ try {
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
+    'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
     'scripts/verify-saveapp-quick-save-app-intents.js',
     'plugins/withSaveLinkQuickSave.js'
   )
@@ -241,6 +242,9 @@ try {
     $productionCandidates -contains 'scripts/Test-SaveAppMirrorSnapshot.ps1' -and
     $productionCandidates -contains 'tests/quick-save-xcodeproj-contract.rb' -and
     $productionCandidates -contains 'scripts/verify-saveapp-quick-save-app-intents.js' -and
+    $productionCandidates -contains 'src/features/dynamic-island/quickSaveQueue.ts' -and
+    $productionCandidates -contains 'src/features/dynamic-island/quickSaveQueueImportPipeline.ts' -and
+    $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift' -and
     $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift') 'the exact production candidate set contains the Xcodeproj fixture, AppIntents target verifier, package registry source and pre-publication snapshot gate'
   $noPreflightSkillPath = '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
   $noPreflightSkillFile = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $noPreflightSkillPath -ExpectedType File
@@ -294,6 +298,27 @@ try {
   Assert-True ($incompleteQuickSaveExit -ne 0 -and
     $normalizedQuickSaveGateText -match 'Required mirror dependency is absent from.*modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent\.swift' -and
     $normalizedQuickSaveGateText -notmatch 'Snapshot gate: npm ci') "a missing LiveActivityIntent source blocks the local mirror gate before npm or publication; output: $incompleteQuickSaveText"
+
+  $incompleteQueueManifestPath = Join-Path $tempRoot 'incomplete-quick-save-queue-manifest.json'
+  $missingQueueDependency = 'src/features/dynamic-island/quickSaveQueueImportPipeline.ts'
+  $incompleteQueueEntries = foreach ($relative in $productionCandidates | Where-Object { $_ -ne $missingQueueDependency }) {
+    $fullPath = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $relative -ExpectedType File
+    [pscustomobject]@{ Path = $relative; Sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash }
+  }
+  [IO.File]::WriteAllText($incompleteQueueManifestPath,([pscustomobject]@{
+    SourceCommit = ('b' * 40)
+    Provenance = $incompleteProvenance
+    Files = @($incompleteQueueEntries)
+  } | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+  $incompleteQueueOutput = @(& $pwshForGate.Source -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
+    (Join-Path $repositoryRoot 'scripts\Test-SaveAppMirrorSnapshot.ps1') `
+    -SnapshotRoot $incompleteSnapshot -ManifestPath $incompleteQueueManifestPath -ManifestOnly 2>&1)
+  $incompleteQueueExit = $LASTEXITCODE
+  $incompleteQueueText = ($incompleteQueueOutput | ForEach-Object { "$_" }) -join [Environment]::NewLine
+  $normalizedQueueGateText = [regex]::Replace($incompleteQueueText,'\s+',' ')
+  Assert-True ($incompleteQueueExit -ne 0 -and
+    $normalizedQueueGateText -match 'Required mirror dependency is absent from.*src/features/dynamic-island/quickSaveQueueImportPipeline\.ts' -and
+    $normalizedQueueGateText -notmatch 'Snapshot gate: npm ci') "a missing Quick Save import pipeline blocks before snapshot tests or public publication; output: $incompleteQueueText"
 
   $incompleteXcodeprojManifestPath = Join-Path $tempRoot 'incomplete-xcodeproj-test-manifest.json'
   $missingXcodeprojTest = 'tests/quick-save-xcodeproj-contract.rb'
@@ -354,7 +379,7 @@ try {
   $moduleSnapshot = Get-SaveAppMirrorStagedPathResult -GitOutput $allAllowedLocalModuleFiles `
     -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories
   Assert-True ($moduleSnapshot.HasChanges -and $moduleSnapshot.Paths.Length -eq $allAllowedLocalModuleFiles.Length -and
-    ($moduleSnapshot.Paths -join '|') -eq ($allAllowedLocalModuleFiles -join '|')) 'the simulated mirror snapshot contains all fifteen exact files from the local modules and quick-save config plugin'
+    ($moduleSnapshot.Paths -join '|') -eq ($allAllowedLocalModuleFiles -join '|')) 'the simulated mirror snapshot contains every exact file from the local modules and quick-save config plugin'
   Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec') -eq $false -and
@@ -362,7 +387,8 @@ try {
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift') -eq $false -and
-    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift') -eq $false) 'only the eight exact local module iOS sources bypass the generated ios-directory name block'
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift') -eq $false -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift') -eq $false) 'only the nine exact local module iOS sources bypass the generated ios-directory name block'
   Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/Unapproved.swift') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/private-key.pem') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/.env.local') -and

@@ -319,8 +319,8 @@ describe('SaveApp Quick Save Expo config plugin composition', () => {
       .rejects.toThrow(`found duplicate app-intents package file references at ${expectedPath}.`);
   });
 
-  test('runs the real expo-widgets 58.0.24 Podfile hook before the Quick Save integration', async () => {
-    expect(expoWidgetsPackage.version).toBe('58.0.24');
+  test('runs the real expo-widgets 58.0.25 Podfile hook before the Quick Save integration', async () => {
+    expect(expoWidgetsPackage.version).toBe('58.0.25');
     expect(relevantPluginEntries.map((entry) => Array.isArray(entry) ? entry[0] : entry)).toEqual([
       quickSavePluginName,
       widgetPluginName,
