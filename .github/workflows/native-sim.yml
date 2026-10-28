@@ -239,8 +239,8 @@ jobs:
           echo "NATIVE_SIM_BARE_URL=$TUNNEL" >> "$GITHUB_ENV"
           if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = 'true' ]; then
             # The installed NativeSim CLI has a fixed 45-minute wait for this
-            # transport signal. The launcher captures its authenticated URL
-            # privately and withholds it until the separate capture-ready gate.
+            # transport signal. The launcher validates this exact run and
+            # returns the authenticated URL; capture readiness is independent.
             gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
               -f state=success \
               -f "context=$STATUS_CONTEXT" \

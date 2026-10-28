@@ -174,6 +174,61 @@ function Assert-SaveAppSwiftPreflightResult {
   return $result
 }
 
+function Invoke-SaveAppSwiftPreflightGate {
+  [CmdletBinding()]
+  param(
+    [switch]$SkipPreflight,
+    [AllowNull()][scriptblock]$InvokePreflight,
+    [Parameter(Mandatory)][string]$ExpectedRepository,
+    [Parameter(Mandatory)][string]$ExpectedWorkflowPath,
+    [Parameter(Mandatory)][string]$ExpectedBranch,
+    [Parameter(Mandatory)][string]$ExpectedSha
+  )
+
+  if ($SkipPreflight) {
+    return [pscustomobject]@{
+      Skipped = $true
+      Passed = $false
+      Reused = $false
+      Repository = $ExpectedRepository
+      WorkflowPath = $ExpectedWorkflowPath
+      Event = 'not_run'
+      RunId = ''
+      Branch = $ExpectedBranch
+      Sha = $ExpectedSha
+      Url = ''
+      Status = 'not_run'
+      Conclusion = 'not_run'
+    }
+  }
+
+  if ($null -eq $InvokePreflight) {
+    throw 'Swift Preflight is mandatory unless -SkipSwiftPreflight is explicitly selected.'
+  }
+
+  $results = @(& $InvokePreflight)
+  $validated = Assert-SaveAppSwiftPreflightResult -Results $results `
+    -ExpectedRepository $ExpectedRepository `
+    -ExpectedWorkflowPath $ExpectedWorkflowPath `
+    -ExpectedBranch $ExpectedBranch `
+    -ExpectedSha $ExpectedSha
+
+  return [pscustomobject]@{
+    Skipped = $false
+    Passed = $validated.Passed
+    Reused = $validated.Reused
+    Repository = $validated.Repository
+    WorkflowPath = $validated.WorkflowPath
+    Event = $validated.Event
+    RunId = $validated.RunId
+    Branch = $validated.Branch
+    Sha = $validated.Sha
+    Url = $validated.Url
+    Status = $validated.Status
+    Conclusion = $validated.Conclusion
+  }
+}
+
 function Assert-SaveAppSimulatorUrl {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Url)
@@ -259,6 +314,7 @@ function Test-SaveAppNativeSimTransportReadiness {
     [Parameter(Mandatory)][int]$ExpectedAttempt,
     [Parameter(Mandatory)][string]$ExpectedSha,
     [Parameter(Mandatory)][string]$ExpectedBareUrl,
+    [ValidateSet('transport','session')][string]$ExpectedStatusKind = 'transport',
     [AllowNull()][object]$Run,
     [AllowEmptyCollection()][object[]]$Statuses = @()
   )
@@ -291,10 +347,15 @@ function Test-SaveAppNativeSimTransportReadiness {
   }
   $session = $titleMatch.Groups['session'].Value
   $expectedContext = "native-sim/$session"
-  $expectedDescription = "SaveApp transport ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
+  $expectedDescription = if ($ExpectedStatusKind -eq 'transport') {
+    "SaveApp transport ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
+  } else {
+    "SaveApp session ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
+  }
   $statusesForContext = @($Statuses | Where-Object { [string]$_.context -ceq $expectedContext })
   if ($statusesForContext.Count -eq 0) {
-    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'transport_status_not_visible' -Session $session
+    $reason = if ($ExpectedStatusKind -eq 'transport') { 'transport_status_not_visible' } else { 'session_status_not_visible' }
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason $reason -Session $session
   }
 
   $parsedStatuses = [Collections.Generic.List[object]]::new()
@@ -309,7 +370,8 @@ function Test-SaveAppNativeSimTransportReadiness {
   if ([string]$latestStatus.state -cne 'success' -or
       [string]$latestStatus.description -cne $expectedDescription -or
       [string]$latestStatus.target_url -cne $ExpectedBareUrl) {
-    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'current_transport_status_missing' -Session $session
+    $reason = if ($ExpectedStatusKind -eq 'transport') { 'current_transport_status_missing' } else { 'current_session_status_missing' }
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason $reason -Session $session
   }
 
   $runCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $Run.created_at
@@ -318,10 +380,68 @@ function Test-SaveAppNativeSimTransportReadiness {
     return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'transport_timestamp_invalid' -Session $session
   }
   if ($statusCreatedAt -lt $runCreatedAt) {
-    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'stale_transport_status' -Session $session
+    $reason = if ($ExpectedStatusKind -eq 'transport') { 'stale_transport_status' } else { 'stale_session_status' }
+    return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason $reason -Session $session
   }
 
-  return New-SaveAppCaptureReadinessResult -State 'ready' -Reason 'exact_run_transport_ready' -Session $session
+  $reason = if ($ExpectedStatusKind -eq 'transport') { 'exact_run_transport_ready' } else { 'exact_run_session_ready' }
+  return New-SaveAppCaptureReadinessResult -State 'ready' -Reason $reason -Session $session
+}
+
+function Assert-SaveAppNativeSimTransportHandoff {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$ExpectedRepository,
+    [Parameter(Mandatory)][string]$ExpectedRunId,
+    [Parameter(Mandatory)][int]$ExpectedAttempt,
+    [Parameter(Mandatory)][string]$ExpectedSha,
+    [Parameter(Mandatory)][bool]$CaptureRequested,
+    [Parameter(Mandatory)][string]$ActionsUrl,
+    [Parameter(Mandatory)][string]$SimulatorUrl,
+    [AllowNull()][object]$Run,
+    [AllowEmptyCollection()][object[]]$Statuses = @()
+  )
+
+  if ($ExpectedRepository -cne 'LuanRigatti/SaveApp-NativeSim-Public' -or
+      $ExpectedRunId -notmatch '^\d+$' -or $ExpectedAttempt -ne 1 -or
+      $ExpectedSha -notmatch '^[0-9a-fA-F]{40}$') {
+    throw 'NativeSim transport handoff has an invalid repository or run identity; session links were withheld.'
+  }
+
+  $expectedActionsUrl = "https://github.com/$ExpectedRepository/actions/runs/$ExpectedRunId"
+  if ($ActionsUrl -cne $expectedActionsUrl) {
+    throw 'NativeSim Actions URL does not match the expected public repository and run; session links were withheld.'
+  }
+
+  $bareUrl = Get-SaveAppSimulatorStatusTarget -AuthenticatedUrl $SimulatorUrl
+  if ($null -eq $Run -or [string]$Run.html_url -cne $expectedActionsUrl) {
+    throw 'NativeSim run metadata does not match the Actions URL; session links were withheld.'
+  }
+
+  $statusKind = if ($CaptureRequested) { 'transport' } else { 'session' }
+  $readiness = Test-SaveAppNativeSimTransportReadiness `
+    -ExpectedRunId $ExpectedRunId `
+    -ExpectedAttempt $ExpectedAttempt `
+    -ExpectedSha $ExpectedSha `
+    -ExpectedBareUrl $bareUrl `
+    -ExpectedStatusKind $statusKind `
+    -Run $Run `
+    -Statuses $Statuses
+  if ($readiness.State -ne 'ready') {
+    throw "NativeSim $statusKind readiness was not confirmed for the exact current run ($($readiness.Reason)); session links were withheld."
+  }
+
+  # Keep the authenticated URL only in the caller's transient memory. This
+  # result intentionally contains no URL, query string, or gate credential.
+  return [pscustomobject]@{
+    State = if ($CaptureRequested) { 'transport_ready' } else { 'session_ready' }
+    Repository = $ExpectedRepository
+    RunId = $ExpectedRunId
+    Attempt = $ExpectedAttempt
+    Sha = $ExpectedSha
+    Session = $readiness.Session
+    CaptureRequested = $CaptureRequested
+  }
 }
 
 function Test-SaveAppNativeSimCaptureReadiness {
@@ -653,4 +773,4 @@ process.stdout.write(JSON.stringify({ changed }) + '\n');
   }
 }
 
-Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppOSLogCaptureConfiguration,Get-SaveAppSimulatorStatusTarget,ConvertTo-SaveAppNativeSimDateTimeOffset,Get-SaveAppOSLogReadinessDeadline,Test-SaveAppNativeSimCaptureReadiness,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview
+Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Invoke-SaveAppSwiftPreflightGate,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppOSLogCaptureConfiguration,Get-SaveAppSimulatorStatusTarget,Assert-SaveAppNativeSimTransportHandoff,ConvertTo-SaveAppNativeSimDateTimeOffset,Get-SaveAppOSLogReadinessDeadline,Test-SaveAppNativeSimCaptureReadiness,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview

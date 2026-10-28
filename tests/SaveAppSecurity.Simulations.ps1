@@ -29,6 +29,7 @@ function New-SaveAppCaptureReadinessFixture {
     head_sha = $sha
     status = 'in_progress'
     conclusion = $null
+    html_url = 'https://github.com/LuanRigatti/SaveApp-NativeSim-Public/actions/runs/987654321'
     display_title = 'native-sim a1b2c3d4 · release · 120m'
     created_at = '2026-10-27T12:00:00Z'
     run_started_at = '2026-10-27T12:00:30Z'
@@ -241,6 +242,13 @@ try {
     $productionCandidates -contains 'tests/quick-save-xcodeproj-contract.rb' -and
     $productionCandidates -contains 'scripts/verify-saveapp-quick-save-app-intents.js' -and
     $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift') 'the exact production candidate set contains the Xcodeproj fixture, AppIntents target verifier, package registry source and pre-publication snapshot gate'
+  $noPreflightSkillPath = '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
+  $noPreflightSkillFile = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $noPreflightSkillPath -ExpectedType File
+  Assert-True ($productionAllowedFiles -contains $noPreflightSkillPath -and
+    $snapshotValidator.Contains("'$noPreflightSkillPath'") -and $productionCandidates -contains $noPreflightSkillPath -and
+    (Test-SaveAppMirrorAllowedRelativePath -RelativePath $noPreflightSkillPath `
+      -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) -and
+    (Assert-SaveAppSafeContent -RelativePath $noPreflightSkillPath -Content ([IO.File]::ReadAllText($noPreflightSkillFile)))) 'the no-Preflight skill is an exact required snapshot path and remains covered by the existing path and content scanners'
 
   $incompleteSnapshot = Join-Path $tempRoot 'incomplete-mirror-snapshot'
   $incompleteManifestPath = Join-Path $tempRoot 'incomplete-mirror-manifest.json'
@@ -782,6 +790,204 @@ try {
     -ExpectedRunId 'not-used' -ExpectedAttempt 0 -ExpectedSha 'not-used' -ExpectedBareUrl 'not-used' -Run $null
   Assert-True ($normalReadiness.State -eq 'ready' -and $normalReadiness.Reason -eq 'capture_not_requested') 'ordinary NativeSim remains ready without OSLog-specific gates'
 
+  $handoffKey = 'b' * 24
+  $simulatorUrl = "https://capture-probe.trycloudflare.com/?k=$handoffKey"
+  $actionsUrl = 'https://github.com/LuanRigatti/SaveApp-NativeSim-Public/actions/runs/987654321'
+  $transportOnlyFixture = New-SaveAppCaptureReadinessFixture
+  $transportOnlyFixture.Statuses = @($transportOnlyFixture.Statuses | Where-Object { $_.context -eq 'native-sim/a1b2c3d4' })
+  $captureTransportHandoff = Assert-SaveAppNativeSimTransportHandoff `
+    -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
+    -ExpectedAttempt 1 -ExpectedSha $transportOnlyFixture.Sha -CaptureRequested $true `
+    -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $transportOnlyFixture.Run `
+    -Statuses $transportOnlyFixture.Statuses
+  $handoffJson = ConvertTo-Json -InputObject $captureTransportHandoff -Compress
+  Assert-True ($captureTransportHandoff.State -eq 'transport_ready' -and
+    $captureTransportHandoff.Session -eq 'a1b2c3d4' -and
+    $handoffJson -notmatch [regex]::Escape($simulatorUrl) -and
+    $handoffJson -notmatch [regex]::Escape($handoffKey) -and
+    -not ($captureTransportHandoff.PSObject.Properties.Name -contains 'SimulatorUrl')) 'exact authenticated link is validated and handed off as transport-ready while build and OSLog capture remain pending, without returning the key in metadata'
+
+  $captureReadyHandoffFixture = New-SaveAppCaptureReadinessFixture
+  $captureReadyHandoff = Assert-SaveAppNativeSimTransportHandoff `
+    -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
+    -ExpectedAttempt 1 -ExpectedSha $captureReadyHandoffFixture.Sha -CaptureRequested $true `
+    -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $captureReadyHandoffFixture.Run `
+    -Statuses $captureReadyHandoffFixture.Statuses
+  Assert-True ($captureReadyHandoff.State -eq 'transport_ready' -and
+    $captureReadyHandoff.Session -eq $captureTransportHandoff.Session) 'an already confirmed capture status does not change or delay the verified transport handoff'
+
+  $cancelledAfterHandoffFixture = New-SaveAppCaptureReadinessFixture
+  $cancelledAfterHandoffFixture.Statuses = @($cancelledAfterHandoffFixture.Statuses[0])
+  $deliveredBeforeCancellation = Assert-SaveAppNativeSimTransportHandoff `
+    -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
+    -ExpectedAttempt 1 -ExpectedSha $cancelledAfterHandoffFixture.Sha -CaptureRequested $true `
+    -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $cancelledAfterHandoffFixture.Run `
+    -Statuses $cancelledAfterHandoffFixture.Statuses
+  $cancelledAfterHandoffFixture.Run.status = 'completed'
+  $cancelledAfterHandoffFixture.Run.conclusion = 'cancelled'
+  $cancelledAfterHandoffFixture.Statuses += [pscustomobject]@{
+    context='native-sim-capture/a1b2c3d4'; state='failure'
+    description="SaveApp OSLog capture failed session=a1b2c3d4 run=987654321 attempt=1 sha=$($cancelledAfterHandoffFixture.Sha)"
+    target_url=$cancelledAfterHandoffFixture.BareUrl; created_at='2026-10-27T12:03:00Z'
+  }
+  Assert-True ($deliveredBeforeCancellation.State -eq 'transport_ready' -and
+    $deliveredBeforeCancellation.RunId -eq '987654321') 'a later build cancellation or capture failure does not retract the already handed-off transport result'
+
+  $failedBuildFixture = New-SaveAppCaptureReadinessFixture
+  $failedBuildFixture.Statuses = @($failedBuildFixture.Statuses[0])
+  $deliveredBeforeBuildFailure = Assert-SaveAppNativeSimTransportHandoff `
+    -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
+    -ExpectedAttempt 1 -ExpectedSha $failedBuildFixture.Sha -CaptureRequested $true `
+    -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $failedBuildFixture.Run `
+    -Statuses $failedBuildFixture.Statuses
+  $failedBuildFixture.Run.status = 'completed'
+  $failedBuildFixture.Run.conclusion = 'failure'
+  Assert-True ($deliveredBeforeBuildFailure.State -eq 'transport_ready') 'a subsequent build failure does not delay or rewrite a previously validated transport handoff'
+
+  $failedCaptureAfterHandoffFixture = New-SaveAppCaptureReadinessFixture
+  $failedCaptureAfterHandoffFixture.Statuses = @($failedCaptureAfterHandoffFixture.Statuses[0])
+  $deliveredBeforeCaptureFailure = Assert-SaveAppNativeSimTransportHandoff `
+    -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
+    -ExpectedAttempt 1 -ExpectedSha $failedCaptureAfterHandoffFixture.Sha -CaptureRequested $true `
+    -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $failedCaptureAfterHandoffFixture.Run `
+    -Statuses $failedCaptureAfterHandoffFixture.Statuses
+  $failedCaptureAfterHandoffFixture.Statuses += [pscustomobject]@{
+    context='native-sim-capture/a1b2c3d4'; state='failure'
+    description="SaveApp OSLog capture failed session=a1b2c3d4 run=987654321 attempt=1 sha=$($failedCaptureAfterHandoffFixture.Sha)"
+    target_url=$failedCaptureAfterHandoffFixture.BareUrl; created_at='2026-10-27T12:03:00Z'
+  }
+  Assert-True ($deliveredBeforeCaptureFailure.State -eq 'transport_ready') 'a later OSLog capture failure does not cancel a valid Simulator transport handoff or claim capture success'
+
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $transportOnlyFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl 'https://capture-probe.trycloudflare.com/' `
+      -Run $transportOnlyFixture.Run -Statuses $transportOnlyFixture.Statuses
+  } 'an incomplete authenticated Simulator URL cannot pass the handoff gate'
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/Other-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $transportOnlyFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $transportOnlyFixture.Run -Statuses $transportOnlyFixture.Statuses
+  } 'a run from any repository other than the exact SaveApp public mirror cannot pass handoff'
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654322' -ExpectedAttempt 1 -ExpectedSha $transportOnlyFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $transportOnlyFixture.Run -Statuses $transportOnlyFixture.Statuses
+  } 'an Actions link and run ID mismatch cannot pass handoff'
+  $mismatchError = ''
+  try {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654322' -ExpectedAttempt 1 -ExpectedSha $transportOnlyFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $transportOnlyFixture.Run -Statuses $transportOnlyFixture.Statuses | Out-Null
+  } catch { $mismatchError = $_.Exception.Message }
+  Assert-True (-not $mismatchError.Contains($simulatorUrl) -and -not $mismatchError.Contains($handoffKey)) 'handoff refusal diagnostics do not include the authenticated URL or access key'
+
+  $invalidShaExpected = $false
+  try {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha 'not-a-sha' `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $transportOnlyFixture.Run -Statuses $transportOnlyFixture.Statuses | Out-Null
+  } catch { $invalidShaExpected = $true }
+  Assert-True $invalidShaExpected 'handoff rejects malformed expected SHA values before releasing a link'
+
+  $badAttemptFixture = New-SaveAppCaptureReadinessFixture
+  $badAttemptFixture.Run.run_attempt = 2
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $badAttemptFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $badAttemptFixture.Run -Statuses $badAttemptFixture.Statuses
+  } 'a retry or different run attempt cannot pass handoff'
+
+  $badShaFixture = New-SaveAppCaptureReadinessFixture
+  $badShaFixture.Run.head_sha = 'b' * 40
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $badShaFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $badShaFixture.Run -Statuses $badShaFixture.Statuses
+  } 'a transport status for a different public SHA cannot pass handoff'
+
+  $staleHandoffFixture = New-SaveAppCaptureReadinessFixture
+  $staleHandoffFixture.Statuses = @($staleHandoffFixture.Statuses[0])
+  $staleHandoffFixture.Statuses[0].created_at = '2026-10-26T12:01:00Z'
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $staleHandoffFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $staleHandoffFixture.Run -Statuses $staleHandoffFixture.Statuses
+  } 'a stale success status for the same commit cannot pass the transport handoff'
+  $pendingHandoffFixture = New-SaveAppCaptureReadinessFixture
+  $pendingHandoffFixture.Statuses = @($pendingHandoffFixture.Statuses[0])
+  $pendingHandoffFixture.Statuses[0].state = 'pending'
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $pendingHandoffFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $pendingHandoffFixture.Run -Statuses $pendingHandoffFixture.Statuses
+  } 'an unavailable or pending transport status cannot be mistaken for a ready link'
+  $missingTransportFixture = New-SaveAppCaptureReadinessFixture
+  $missingTransportFixture.Statuses = @()
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $missingTransportFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $missingTransportFixture.Run -Statuses $missingTransportFixture.Statuses
+  } 'a not-yet-published transport status cannot release the authenticated link'
+
+  $wrongOriginFixture = New-SaveAppCaptureReadinessFixture
+  $wrongOriginFixture.Statuses = @($wrongOriginFixture.Statuses[0])
+  $wrongOriginFixture.Statuses[0].target_url = 'https://another-tunnel.trycloudflare.com'
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $wrongOriginFixture.Sha `
+      -CaptureRequested $true -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $wrongOriginFixture.Run -Statuses $wrongOriginFixture.Statuses
+  } 'transport success for another tunnel origin cannot release this authenticated link'
+
+  $normalSessionFixture = New-SaveAppCaptureReadinessFixture
+  $normalSessionFixture.Statuses = @($normalSessionFixture.Statuses[0])
+  $normalSessionFixture.Statuses[0].description = "SaveApp session ready session=a1b2c3d4 run=$($normalSessionFixture.Run.id) attempt=1 sha=$($normalSessionFixture.Sha)"
+  $normalHandoff = Assert-SaveAppNativeSimTransportHandoff `
+    -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
+    -ExpectedAttempt 1 -ExpectedSha $normalSessionFixture.Sha -CaptureRequested $false `
+    -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $normalSessionFixture.Run `
+    -Statuses $normalSessionFixture.Statuses
+  Assert-True ($normalHandoff.State -eq 'session_ready' -and -not $normalHandoff.CaptureRequested) 'normal no-capture sessions retain the workflow session-ready signal without requiring OSLog statuses'
+  $normalPendingFixture = New-SaveAppCaptureReadinessFixture
+  $normalPendingFixture.Statuses = @($normalPendingFixture.Statuses[0])
+  Assert-Refused {
+    Assert-SaveAppNativeSimTransportHandoff -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' `
+      -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $normalPendingFixture.Sha `
+      -CaptureRequested $false -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
+      -Run $normalPendingFixture.Run -Statuses $normalPendingFixture.Statuses
+  } 'normal sessions cannot hand off before the regular workflow session-ready status'
+
+  $originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+  $originalUICulture = [Threading.Thread]::CurrentThread.CurrentUICulture
+  try {
+    foreach ($cultureName in @('pt-BR','en-US')) {
+      $testCulture = [Globalization.CultureInfo]::GetCultureInfo($cultureName)
+      [Threading.Thread]::CurrentThread.CurrentCulture = $testCulture
+      [Threading.Thread]::CurrentThread.CurrentUICulture = $testCulture
+      $cultureFixture = New-SaveAppCaptureReadinessFixture
+      $cultureFixture.Statuses = @($cultureFixture.Statuses[0])
+      $cultureHandoff = Assert-SaveAppNativeSimTransportHandoff `
+        -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
+        -ExpectedAttempt 1 -ExpectedSha $cultureFixture.Sha -CaptureRequested $true `
+        -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $cultureFixture.Run `
+        -Statuses $cultureFixture.Statuses
+      Assert-True ($cultureHandoff.State -eq 'transport_ready') "exact transport timestamp validation is culture-independent under $cultureName"
+    }
+  } finally {
+    [Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture
+    [Threading.Thread]::CurrentThread.CurrentUICulture = $originalUICulture
+  }
+
   $missingConfigurationFailsClosed = $false
   try { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @() | Out-Null }
   catch { $missingConfigurationFailsClosed = $true }
@@ -790,6 +996,13 @@ try {
   Assert-True ($launcher.Contains('[switch]$CaptureOSLog') -and
     $launcher.Contains('Get-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureOSLog.IsPresent') -and
     $launcher.Contains('no mirror, Preflight, or NativeSim session was started.')) 'official launcher validates capture opt-in before mirror publication or remote gates'
+  $simulatorHandoffIndex = $launcher.IndexOf('Authenticated Simulator: $simulatorUrl',[StringComparison]::Ordinal)
+  $launcherCleanupIndex = if ($simulatorHandoffIndex -ge 0) { $launcher.IndexOf('} finally {',$simulatorHandoffIndex,[StringComparison]::Ordinal) } else { -1 }
+  $launcherCleanup = if ($launcherCleanupIndex -ge 0) { $launcher.Substring($launcherCleanupIndex) } else { '' }
+  Assert-True ($simulatorHandoffIndex -ge 0 -and $launcherCleanupIndex -gt $simulatorHandoffIndex -and
+    $launcherCleanup.Contains('$nativeProcess.Kill($true)') -and
+    -not $launcherCleanup.Contains('Invoke-GhText') -and -not $launcherCleanup.Contains('Wait-Event') -and
+    -not $launcherCleanup.Contains('Start-Sleep') -and -not $launcher.Contains('gh run cancel')) 'after handoff the launcher only stops its local CLI during cleanup and does not poll or cancel the remote run'
   $launcherMirrorIndex = $launcher.IndexOf('& pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $mirrorScript -Publish',[StringComparison]::Ordinal)
   $launcherMirrorFailureIndex = $launcher.IndexOf('Sanitized SaveApp mirror did not complete successfully; Preflight and NativeSim were not started.',[StringComparison]::Ordinal)
   $launcherPreflightIndex = $launcher.IndexOf('& $preflightScript -PassThru',[StringComparison]::Ordinal)
@@ -797,8 +1010,8 @@ try {
   Assert-True ($launcherMirrorIndex -ge 0 -and $launcherMirrorFailureIndex -gt $launcherMirrorIndex -and
     $launcherPreflightIndex -gt $launcherMirrorFailureIndex -and $launcherNativeStartIndex -gt $launcherPreflightIndex) 'a failed local snapshot/mirror gate stops before Swift Preflight dispatch or NativeSim launch'
   $preflightWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github\workflows\swift-preflight.yml') -Raw
-  Assert-True ($launcher.Contains('-ExpectedSha $mirrorSha') -and
-    $preflight.Contains('$live.Split()[0] -ne $sha')) 'NativeSim requires Swift Preflight success for the exact public mirror SHA'
+  Assert-True ($launcher.Contains('Invoke-SaveAppSwiftPreflightGate') -and $launcher.Contains('-SkipPreflight:$SkipSwiftPreflight') -and
+    $launcher.Contains('-ExpectedSha $mirrorSha') -and $preflight.Contains('$live.Split()[0] -ne $sha')) 'the default launcher path requires a successful Swift Preflight for the exact public mirror SHA, with only an explicit switch to skip it'
   $nativeVerificationIndex = $preflightWorkflow.IndexOf('node scripts/verify-saveapp-native.js',[StringComparison]::Ordinal)
   $prebuildIndex = $preflightWorkflow.IndexOf('npx expo prebuild --platform ios --no-install',[StringComparison]::Ordinal)
   Assert-True ($nativeVerificationIndex -ge 0 -and $prebuildIndex -gt $nativeVerificationIndex -and
@@ -862,9 +1075,17 @@ try {
   $archiveScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Download-SaveAppSimulatorArchive.ps1') -Raw
   $nativeSimUpText = Get-Content -LiteralPath (Join-Path $package 'src\commands\up.js') -Raw
   Assert-True ($launcher.Contains('SaveAppNativeSimLaunch') -and $launcher.Contains('Get-ActiveNativeSimRuns') -and $launcher.Contains('No duplicate was started')) 'duplicate-session mutex and active-run guard remain present'
+  $mirrorPublishIndex = $launcher.IndexOf('& pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $mirrorScript -Publish',[StringComparison]::Ordinal)
+  $preflightGateIndex = $launcher.IndexOf('Invoke-SaveAppSwiftPreflightGate',[StringComparison]::Ordinal)
+  $postValidationShaIndex = $launcher.IndexOf('$postSourceSha = Assert-Repository',[StringComparison]::Ordinal)
+  $nativeWorkflowCheckIndex = $launcher.IndexOf('$workflowJson = Invoke-GhText',[StringComparison]::Ordinal)
+  $nativeDispatchIndex = $launcher.IndexOf('$nativeProcess.Start()',[StringComparison]::Ordinal)
   Assert-True ($preflight.Contains('$dispatchOutput = @(& gh workflow run') -and $preflight.Contains('2>&1)') -and
-    $launcher.Contains('Assert-SaveAppSwiftPreflightResult') -and
-    $launcher.IndexOf('Assert-SaveAppSwiftPreflightResult',[StringComparison]::Ordinal) -lt $launcher.IndexOf('$nativeProcess.Start()',[StringComparison]::Ordinal)) 'dispatch output is captured and strict Preflight result validation runs before NativeSim can start'
+    $launcher.Contains('[switch]$SkipSwiftPreflight') -and $launcher.Contains('-SkipPreflight:$SkipSwiftPreflight') -and
+    $mirrorPublishIndex -ge 0 -and $preflightGateIndex -gt $mirrorPublishIndex -and
+    $postValidationShaIndex -gt $preflightGateIndex -and $nativeWorkflowCheckIndex -gt $postValidationShaIndex -and
+    $nativeDispatchIndex -gt $nativeWorkflowCheckIndex -and
+    $launcher.Contains('Swift Preflight: explicitly skipped by -SkipSwiftPreflight')) 'explicit Preflight selection occurs after mirror publication and both modes retain SHA/provenance, workflow, concurrency, and CLI gates before dispatch'
   $activeFixtures = @(
     [pscustomobject]@{ id='42'; path='.github/workflows/native-sim.yml'; event='workflow_dispatch'; head_branch='main'; status='in_progress' },
     [pscustomobject]@{ id='42'; path='.github/workflows/native-sim.yml'; event='workflow_dispatch'; head_branch='main'; status='in_progress' },
@@ -937,6 +1158,66 @@ try {
     ExpectedBranch = 'main'
     ExpectedSha = $global:SaveAppTestPreflightSha
   }
+  $global:SaveAppTestPreflightGateInvocationCount = 0
+  $global:SaveAppTestPreflightGateResult = [pscustomobject]@{
+    Passed = $true
+    Reused = $true
+    Repository = $expectedPreflightParameters.ExpectedRepository
+    WorkflowPath = $expectedPreflightParameters.ExpectedWorkflowPath
+    Event = 'workflow_dispatch'
+    RunId = '987654321'
+    Branch = 'main'
+    Sha = $expectedPreflightParameters.ExpectedSha
+    Url = 'https://github.com/LuanRigatti/SaveApp-NativeSim-Public/actions/runs/987654321'
+    Status = 'completed'
+    Conclusion = 'success'
+  }
+  $preflightGateCallback = {
+    $global:SaveAppTestPreflightGateInvocationCount++
+    return $global:SaveAppTestPreflightGateResult
+  }
+  $skippedGate = Invoke-SaveAppSwiftPreflightGate -SkipPreflight -InvokePreflight $preflightGateCallback @expectedPreflightParameters
+  Assert-True ($skippedGate.Skipped -and $skippedGate.Status -eq 'not_run' -and
+    $skippedGate.Sha -eq $expectedPreflightParameters.ExpectedSha -and
+    $global:SaveAppTestPreflightGateInvocationCount -eq 0) 'explicit no-Preflight mode records its omission and does not invoke, query, dispatch, or wait through the Preflight callback'
+
+  $ordinaryGate = Invoke-SaveAppSwiftPreflightGate -InvokePreflight $preflightGateCallback @expectedPreflightParameters
+  Assert-True (-not $ordinaryGate.Skipped -and $ordinaryGate.Passed -and $ordinaryGate.Reused -and
+    $ordinaryGate.Sha -eq $expectedPreflightParameters.ExpectedSha -and
+    $global:SaveAppTestPreflightGateInvocationCount -eq 1) 'default mode invokes and strictly validates one exact-SHA successful Preflight result'
+
+  $global:SaveAppTestPreflightGateResult = [pscustomobject]@{
+    Passed = $false
+    Reused = $false
+    Repository = $expectedPreflightParameters.ExpectedRepository
+    WorkflowPath = $expectedPreflightParameters.ExpectedWorkflowPath
+    Event = 'workflow_dispatch'
+    RunId = '987654322'
+    Branch = 'main'
+    Sha = $expectedPreflightParameters.ExpectedSha
+    Url = 'https://github.com/LuanRigatti/SaveApp-NativeSim-Public/actions/runs/987654322'
+    Status = 'completed'
+    Conclusion = 'failure'
+  }
+  Assert-Refused { Invoke-SaveAppSwiftPreflightGate -InvokePreflight $preflightGateCallback @expectedPreflightParameters } 'default mode blocks NativeSim when Preflight fails'
+  Assert-True ($global:SaveAppTestPreflightGateInvocationCount -eq 2) 'failed default Preflight is invoked exactly once and cannot be treated as skipped'
+  Assert-Refused { Invoke-SaveAppSwiftPreflightGate @expectedPreflightParameters } 'Swift Preflight cannot be omitted implicitly when no explicit skip switch is supplied'
+
+  $global:SaveAppTestPreflightGateResult = [pscustomobject]@{
+    Passed = $true
+    Reused = $true
+    Repository = $expectedPreflightParameters.ExpectedRepository
+    WorkflowPath = $expectedPreflightParameters.ExpectedWorkflowPath
+    Event = 'workflow_dispatch'
+    RunId = '987654321'
+    Branch = 'main'
+    Sha = ('c' * 40)
+    Url = 'https://github.com/LuanRigatti/SaveApp-NativeSim-Public/actions/runs/987654321'
+    Status = 'completed'
+    Conclusion = 'success'
+  }
+  Assert-Refused { Invoke-SaveAppSwiftPreflightGate -InvokePreflight $preflightGateCallback @expectedPreflightParameters } 'default mode rejects a successful Preflight result for a different public SHA'
+
   $global:SaveAppTestPreflightMode = 'reused-success'
   $reusedPreflight = @(& $preflightScript -PassThru)
   $validatedReusedPreflight = Assert-SaveAppSwiftPreflightResult -Results $reusedPreflight @expectedPreflightParameters

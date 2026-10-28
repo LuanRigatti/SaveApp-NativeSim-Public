@@ -44,7 +44,7 @@ describe('SaveApp OSLog NativeSim capture integration', () => {
     expect(workflow).toContain('CAPTURE_STATUS_CONTEXT: native-sim-capture/${{ inputs.session }}');
     expect(workflow).toContain('SaveApp OSLog capture pending session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA');
     expect(workflow).toContain('The installed NativeSim CLI has a fixed 45-minute wait for this');
-    expect(workflow).toContain('transport signal. The launcher captures its authenticated URL');
+    expect(workflow).toContain('transport signal. The launcher validates this exact run and');
   });
 
   test('capture starts after install and before launch; a real startup event precedes ready', () => {
@@ -69,34 +69,51 @@ describe('SaveApp OSLog NativeSim capture integration', () => {
     expect(readyStep).not.toContain('GITHUB_ATTEMPT');
   });
 
-  test('launcher withholds links until exact-run capture readiness with a bounded build-aware deadline', () => {
-    const snapshotStart = launcher.indexOf('function Get-SaveAppOSLogReadinessSnapshot');
-    const snapshotEnd = launcher.indexOf('\nfunction ', snapshotStart + 1);
+  test('launcher returns authenticated links after exact transport readiness without waiting for build or capture', () => {
     const deadlineStart = cliGuard.indexOf('function Get-SaveAppOSLogReadinessDeadline');
-    const readinessStart = launcher.indexOf('$readinessDeadline = Get-SaveAppOSLogReadinessDeadline -Run $run');
-    const simulatorOutput = launcher.indexOf('Authenticated Simulator: $simulatorUrl', readinessStart);
-    const snapshotBlock = launcher.slice(snapshotStart, snapshotEnd);
-    const readinessBlock = launcher.slice(readinessStart, simulatorOutput);
-    expect(launcher).toContain('Get-SaveAppOSLogReadinessSnapshot');
-    expect(snapshotBlock).toContain('/attempts/$Attempt/jobs?per_page=100');
-    expect(snapshotBlock).toContain('commits/$Sha/statuses?per_page=100');
+    const dispatchStart = launcher.indexOf('NativeSim dispatched for public main SHA');
+    const simulatorOutput = launcher.indexOf('Authenticated Simulator: $simulatorUrl', dispatchStart);
+    const cleanupStart = launcher.indexOf('} finally {', simulatorOutput);
+    const handoffBlock = launcher.slice(dispatchStart, simulatorOutput);
     expect(deadlineStart).toBeGreaterThanOrEqual(0);
     expect(cliGuard.slice(deadlineStart)).toContain('AddMinutes(120)');
     expect(cliGuard.slice(deadlineStart)).toContain('AddMinutes(375)');
     expect(cliGuard).toContain('ConvertTo-SaveAppNativeSimDateTimeOffset');
     expect(cliGuard).toContain('[Globalization.CultureInfo]::InvariantCulture');
     expect(launcher).not.toContain('function Get-SaveAppOSLogReadinessDeadline');
-    expect(launcher).toContain('Get-SaveAppOSLogReadinessDeadline -Run $run');
-    expect(readinessStart).toBeGreaterThan(snapshotEnd);
-    expect(readinessBlock).toContain('Start-Sleep -Seconds 20');
-    expect(readinessBlock).toContain('Get-SaveAppOSLogReadinessDeadline -Run $run -Jobs $verifiedJobs');
-    expect(readinessBlock).toContain('authenticated session links were withheld');
-    expect(readinessBlock).toContain("$run.status -ceq 'completed'");
-    expect(launcher).toContain('$expectedAttempt = 1');
-    expect(launcher).toContain('Test-SaveAppNativeSimCaptureReadiness');
-    expect(readinessBlock).toContain('SaveApp OSLog capture did not become ready');
-    expect(simulatorOutput).toBeGreaterThan(readinessStart);
+    expect(handoffBlock).toContain('Assert-SaveAppNativeSimTransportHandoff');
+    expect(handoffBlock).toContain('commits/$mirrorSha/statuses?per_page=100');
+    expect(launcher).not.toContain('Get-SaveAppOSLogReadinessSnapshot');
+    expect(handoffBlock).not.toContain('Test-SaveAppNativeSimCaptureReadiness');
+    expect(handoffBlock).not.toContain('Start-Sleep');
+    expect(handoffBlock).not.toContain('Get-SaveAppOSLogReadinessDeadline');
+    expect(handoffBlock).toContain('TRANSPORTE PRONTO — BUILD/OSLOG PENDENTES');
+    expect(handoffBlock).toContain('private SHA $sourceSha | public SHA $mirrorSha');
+    expect(handoffBlock).toContain('SESSÃO PRONTA — OSLOG NÃO SOLICITADO');
+    expect(launcher).toContain('readiness was not checked by this handoff');
+    expect(simulatorOutput).toBeGreaterThan(dispatchStart);
+    expect(cleanupStart).toBeGreaterThan(simulatorOutput);
+    expect(launcher.slice(cleanupStart)).not.toContain('Invoke-GhText');
+    expect(launcher.slice(cleanupStart)).not.toContain('Wait-Event');
+    expect(launcher.slice(cleanupStart)).not.toContain('Start-Sleep');
+    expect(launcher).toContain('if ((-not $actionsUrl -or -not $simulatorUrl) -and -not $nativeProcess.HasExited)');
+    expect(launcher).toContain('$nativeProcess.Kill($true)');
+    expect(launcher).not.toContain('gh run cancel');
+    expect(cliGuard).toContain('function Assert-SaveAppNativeSimTransportHandoff');
+    expect(cliGuard).toContain('transport_ready');
+    expect(cliGuard).toContain('session_ready');
+    expect(cliGuard).toContain('capture_not_requested');
     expect(cliGuard).toContain('exact_attempt_transport_capture_probe_and_stream_confirmed');
+  });
+
+  test('transport handoff validator checks exact repo, URLs, run identity, status and timestamp without returning the auth URL', () => {
+    expect(cliGuard).toContain("$ExpectedRepository -cne 'LuanRigatti/SaveApp-NativeSim-Public'");
+    expect(cliGuard).toContain("$ActionsUrl -cne $expectedActionsUrl");
+    expect(cliGuard).toContain('Get-SaveAppSimulatorStatusTarget -AuthenticatedUrl $SimulatorUrl');
+    expect(cliGuard).toContain('Test-SaveAppNativeSimTransportReadiness');
+    expect(cliGuard).toContain('"SaveApp transport ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"');
+    expect(cliGuard).toContain('"SaveApp session ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"');
+    expect(cliGuard).toContain('result intentionally contains no URL, query string, or gate credential');
   });
 
   test('capture readiness validator rejects stale status and mismatched identity', () => {

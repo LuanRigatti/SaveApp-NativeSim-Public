@@ -140,7 +140,8 @@ function Get-SaveAppMirrorAllowlist {
     'tests/quick-save-xcodeproj-contract.rb',
     '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
     '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs',
-    '.github/native-sim/oslog-capture.sh'
+    '.github/native-sim/oslog-capture.sh',
+    '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
   )
   $allowedDirectories = @('assets','src','docs','.agents/skills','tests')
   $requiredFiles = @(
@@ -155,7 +156,8 @@ function Get-SaveAppMirrorAllowlist {
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift',
-    '.github/native-sim/oslog-capture.sh'
+    '.github/native-sim/oslog-capture.sh',
+    '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
   )
   foreach ($required in $requiredFiles) {
     if ($allowedFiles -notcontains $required) {

@@ -3,7 +3,8 @@ param(
   [ValidateRange(1, 350)][int]$Minutes = 120,
   [string]$Device = 'iPhone 17 Pro',
   [string]$Scheme = 'SaveApp',
-  [switch]$CaptureOSLog
+  [switch]$CaptureOSLog,
+  [switch]$SkipSwiftPreflight
 )
 
 Set-StrictMode -Version Latest
@@ -62,33 +63,6 @@ function Get-SaveAppOSLogCaptureConfiguration {
   }
 
   return (Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureRequested -Variables @($variables.ToArray()))
-}
-
-function Get-SaveAppOSLogReadinessSnapshot {
-  param(
-    [Parameter(Mandatory)][string]$RunId,
-    [Parameter(Mandatory)][int]$Attempt,
-    [Parameter(Mandatory)][string]$Sha,
-    [Parameter(Mandatory)][string]$BareUrl
-  )
-
-  $runJson = Invoke-GhText @('api',"repos/$repo/actions/runs/$RunId")
-  $run = $runJson | ConvertFrom-Json
-  $jobsJson = Invoke-GhText @('api',"repos/$repo/actions/runs/$RunId/attempts/$Attempt/jobs?per_page=100")
-  $jobs = @(($jobsJson | ConvertFrom-Json).jobs)
-  $statusesJson = Invoke-GhText @('api',"repos/$repo/commits/$Sha/statuses?per_page=100")
-  $statuses = @($statusesJson | ConvertFrom-Json)
-  $result = Test-SaveAppNativeSimCaptureReadiness `
-    -CaptureRequested $true `
-    -ExpectedRunId $RunId `
-    -ExpectedAttempt $Attempt `
-    -ExpectedSha $Sha `
-    -ExpectedBareUrl $BareUrl `
-    -Run $run `
-    -Jobs $jobs `
-    -Statuses $statuses
-
-  return [pscustomobject]@{ Result = $result; Run = $run; Jobs = $jobs }
 }
 
 function Assert-Repository {
@@ -243,21 +217,25 @@ try {
   $gatePath = Resolve-SaveAppMirrorPath -Base $publicRoot -RelativePath '.github\native-sim\gate.cjs' -ExpectedType File
 
   $preflightScript = Join-Path $sourceRoot 'scripts\Invoke-SaveAppSwiftPreflight.ps1'
-  $preflightResults = @(& $preflightScript -PassThru)
-  $preflight = Assert-SaveAppSwiftPreflightResult -Results $preflightResults `
+  $preflight = Invoke-SaveAppSwiftPreflightGate `
+    -SkipPreflight:$SkipSwiftPreflight `
+    -InvokePreflight { & $preflightScript -PassThru } `
     -ExpectedRepository $repo `
     -ExpectedWorkflowPath '.github/workflows/swift-preflight.yml' `
     -ExpectedBranch 'main' `
     -ExpectedSha $mirrorSha
+  if ($preflight.Skipped) {
+    Write-Output "Swift Preflight: explicitly skipped by -SkipSwiftPreflight | public SHA $mirrorSha. NativeSim's own native build and signing gates remain required."
+  }
 
   $postSourceSha = Assert-Repository -Root $sourceRoot -Slug $sourceRepo -ExpectedBranch 'main'
   $postMirrorSha = Assert-Repository -Root $publicRoot -Slug $repo -ExpectedBranch 'main'
   if ($postSourceSha -ne $sourceSha -or $postMirrorSha -ne $mirrorSha) {
-    throw 'Source or public mirror SHA changed during Swift Preflight; NativeSim was not started.'
+    throw 'Source or public mirror SHA changed during pre-NativeSim validation; NativeSim was not started.'
   }
   $postProvenance = Get-Content -LiteralPath $provenancePath -Raw
   if ($postProvenance -notmatch "(?m)^source_commit=$([regex]::Escape($sourceSha))\r?$") {
-    throw 'Public mirror provenance changed during Swift Preflight; NativeSim was not started.'
+    throw 'Public mirror provenance changed during pre-NativeSim validation; NativeSim was not started.'
   }
 
   $workflowJson = Invoke-GhText @('api',"repos/$repo/actions/workflows/native-sim.yml")
@@ -351,7 +329,7 @@ try {
   if (-not $nativeProcess.Start()) { throw 'Could not start the installed NativeSim CLI.' }
   $nativeProcess.BeginOutputReadLine()
   $nativeProcess.BeginErrorReadLine()
-  Write-Output "NativeSim dispatched for public main SHA $mirrorSha with a $Minutes-minute session; the CLI transport URL will remain withheld until the requested readiness gates pass."
+  Write-Output "NativeSim dispatched for public main SHA $mirrorSha with a $Minutes-minute session; the launcher will return links after validating this run's exact transport handoff."
 
   $linkDeadline = [DateTimeOffset]::UtcNow.AddMinutes(50)
   $runId = $null
@@ -379,7 +357,7 @@ try {
     if ($nativeProcess.HasExited) { break }
   }
 
-  if (-not $nativeProcess.HasExited) {
+  if ((-not $actionsUrl -or -not $simulatorUrl) -and -not $nativeProcess.HasExited) {
     $nativeProcess.Kill($true)
     $nativeProcess.WaitForExit(15000) | Out-Null
   }
@@ -413,59 +391,19 @@ try {
     throw "NativeSim run $runId does not match the exact public repository, workflow, branch, SHA, and CLI Actions URL."
   }
 
-  $verifiedJobs = @()
-  if ($captureConfiguration.CaptureEnabled) {
-    $expectedAttempt = 1
-    $expectedBareUrl = Get-SaveAppSimulatorStatusTarget -AuthenticatedUrl $simulatorUrl
-    $readinessDeadline = Get-SaveAppOSLogReadinessDeadline -Run $run
-    $readiness = $null
-    do {
-      try {
-        $snapshot = Get-SaveAppOSLogReadinessSnapshot `
-          -RunId $runId `
-          -Attempt $expectedAttempt `
-          -Sha $mirrorSha `
-          -BareUrl $expectedBareUrl
-        $readiness = $snapshot.Result
-        $run = $snapshot.Run
-        $verifiedJobs = $snapshot.Jobs
-        $readinessDeadline = Get-SaveAppOSLogReadinessDeadline -Run $run -Jobs $verifiedJobs
-      } catch {
-        $readiness = [pscustomobject]@{ State = 'waiting'; Reason = 'github_readiness_api_unavailable'; Session = '' }
-      }
-
-      if ($readiness.State -eq 'ready') { break }
-      if ($readiness.State -eq 'failed') {
-        throw "SaveApp OSLog capture readiness verification failed ($($readiness.Reason)); authenticated session links were withheld."
-      }
-      if ($run -and [string]$run.status -ceq 'completed') {
-        throw 'NativeSim run completed before OSLog capture readiness was verified; authenticated session links were withheld.'
-      }
-      if ([DateTimeOffset]::UtcNow -ge $readinessDeadline) { break }
-      Start-Sleep -Seconds 20
-    } while ([DateTimeOffset]::UtcNow -lt $readinessDeadline)
-
-    if (-not $readiness -or $readiness.State -ne 'ready') {
-      $reason = if ($readiness) { [string]$readiness.Reason } else { 'readiness_not_confirmed' }
-      throw "SaveApp OSLog capture did not become ready before the bounded queue/build deadline ($reason); authenticated session links were withheld."
-    }
-  }
-
-  $initialStatus = [string]$run.status
-  $initialConclusion = [string]$run.conclusion
-  $activeStep = $null
-  try {
-    $jobs = if ($captureConfiguration.CaptureEnabled) { $verifiedJobs } else {
-      $jobsJson = Invoke-GhText @('api',"repos/$repo/actions/runs/$runId/attempts/$([int]$run.run_attempt)/jobs?per_page=100")
-      @(($jobsJson | ConvertFrom-Json).jobs)
-    }
-    foreach ($job in $jobs) {
-      $step = @($job.steps | Where-Object { $_.status -eq 'in_progress' } | Select-Object -First 1)
-      if ($step.Count -gt 0) { $activeStep = [string]$step[0].name; break }
-    }
-  } catch {
-    $activeStep = $null
-  }
+  $statusesJson = Invoke-GhText @('api',"repos/$repo/commits/$mirrorSha/statuses?per_page=100")
+  $statuses = @($statusesJson | ConvertFrom-Json)
+  $expectedAttempt = [int]$run.run_attempt
+  $handoff = Assert-SaveAppNativeSimTransportHandoff `
+    -ExpectedRepository $repo `
+    -ExpectedRunId $runId `
+    -ExpectedAttempt $expectedAttempt `
+    -ExpectedSha $mirrorSha `
+    -CaptureRequested $captureConfiguration.CaptureEnabled `
+    -ActionsUrl $actionsUrl `
+    -SimulatorUrl $simulatorUrl `
+    -Run $run `
+    -Statuses $statuses
   try {
     if (-not (Save-SafeSessionMetadata -CloneRoot $cloneRoot -MirrorRoot $publicRoot -ExpectedRunId $runId -ExpectedSha $mirrorSha -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl)) {
       Write-Warning 'The CLI session metadata was not present in its isolated checkout; the two returned links remain valid.'
@@ -474,14 +412,22 @@ try {
     Write-Warning 'Could not save safe NativeSim session metadata in the public checkout; no authenticated URL was written to disk.'
   }
 
-  $preflightKind = if ($preflight.Reused) { 'reused exact-SHA success' } else { 'new exact-SHA success' }
-  $compileState = if ($initialStatus -eq 'completed') { "completed ($initialConclusion)" } else { $initialStatus }
-  $stepText = if ($activeStep) { "; current step: $activeStep" } else { '' }
-  Write-Output "Swift Preflight: $preflightKind | run $($preflight.RunId) | SHA $mirrorSha | $($preflight.Url)"
-  Write-Output "NativeSim: run $runId | branch main | SHA $mirrorSha | $Minutes minutes | initial workflow status $compileState$stepText"
+  $handoffState = if ($captureConfiguration.CaptureEnabled) {
+    'TRANSPORTE PRONTO — BUILD/OSLOG PENDENTES'
+  } else {
+    'SESSÃO PRONTA — OSLOG NÃO SOLICITADO'
+  }
+  if (-not $preflight.Skipped) {
+    $preflightKind = if ($preflight.Reused) { 'reused exact-SHA success' } else { 'new exact-SHA success' }
+    Write-Output "Swift Preflight: $preflightKind | run $($preflight.RunId) | SHA $mirrorSha | $($preflight.Url)"
+  }
+  Write-Output "NativeSim: run $runId | attempt $($handoff.Attempt) | session $($handoff.Session) | branch main | private SHA $sourceSha | public SHA $mirrorSha | $Minutes minutes"
+  Write-Output $handoffState
+  if ($captureConfiguration.CaptureEnabled) {
+    Write-Output "OSLog: readiness was not checked by this handoff; verify success in native-sim-capture/$($handoff.Session) for this run before manual tests that require recoverable logs."
+  }
   Write-Output "GitHub Actions: $actionsUrl"
   Write-Output "Authenticated Simulator: $simulatorUrl"
-  Write-Output 'Local NativeSim CLI stopped after link capture; the remote GitHub Actions run and Simulator session continue.'
 } finally {
   if ($nativeProcess) {
     try {

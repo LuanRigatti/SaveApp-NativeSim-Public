@@ -37,6 +37,15 @@ describe('sanitized NativeSim mirror snapshot gate', () => {
     }
   });
 
+  test('requires the explicitly scoped no-Preflight skill in the safe mirror snapshot', () => {
+    const skillPath = '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md';
+    expect(mirrorSecurity).toContain("'" + skillPath + "'");
+    expect(snapshotGate).toContain("'" + skillPath + "'");
+    expect(mirrorSecurity).toContain("$allowedDirectories = @('assets','src','docs','.agents/skills','tests')");
+    expect(mirrorSecurity).not.toContain("$allowedDirectories = @('scripts'");
+    expect(mirrorSecurity).not.toContain("$allowedDirectories = @('modules'");
+  });
+
   test('validates the exact copied hashes and provenance before public mirror writes', () => {
     expect(snapshotGate).toContain('Get-SaveAppMirrorCandidateFiles');
     expect(snapshotGate).toContain('Get-FileHash');
