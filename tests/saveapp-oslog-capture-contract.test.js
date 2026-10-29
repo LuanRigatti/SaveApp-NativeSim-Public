@@ -1,8 +1,203 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+
+function toBashPath(value) {
+  const normalized = value.replace(/\\/g, '/');
+  const windowsDrive = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  return windowsDrive ? `/${windowsDrive[1].toLowerCase()}/${windowsDrive[2]}` : normalized;
+}
+
+function resolveBash() {
+  if (process.platform !== 'win32') return 'bash';
+  const candidates = [
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+  ];
+  const candidate = candidates.find((value) => fs.existsSync(value));
+  if (!candidate) throw new Error('Git Bash is required to execute the SaveApp OSLog choice regression cases.');
+  return candidate;
+}
+
+function makeChoiceStatus({
+  id = 123456789,
+  context = 'saveapp/oslog-choice/987654321/1/a1b2c3d4',
+  capture = false,
+  sha = undefined,
+  state = 'success',
+  creator = 'saveapp-owner',
+  createdAt = '2026-10-29T12:00:01Z',
+  description = undefined,
+  malformed = false,
+} = {}) {
+  const commitSha = 'a'.repeat(40);
+  const status = {
+    id,
+    context,
+    state,
+    description: description || `SaveApp OSLog choice capture=${capture} sha=${commitSha}`,
+    target_url: null,
+    created_at: createdAt,
+    creator: { login: creator },
+  };
+  if (sha !== undefined) status.sha = sha;
+  if (malformed) delete status.id;
+  return status;
+}
+
+const jqShimSource = String.raw`
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const flags = new Set();
+const vars = {};
+const rest = [];
+for (let i = 0; i < args.length; i += 1) {
+  if (args[i] === '--arg') { vars[args[i + 1]] = args[i + 2]; i += 2; }
+  else if (args[i] === '-er') { flags.add('-e'); flags.add('-r'); }
+  else if (['-e', '-r', '-c', '-s'].includes(args[i])) flags.add(args[i]);
+  else rest.push(args[i]);
+}
+const filter = rest.join(' ');
+const rawInput = fs.readFileSync(0, 'utf8').trim();
+function parse() { return JSON.parse(rawInput); }
+function result(value) {
+  if (flags.has('-e') && (value === false || value === null || value === undefined)) process.exit(1);
+  if (flags.has('-r')) process.stdout.write(value === null || value === undefined ? '' : String(value));
+  else process.stdout.write(flags.has('-c') ? JSON.stringify(value) : JSON.stringify(value, null, 2) + '\n');
+}
+function fail() { process.exit(4); }
+try {
+  if (flags.has('-s')) {
+    const pages = [parse()];
+    if (filter.startsWith('if length > 0')) {
+      if (!pages.length || !pages.every(Array.isArray)) fail();
+      result(pages.flat());
+    } else if (filter === 'add') {
+      if (!pages.every(Array.isArray)) fail();
+      result(pages.flat());
+    } else fail();
+  } else {
+    const value = parse();
+    if (filter === '.id|tostring == $run_id') result(String(value.id) === vars.run_id);
+    else if (filter === '.run_attempt|tostring == $attempt') result(String(value.run_attempt) === vars.attempt);
+    else if (filter.startsWith('.path == ".github/workflows/native-sim.yml"')) {
+      result(value.path === '.github/workflows/native-sim.yml' && value.event === 'workflow_dispatch' &&
+        value.head_branch === 'main' && value.head_sha === vars.sha && value.actor?.login === vars.actor &&
+        value.status === 'in_progress' && value.conclusion === null && typeof value.created_at === 'string' &&
+        value.created_at.length > 0 && value.display_title === 'native-sim ' + vars.session + ' · release · ' + vars.minutes + 'm');
+    } else if (filter === '.created_at | select(type == "string" and length > 0)') {
+      result(typeof value.created_at === 'string' && value.created_at.length ? value.created_at : null);
+    } else if (filter.includes('all(.[]; type == "object"')) {
+      const valid = Array.isArray(value) && value.every((item) => item && typeof item === 'object' &&
+        typeof item.id === 'number' && item.id > 0 && typeof item.context === 'string' &&
+        typeof item.state === 'string' && typeof item.description === 'string' &&
+        typeof item.created_at === 'string' && typeof item.creator?.login === 'string' &&
+        (item.target_url === null || typeof item.target_url === 'string') &&
+        (!Object.prototype.hasOwnProperty.call(item, 'sha') || typeof item.sha === 'string'));
+      result(valid);
+    } else if (filter.includes('[.[] | select(.context == $context)] | length')) {
+      result(value.filter((item) => item.context === vars.context).length);
+    } else if (filter.includes('[.[] | select(.context == $context)][0]')) {
+      result(value.filter((item) => item.context === vars.context)[0] ?? null);
+    } else if (filter.includes('capture("^SaveApp OSLog choice')) {
+      const match = typeof value.description === 'string' && value.description.match(/^SaveApp OSLog choice capture=(true|false) sha=[0-9a-fA-F]{40}$/);
+      result(match ? match[1] : '');
+    } else if (filter.includes('.context == $context and .state == "success"')) {
+      const date = Date.parse(value.created_at);
+      const runDate = Date.parse(vars.run_created_at);
+      result(value.context === vars.context && value.state === 'success' && value.description === vars.description &&
+        (!Object.prototype.hasOwnProperty.call(value, 'sha') || value.sha === vars.sha) &&
+        value.creator?.login === vars.actor && (value.target_url === null || value.target_url === '') &&
+        Number.isFinite(date) && Number.isFinite(runDate) && date >= runDate);
+    } else fail();
+  }
+} catch { fail(); }
+`;
+
+let jqShimPath;
+beforeAll(() => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'saveapp-oslog-choice-'));
+  jqShimPath = path.join(tempRoot, 'jq-shim.js');
+  fs.writeFileSync(jqShimPath, jqShimSource, 'utf8');
+});
+afterAll(() => {
+  if (jqShimPath) fs.rmSync(path.dirname(jqShimPath), { recursive: true, force: true });
+});
+
+function runBashChoice({ run = {}, statuses = [], apiFailure = '', invalidPages = false } = {}) {
+  const session = 'a1b2c3d4';
+  const minutes = '120';
+  const runId = '987654321';
+  const sha = 'a'.repeat(40);
+  const actor = 'saveapp-owner';
+  const runData = {
+    id: runId,
+    run_attempt: 1,
+    path: '.github/workflows/native-sim.yml',
+    event: 'workflow_dispatch',
+    head_branch: 'main',
+    head_sha: sha,
+    actor: { login: actor },
+    status: 'in_progress',
+    conclusion: null,
+    created_at: '2026-10-29T12:00:00Z',
+    display_title: `native-sim ${session} · release · ${minutes}m`,
+    ...run,
+  };
+  const bashScript = String.raw`
+set -u
+source "$SAVEAPP_TEST_HELPER"
+if ! command -v jq >/dev/null 2>&1; then
+  jq() { node "$SAVEAPP_TEST_JQ_SHIM" "$@"; }
+fi
+gh() {
+  case "$*" in
+    *"actions/runs/\${GITHUB_RUN_ID}"*)
+      [[ "\${SAVEAPP_TEST_API_FAILURE:-}" != 'run' ]] || return 22
+      printf '%s\n' "$SAVEAPP_TEST_RUN_JSON"
+      ;;
+    *"commits/\${GITHUB_SHA}/statuses?per_page=100"*)
+      [[ "\${SAVEAPP_TEST_API_FAILURE:-}" != 'statuses' ]] || return 22
+      if [[ "\${SAVEAPP_TEST_INVALID_PAGES:-false}" == 'true' ]]; then printf '%s\n' 'not-json';
+      else printf '%s\n' "$SAVEAPP_TEST_STATUSES_JSON"; fi
+      ;;
+    *) return 23 ;;
+  esac
+}
+sleep() { SECONDS=$((SECONDS + 61)); }
+GITHUB_OUTPUT="$(mktemp)"
+export GITHUB_OUTPUT
+if saveapp_capture_resolve_session_choice; then choice_exit=0; else choice_exit=$?; fi
+printf '\n__CHOICE_EXIT__=%s\n' "$choice_exit"
+cat "$GITHUB_OUTPUT"
+rm -f "$GITHUB_OUTPUT"
+exit 0
+`.replaceAll('\\${', '${');
+  const bash = resolveBash();
+  const env = {
+    ...process.env,
+    SAVEAPP_TEST_HELPER: toBashPath(path.join(root, '.github/native-sim/oslog-capture.sh')),
+    SAVEAPP_TEST_JQ_SHIM: toBashPath(jqShimPath),
+    SAVEAPP_TEST_RUN_JSON: JSON.stringify(runData),
+    SAVEAPP_TEST_STATUSES_JSON: JSON.stringify(invalidPages ? [] : statuses),
+    SAVEAPP_TEST_API_FAILURE: apiFailure,
+    SAVEAPP_TEST_INVALID_PAGES: String(invalidPages),
+    SESSION_ID: session,
+    SESSION_MINUTES: minutes,
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: '1',
+    GITHUB_SHA: sha,
+    GITHUB_REPOSITORY: 'LuanRigatti/SaveApp-NativeSim-Public',
+    GITHUB_ACTOR: actor,
+  };
+  const result = spawnSync(bash, ['-c', bashScript], { cwd: root, env, encoding: 'utf8', timeout: 10000 });
+  if (result.error) throw result.error;
+  return { exitCode: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
+}
 
 function stepBlock(workflow, name) {
   const marker = `      - name: ${name}`;
@@ -39,6 +234,10 @@ describe('SaveApp per-session OSLog NativeSim choice', () => {
     expect(workflow).not.toMatch(/inputs:\s*[\s\S]*?capture_oslog:/);
     expect(launcher).toContain('function Publish-SaveAppOSLogCaptureDecision');
     expect(launcher).toContain("'api','--method','POST',\"repos/$repo/statuses/$ExpectedSha\"");
+    expect(launcher).toContain("'api','--paginate','--slurp',\"repos/$repo/commits/$ExpectedSha/statuses?per_page=100\"");
+    expect(launcher).toContain("$response.PSObject.Properties['id']");
+    expect(launcher).toContain("$postedStatusId = [Convert]::ToString");
+    expect(launcher).toContain('The per-run OSLog choice was not visible by its exact SHA endpoint before the bounded read-back timeout');
     expect(launcher).toContain('New-SaveAppOSLogCaptureDecisionContract');
     expect(helper).toContain('saveapp_capture_resolve_session_choice');
     expect(helper).toContain('saveapp/oslog-choice/$run_id/$attempt/$session_id');
@@ -54,15 +253,22 @@ describe('SaveApp per-session OSLog NativeSim choice', () => {
     expect(helper).toContain('SaveApp per-run OSLog choice is ambiguous');
     expect(helper).toContain('SaveApp per-run OSLog choice failed exact identity validation');
     expect(helper).toContain('.creator.login == $actor');
-    expect(helper).toContain('.sha == $sha');
+    expect(helper).toContain('((has("sha") | not) or .sha == $sha)');
+    expect(helper).not.toContain('and .sha == $sha');
+    expect(helper).toContain('fromdateiso8601');
+    expect(helper).toContain('all(.[]; type == "object"');
     expect(cliGuard).toContain('choice_status_ambiguous');
     expect(cliGuard).toContain('choice_status_identity_mismatch');
+    expect(cliGuard).toContain('choice_status_response_invalid');
     expect(cliGuard).toContain('choice_run_identity_mismatch');
     expect(cliGuard).toContain('choice_status_not_visible');
     expect(cliGuard).toContain('$statusCreatedAt -lt $runCreatedAt');
     expect(launcher).toContain('links were withheld');
     expect(launcher).toContain('Test-SaveAppOSLogCaptureDecision');
-    expect(launcher).toContain('-CaptureRequested $CaptureRequested -Run $run -Statuses @($response)');
+    expect(launcher).toContain('repos/$repo/commits/$ExpectedSha/statuses?per_page=100');
+    expect(launcher).toContain('-ExpectedStatusId $postedStatusId');
+    expect(launcher).toContain('if ($readBack.State -eq \'ready\') { return $readBack }');
+    expect(cliGuard).not.toContain('[string]$status.sha -cne $ExpectedSha');
   });
 
   test('all sessions deliver the exact early transport link without waiting for build or OSLog', () => {
@@ -183,4 +389,47 @@ describe('SaveApp per-session OSLog NativeSim choice', () => {
     expect(uploader).toContain('manifest.json');
     expect(uploader).not.toContain('saveapp-native-sim-oslog.log');
   });
+});
+
+describe('SaveApp Bash exact-run OSLog choice behavior', () => {
+  test('accepts capture=false and capture=true from realistic GitHub statuses without sha', () => {
+    for (const capture of [false, true]) {
+      const outcome = runBashChoice({ statuses: [makeChoiceStatus({ capture })] });
+      expect(outcome.exitCode).toBe(0);
+      expect(outcome.stdout).toContain('__CHOICE_EXIT__=0');
+      expect(outcome.stdout).toContain(`enabled=${capture}`);
+    }
+  }, 30000);
+
+  test('fails closed for wrong identities, altered status data, ambiguity, missing data, and API failures', () => {
+    const cases = [
+      ['run ID mismatch', { run: { id: '987654322' }, statuses: [makeChoiceStatus()] }, 'run ID'],
+      ['attempt mismatch', { run: { run_attempt: 2 }, statuses: [makeChoiceStatus()] }, 'run metadata'],
+      ['SHA mismatch on run', { run: { head_sha: 'b'.repeat(40) }, statuses: [makeChoiceStatus()] }, 'run metadata'],
+      ['session mismatch', { run: { display_title: 'native-sim 0a1b2c3d · release · 120m' }, statuses: [makeChoiceStatus()] }, 'run metadata'],
+      ['context/session mismatch', { statuses: [makeChoiceStatus({ context: 'saveapp/oslog-choice/987654321/1/0a1b2c3d' })] }, 'bounded timeout'],
+      ['duplicate status', { statuses: [makeChoiceStatus(), makeChoiceStatus({ id: 123456790 })] }, 'ambiguous'],
+      ['wrong creator', { statuses: [makeChoiceStatus({ creator: 'other-user' })] }, 'identity validation'],
+      ['stale timestamp', { statuses: [makeChoiceStatus({ createdAt: '2026-10-28T11:59:59Z' })] }, 'identity validation'],
+      ['invalid timestamp', { statuses: [makeChoiceStatus({ createdAt: 'invalid-date' })] }, 'identity validation'],
+      ['malformed capture description', { statuses: [makeChoiceStatus({ description: `SaveApp OSLog choice capture=maybe sha=${'a'.repeat(40)}` })] }, 'identity validation'],
+      ['description bound to another SHA', { statuses: [makeChoiceStatus({ description: `SaveApp OSLog choice capture=false sha=${'b'.repeat(40)}` })] }, 'identity validation'],
+      ['wrong optional SHA', { statuses: [makeChoiceStatus({ sha: 'b'.repeat(40) })] }, 'identity validation'],
+      ['non-success state', { statuses: [makeChoiceStatus({ state: 'pending' })] }, 'identity validation'],
+      ['malformed status object', { statuses: [makeChoiceStatus({ malformed: true })] }, 'invalid SaveApp status object'],
+      ['invalid status pages', { invalidPages: true }, 'invalid SaveApp status response'],
+      ['status API failure', { apiFailure: 'statuses' }, 'bounded timeout'],
+      ['run API failure', { apiFailure: 'run' }, 'Could not verify the SaveApp NativeSim run'],
+      ['missing status', { statuses: [] }, 'bounded timeout'],
+    ];
+
+    for (const [, fixture, expectedMessage] of cases) {
+      const outcome = runBashChoice(fixture);
+      expect(outcome.exitCode).toBe(0);
+      expect(outcome.stdout).toContain('__CHOICE_EXIT__=1');
+      expect(outcome.stdout).toContain(expectedMessage);
+      expect(outcome.stdout).not.toContain('enabled=');
+      expect(outcome.stderr).toBe('');
+    }
+  }, 30000);
 });

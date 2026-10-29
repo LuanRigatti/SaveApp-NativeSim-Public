@@ -43,8 +43,13 @@ saveapp_capture_resolve_session_choice() {
      ! jq -e \
     --arg run_id "$run_id" --arg attempt "$attempt" --arg sha "$sha" \
     --arg session "$session_id" --arg minutes "$minutes" --arg actor "$actor" \
-    '.path == ".github/workflows/native-sim.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $sha and .actor.login == $actor and .status == "in_progress" and .conclusion == null and .display_title == ("native-sim " + $session + " · release · " + $minutes + "m")' >/dev/null <<<"$run_json"; then
+    '.path == ".github/workflows/native-sim.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $sha and .actor.login == $actor and .status == "in_progress" and .conclusion == null and (.created_at | type == "string" and length > 0) and .display_title == ("native-sim " + $session + " · release · " + $minutes + "m")' >/dev/null <<<"$run_json"; then
     echo '::error::SaveApp NativeSim run metadata does not match the exact session, attempt, actor, and SHA'
+    return 1
+  fi
+  local run_created_at
+  if ! run_created_at=$(jq -er '.created_at | select(type == "string" and length > 0)' <<<"$run_json"); then
+    echo '::error::SaveApp NativeSim run timestamp is invalid'
     return 1
   fi
 
@@ -52,8 +57,15 @@ saveapp_capture_resolve_session_choice() {
   local deadline=$((SECONDS + 60))
   local pages statuses count status expected_description
   while (( SECONDS < deadline )); do
-    if pages=$(gh api --paginate "repos/$repository/commits/$sha/statuses?per_page=100" 2>/dev/null) &&
-       statuses=$(jq -s 'add' <<<"$pages"); then
+    if pages=$(gh api --paginate "repos/$repository/commits/$sha/statuses?per_page=100" 2>/dev/null); then
+      if ! statuses=$(jq -s 'if length > 0 and all(.[]; type == "array") then add else error("invalid status pages") end' <<<"$pages"); then
+        echo '::error::GitHub returned an invalid SaveApp status response'
+        return 1
+      fi
+      if ! jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "number" and . > 0) and (.context | type == "string") and (.state | type == "string") and (.description | type == "string") and (.created_at | type == "string") and (.creator.login | type == "string") and (.target_url == null or (.target_url | type == "string")) and ((has("sha") | not) or (.sha | type == "string")))' >/dev/null <<<"$statuses"; then
+        echo '::error::GitHub returned an invalid SaveApp status object'
+        return 1
+      fi
       count=$(jq --arg context "$context" '[.[] | select(.context == $context)] | length' <<<"$statuses")
       if [[ "$count" =~ ^[0-9]+$ ]] && (( count > 1 )); then
         echo '::error::SaveApp per-run OSLog choice is ambiguous'
@@ -66,8 +78,8 @@ saveapp_capture_resolve_session_choice() {
         expected_description="SaveApp OSLog choice capture=$capture_requested sha=$sha"
         if [[ "$capture_requested" != 'true' && "$capture_requested" != 'false' ]] ||
            ! jq -e --arg context "$context" --arg description "$expected_description" \
-          --arg sha "$sha" --arg actor "$actor" \
-          '.context == $context and .state == "success" and .description == $description and .sha == $sha and .creator.login == $actor and (.target_url == null or .target_url == "")' \
+          --arg sha "$sha" --arg actor "$actor" --arg run_created_at "$run_created_at" \
+          '.context == $context and .state == "success" and .description == $description and ((has("sha") | not) or .sha == $sha) and .creator.login == $actor and (.target_url == null or .target_url == "") and ((try (.created_at | fromdateiso8601) catch null) as $status_time | (try ($run_created_at | fromdateiso8601) catch null) as $run_time | $status_time != null and $run_time != null and $status_time >= $run_time)' \
           >/dev/null <<<"$status"; then
           echo '::error::SaveApp per-run OSLog choice failed exact identity validation'
           return 1

@@ -100,14 +100,49 @@ function Publish-SaveAppOSLogCaptureDecision {
     '-f','state=success','-f',"context=$($decision.Context)",'-f',"description=$($decision.Description)"
   )
   $response = $responseJson | ConvertFrom-Json -ErrorAction Stop
+  $responseIdProperty = $response.PSObject.Properties['id']
+  if ($null -eq $responseIdProperty) {
+    throw 'GitHub did not return an ID for the per-run OSLog choice; no links will be delivered.'
+  }
+  $postedStatusId = [Convert]::ToString($responseIdProperty.Value,[Globalization.CultureInfo]::InvariantCulture)
   $validated = Test-SaveAppOSLogCaptureDecision `
     -ExpectedRunId $RunId -ExpectedAttempt $attempt `
     -ExpectedSession $decision.Session -ExpectedSha $ExpectedSha `
-    -CaptureRequested $CaptureRequested -Run $run -Statuses @($response)
+    -CaptureRequested $CaptureRequested -Run $run -Statuses @($response) `
+    -ExpectedStatusId $postedStatusId
   if ($validated.State -ne 'ready') {
     throw "The per-run SaveApp OSLog choice was not accepted for this exact NativeSim run ($($validated.Reason)); links will be withheld."
   }
-  return $validated
+
+  $readBackDeadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
+  while ([DateTimeOffset]::UtcNow -lt $readBackDeadline) {
+    $statusPagesJson = Invoke-GhText @(
+      'api','--paginate','--slurp',"repos/$repo/commits/$ExpectedSha/statuses?per_page=100"
+    )
+    $statusPages = ConvertFrom-Json -InputObject $statusPagesJson -NoEnumerate -ErrorAction Stop
+    if ($statusPages -isnot [array]) {
+      throw 'GitHub returned an invalid per-commit status response; no links will be delivered.'
+    }
+    $statuses = [Collections.Generic.List[object]]::new()
+    foreach ($page in $statusPages) {
+      if ($page -isnot [array]) {
+        throw 'GitHub returned an invalid per-commit status page; no links will be delivered.'
+      }
+      foreach ($status in $page) { $statuses.Add($status) }
+    }
+
+    $readBack = Test-SaveAppOSLogCaptureDecision `
+      -ExpectedRunId $RunId -ExpectedAttempt $attempt `
+      -ExpectedSession $decision.Session -ExpectedSha $ExpectedSha `
+      -CaptureRequested $CaptureRequested -Run $run -Statuses @($statuses.ToArray()) `
+      -ExpectedStatusId $postedStatusId
+    if ($readBack.State -eq 'ready') { return $readBack }
+    if ($readBack.State -eq 'failed') {
+      throw "The per-run OSLog choice could not be confirmed by its exact SHA endpoint ($($readBack.Reason)); no links will be delivered."
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  throw 'The per-run OSLog choice was not visible by its exact SHA endpoint before the bounded read-back timeout; no links will be delivered.'
 }
 
 function Assert-Repository {

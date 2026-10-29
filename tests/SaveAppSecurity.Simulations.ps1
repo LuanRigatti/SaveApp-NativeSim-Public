@@ -665,14 +665,15 @@ try {
   $choiceContract = New-SaveAppOSLogCaptureDecisionContract -ExpectedRunId $choiceFixture.Run.id `
     -ExpectedAttempt 1 -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true
   $choiceStatus = [pscustomobject]@{
+    id=123456789
     context=$choiceContract.Context; state='success'; description=$choiceContract.Description
-    sha=$choiceFixture.Sha; creator=[pscustomobject]@{ login='saveapp-owner' }; target_url=$null
+    creator=[pscustomobject]@{ login='saveapp-owner' }; target_url=$null
     created_at='2026-10-27T12:00:01Z'
   }
   $choiceResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
     -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
-    -Run $choiceFixture.Run -Statuses @($choiceStatus)
-  Assert-True ($choiceResult.State -eq 'ready' -and $choiceResult.CaptureEnabled) 'explicit capture=true is accepted only for the exact run, attempt, session, SHA, actor, and status'
+    -Run $choiceFixture.Run -Statuses @($choiceStatus) -ExpectedStatusId '123456789'
+  Assert-True ($choiceResult.State -eq 'ready' -and $choiceResult.CaptureEnabled) 'a real GitHub status object without a sha property accepts capture=true only through the exact SHA-bound run, context, actor, and status identity'
 
   $offChoice = New-SaveAppOSLogCaptureDecisionContract -ExpectedRunId $choiceFixture.Run.id `
     -ExpectedAttempt 1 -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $false
@@ -680,8 +681,8 @@ try {
   $offStatus.context = $offChoice.Context; $offStatus.description = $offChoice.Description
   $offResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
     -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $false `
-    -Run $choiceFixture.Run -Statuses @($offStatus)
-  Assert-True ($offResult.State -eq 'ready' -and -not $offResult.CaptureEnabled) 'explicit capture=false is a valid isolated per-run choice'
+    -Run $choiceFixture.Run -Statuses @($offStatus) -ExpectedStatusId '123456789'
+  Assert-True ($offResult.State -eq 'ready' -and -not $offResult.CaptureEnabled) 'a real GitHub status object without a sha property accepts explicit capture=false for this exact run'
 
   $oldChoice = $choiceStatus.PSObject.Copy(); $oldChoice.context = 'saveapp/oslog-choice/987654320/1/a1b2c3d4'
   $oldChoiceResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
@@ -701,6 +702,10 @@ try {
     -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
     -Run $choiceFixture.Run -Statuses @($wrongSessionChoice)
   Assert-True ($wrongSessionResult.State -eq 'waiting' -and $wrongSessionResult.Reason -eq 'choice_status_not_visible') 'a choice for another session on the same run, attempt, and SHA cannot enable capture'
+  $missingChoiceResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @()
+  Assert-True ($missingChoiceResult.State -eq 'waiting' -and $missingChoiceResult.Reason -eq 'choice_status_not_visible') 'an absent status remains waiting for the bounded launcher timeout instead of releasing the session'
 
   Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
     -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
@@ -713,6 +718,53 @@ try {
   Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
     -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
     -Run $choiceFixture.Run -Statuses @($staleChoice)).Reason -eq 'choice_status_identity_mismatch') 'a choice timestamp older than its run is rejected'
+
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($choiceStatus) -ExpectedStatusId '987654321').Reason -eq 'choice_status_identity_mismatch') 'the read-back status must have the exact ID returned by the POST'
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($choiceStatus) -ExpectedStatusId '').Reason -eq 'choice_status_response_invalid') 'a missing POST status ID cannot skip read-back identity binding'
+  $wrongStatusSha = $choiceStatus.PSObject.Copy(); $wrongStatusSha | Add-Member -NotePropertyName sha -NotePropertyValue ('b' * 40)
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($wrongStatusSha)).Reason -eq 'choice_status_identity_mismatch') 'an optional status SHA, if present, cannot contradict the requested commit'
+  $wrongRunSha = $choiceFixture.Run.PSObject.Copy(); $wrongRunSha.head_sha = 'b' * 40
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $wrongRunSha -Statuses @($choiceStatus)).Reason -eq 'choice_run_identity_mismatch') 'the workflow run head SHA remains mandatory even though individual status objects omit sha'
+  $wrongRunId = $choiceFixture.Run.PSObject.Copy(); $wrongRunId.id = '987654322'
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $wrongRunId -Statuses @($choiceStatus)).Reason -eq 'choice_run_identity_mismatch') 'a status cannot be accepted for a different workflow run ID'
+  $wrongRunAttempt = $choiceFixture.Run.PSObject.Copy(); $wrongRunAttempt.run_attempt = 2
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $wrongRunAttempt -Statuses @($choiceStatus)).Reason -eq 'choice_run_identity_mismatch') 'a different workflow attempt is rejected'
+  $wrongSessionRun = $choiceFixture.Run.PSObject.Copy(); $wrongSessionRun.display_title = 'native-sim 0a1b2c3d · release · 120m'
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $wrongSessionRun -Statuses @($choiceStatus)).Reason -eq 'choice_run_identity_mismatch') 'the run title must contain the exact expected session ID'
+  $badDescription = $choiceStatus.PSObject.Copy(); $badDescription.description = "SaveApp OSLog choice capture=false sha=$($choiceFixture.Sha)"
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($badDescription)).Reason -eq 'choice_status_identity_mismatch') 'capture choice must match the requested value exactly'
+  $captureOnWhileOffRequested = $offStatus.PSObject.Copy(); $captureOnWhileOffRequested.description = $choiceContract.Description
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $false `
+    -Run $choiceFixture.Run -Statuses @($captureOnWhileOffRequested)).Reason -eq 'choice_status_identity_mismatch') 'capture=true cannot replace an explicitly requested capture=false decision'
+  $badState = $choiceStatus.PSObject.Copy(); $badState.state = 'pending'
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($badState)).Reason -eq 'choice_status_identity_mismatch') 'only a successful status can authorize the capture choice'
+  $invalidTimestamp = $choiceStatus.PSObject.Copy(); $invalidTimestamp.created_at = 'not-an-iso-date'
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($invalidTimestamp)).Reason -eq 'choice_status_timestamp_invalid') 'an invalid GitHub status timestamp is rejected'
+  $malformedStatus = $choiceStatus.PSObject.Copy(); $malformedStatus.PSObject.Properties.Remove('id')
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($malformedStatus)).Reason -eq 'choice_status_response_invalid') 'an invalid status response fails closed'
 
   $captureFixture = New-SaveAppCaptureReadinessFixture
   $originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture

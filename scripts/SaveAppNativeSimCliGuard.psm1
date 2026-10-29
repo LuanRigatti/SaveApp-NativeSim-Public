@@ -349,13 +349,18 @@ function Test-SaveAppOSLogCaptureDecision {
     [Parameter(Mandatory)][string]$ExpectedSha,
     [Parameter(Mandatory)][bool]$CaptureRequested,
     [AllowNull()][object]$Run,
-    [AllowEmptyCollection()][object[]]$Statuses = @()
+    [AllowEmptyCollection()][object[]]$Statuses = @(),
+    [AllowNull()][string]$ExpectedStatusId
   )
 
   $contract = New-SaveAppOSLogCaptureDecisionContract `
     -ExpectedRunId $ExpectedRunId -ExpectedAttempt $ExpectedAttempt `
     -ExpectedSession $ExpectedSession -ExpectedSha $ExpectedSha `
     -CaptureRequested $CaptureRequested
+  $expectedStatusIdProvided = $PSBoundParameters.ContainsKey('ExpectedStatusId')
+  if ($expectedStatusIdProvided -and $ExpectedStatusId -notmatch '^[1-9][0-9]*$') {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_response_invalid' -Session $ExpectedSession
+  }
   if ($null -eq $Run) { return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'choice_run_not_visible' -Session $ExpectedSession }
 
   $attempt = 0
@@ -371,11 +376,35 @@ function Test-SaveAppOSLogCaptureDecision {
     return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_run_identity_mismatch' -Session $ExpectedSession
   }
 
+  $requiredProperties = @('id','context','state','description','creator','created_at','target_url')
+  foreach ($candidate in $Statuses) {
+    if ($null -eq $candidate) {
+      return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_response_invalid' -Session $ExpectedSession
+    }
+    foreach ($propertyName in $requiredProperties) {
+      if ($null -eq $candidate.PSObject.Properties[$propertyName]) {
+        return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_response_invalid' -Session $ExpectedSession
+      }
+    }
+    $candidateId = [Convert]::ToString($candidate.id,[Globalization.CultureInfo]::InvariantCulture)
+    $candidateCreator = $candidate.PSObject.Properties['creator'].Value
+    if ($candidateId -notmatch '^[1-9][0-9]*$' -or $null -eq $candidateCreator -or
+        $null -eq $candidateCreator.PSObject.Properties['login']) {
+      return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_response_invalid' -Session $ExpectedSession
+    }
+  }
+
   $matching = @($Statuses | Where-Object { [string]$_.context -ceq $contract.Context })
   if ($matching.Count -eq 0) { return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'choice_status_not_visible' -Session $ExpectedSession }
   if ($matching.Count -ne 1) { return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_ambiguous' -Session $ExpectedSession }
 
   $status = $matching[0]
+  $statusId = [Convert]::ToString($status.id,[Globalization.CultureInfo]::InvariantCulture)
+  if ($statusId -notmatch '^[1-9][0-9]*$') {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_response_invalid' -Session $ExpectedSession
+  }
+  $creatorProperty = $status.PSObject.Properties['creator'].Value.PSObject.Properties['login']
+  $optionalSha = $status.PSObject.Properties['sha']
   $runCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $Run.created_at
   $statusCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $status.created_at
   if ($null -eq $runCreatedAt -or $null -eq $statusCreatedAt) {
@@ -383,8 +412,9 @@ function Test-SaveAppOSLogCaptureDecision {
   }
   if ([string]$status.state -cne 'success' -or
       [string]$status.description -cne $contract.Description -or
-      [string]$status.sha -cne $ExpectedSha -or
-      [string]$status.creator.login -cne [string]$Run.actor.login -or
+      ($null -ne $optionalSha -and [string]$optionalSha.Value -cne $ExpectedSha) -or
+      ($expectedStatusIdProvided -and $statusId -cne $ExpectedStatusId) -or
+      [string]$creatorProperty.Value -cne [string]$Run.actor.login -or
       -not [string]::IsNullOrEmpty([string]$status.target_url) -or
       $statusCreatedAt -lt $runCreatedAt) {
     return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_identity_mismatch' -Session $ExpectedSession
