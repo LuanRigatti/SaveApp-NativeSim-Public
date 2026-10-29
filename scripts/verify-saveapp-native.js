@@ -95,9 +95,9 @@ const richNoteEditorSource = fs.existsSync(richNoteEditorPath)
   : '';
 const richNoteToolbarMarkers = [
   'parentView.keyboardLayoutGuide',
-  'usesBottomSafeArea = true',
   'followsUndockedKeyboard = true',
   'keyboardLayoutGuide.topAnchor',
+  'ViewName("Dock")',
   'UIHostingController<RichNoteKeyboardToolbarContent>',
   'Events("onAction")',
   'Menu {',
@@ -107,6 +107,7 @@ const richNoteToolbarMarkers = [
 if (
   !richNoteToolbarNativeSource ||
   richNoteToolbarMarkers.some((marker) => !richNoteToolbarNativeSource.includes(marker)) ||
+  /\bName\("Dock"\)|usesBottomSafeArea\s*=/.test(richNoteToolbarNativeSource) ||
   /keyboardDidShow|keyboardDidHide|keyboardWillShow|keyboardWillHide/.test(richNoteToolbarNativeSource) ||
   !richNoteToolbarComponentSource.includes('requireOptionalNativeModule') ||
   !richNoteToolbarComponentSource.includes('ViewPrototypes?.[`${moduleName}_Dock`]') ||

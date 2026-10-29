@@ -213,7 +213,9 @@ describe('saved text inline editing and autosave', () => {
     expect(toolbarComponentSource).toContain('requireOptionalNativeModule');
     expect(toolbarComponentSource).toContain('ViewPrototypes?.[`${moduleName}_Dock`]');
     expect(toolbarSource).toContain('keyboardLayoutGuide.topAnchor');
-    expect(toolbarSource).toContain('usesBottomSafeArea = true');
+    expect(toolbarSource).toContain('ViewName("Dock")');
+    expect(toolbarSource).not.toMatch(/^\s+Name\("Dock"\)$/m);
+    expect(toolbarSource).not.toContain('usesBottomSafeArea = true');
     expect(toolbarSource).toContain('followsUndockedKeyboard = true');
     expect(toolbarSource).toContain('toolbarSymbol("textformat"');
     expect(toolbarSource).toContain('toolbarSymbol("ellipsis"');

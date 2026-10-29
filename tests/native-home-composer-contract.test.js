@@ -53,7 +53,9 @@ describe('home link composer and shared rich text editor contract', () => {
   test('mounts one native toolbar continuously and anchors it to UIKit keyboard geometry', () => {
     expect(editorSource).not.toMatch(/InputAccessoryView|inputAccessoryViewID|ACCESSORY_ID/);
     expect(toolbarSource).toContain("requireNativeViewManager<NativeToolbarProps>(moduleName, 'Dock')");
-    expect(toolbarNativeSource).toContain('parentView.keyboardLayoutGuide.usesBottomSafeArea = true');
+    expect(toolbarNativeSource).toContain('ViewName("Dock")');
+    expect(toolbarNativeSource).not.toMatch(/^\s+Name\("Dock"\)$/m);
+    expect(toolbarNativeSource).not.toContain('usesBottomSafeArea = true');
     expect(toolbarNativeSource).toContain('parentView.keyboardLayoutGuide.followsUndockedKeyboard = true');
     expect(toolbarNativeSource).toContain('parentView.keyboardLayoutGuide.topAnchor');
     expect(toolbarNativeSource).toContain('host.view.bottomAnchor.constraint(equalTo: parentView.keyboardLayoutGuide.topAnchor, constant: -8)');

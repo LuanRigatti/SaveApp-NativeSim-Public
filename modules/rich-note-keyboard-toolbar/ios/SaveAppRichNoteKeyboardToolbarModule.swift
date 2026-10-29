@@ -169,7 +169,6 @@ public final class SaveAppRichNoteKeyboardToolbarView: ExpoView {
     ]
     NSLayoutConstraint.activate(overlayConstraints)
 
-    parentView.keyboardLayoutGuide.usesBottomSafeArea = true
     parentView.keyboardLayoutGuide.followsUndockedKeyboard = true
 
     let host = UIHostingController(rootView: RichNoteKeyboardToolbarContent(model: model))
@@ -231,7 +230,7 @@ public final class SaveAppRichNoteKeyboardToolbarModule: Module {
     Name("SaveAppRichNoteKeyboardToolbar")
 
     View(SaveAppRichNoteKeyboardToolbarView.self) {
-      Name("Dock")
+      ViewName("Dock")
       Events("onAction")
 
       Prop("active", true) { (view: SaveAppRichNoteKeyboardToolbarView, active: Bool) in
