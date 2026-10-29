@@ -5,65 +5,83 @@ import UIKit
 
 private final class RichNoteToolbarModel: ObservableObject {
   @Published var colorScheme: ColorScheme?
+  @Published var keyboardVisible = false
   var sendAction: ((String) -> Void)?
 }
 
 private struct RichNoteKeyboardToolbarContent: View {
   @ObservedObject var model: RichNoteToolbarModel
+  @Environment(\.colorScheme) private var systemColorScheme
 
   private let controlSize: CGFloat = 44
+  private var iconColor: Color {
+    (model.colorScheme ?? systemColorScheme) == .dark ? .white : .black
+  }
 
   var body: some View {
-    HStack(spacing: 2) {
-      Menu {
-        menuAction("Texto normal", symbol: "text.alignleft", action: "format.body")
-        menuAction("Título", symbol: "textformat.size.larger", action: "format.title")
-        menuAction("Subtítulo", symbol: "textformat.size", action: "format.subtitle")
-        Divider()
-        menuAction("Negrito", symbol: "bold", action: "format.bold")
-        menuAction("Itálico", symbol: "italic", action: "format.italic")
-        menuAction("Sublinhado", symbol: "underline", action: "format.underline")
-        Divider()
-        menuAction("Lista com marcadores", symbol: "list.bullet", action: "format.bullet")
-        menuAction("Lista numerada", symbol: "list.number", action: "format.numbered")
-      } label: {
-        toolbarSymbol("textformat", label: "Formatação")
-      }
-      .accessibilityLabel("Formatação")
-
-      toolbarButton("checklist", label: "Inserir checklist", action: "insertChecklist")
-      toolbarButton("photo", label: "Inserir imagem", action: "insertImage")
-      toolbarButton("link", label: "Inserir link", action: "insertLink")
-
-      Menu {
-        menuAction("Lista com marcadores", symbol: "list.bullet", action: "format.bullet")
-        menuAction("Lista numerada", symbol: "list.number", action: "format.numbered")
-        menuAction("Remover formatação", symbol: "textformat", action: "format.clear")
-        Divider()
-        menuAction("Inserir link", symbol: "link", action: "insertLink")
-      } label: {
-        toolbarSymbol("ellipsis", label: "Mais opções")
-      }
-      .accessibilityLabel("Mais opções")
-
-      toolbarButton("keyboard.chevron.compact.down", label: "Recolher teclado", action: "dismissKeyboard")
-    }
-    .padding(.horizontal, 5)
-    .frame(width: 300, height: 56)
-    .background {
-      if #available(iOS 26.0, *) {
-        Capsule()
-          .fill(.clear)
-          .glassEffect(.regular.interactive(), in: Capsule())
-      } else {
-        Capsule()
-          .fill(.regularMaterial)
-          .overlay {
-            Capsule().strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5)
+    GeometryReader { geometry in
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 0) {
+          Menu {
+            menuAction("Texto normal", symbol: "text.alignleft", action: "format.body")
+            menuAction("Título", symbol: "textformat.size.larger", action: "format.title")
+            menuAction("Subtítulo", symbol: "textformat.size", action: "format.subtitle")
+            Divider()
+            menuAction("Negrito", symbol: "bold", action: "format.bold")
+            menuAction("Itálico", symbol: "italic", action: "format.italic")
+            menuAction("Sublinhado", symbol: "underline", action: "format.underline")
+            Divider()
+            menuAction("Lista com marcadores", symbol: "list.bullet", action: "format.bullet")
+            menuAction("Lista numerada", symbol: "list.number", action: "format.numbered")
+          } label: {
+            toolbarSymbol("textformat", label: "Formatação")
           }
+          .accessibilityLabel("Formatação")
+
+          toolbarButton("checklist", label: "Inserir checklist", action: "insertChecklist")
+          toolbarButton("photo", label: "Inserir imagem", action: "insertImage")
+          toolbarButton("link", label: "Inserir link", action: "insertLink")
+          toolbarButton("arrow.uturn.backward", label: "Desfazer", action: "undo")
+
+          Menu {
+            menuAction("Lista com marcadores", symbol: "list.bullet", action: "format.bullet")
+            menuAction("Lista numerada", symbol: "list.number", action: "format.numbered")
+            menuAction("Remover formatação", symbol: "textformat", action: "format.clear")
+            Divider()
+            menuAction("Inserir link", symbol: "link", action: "insertLink")
+          } label: {
+            toolbarSymbol("ellipsis", label: "Mais opções")
+          }
+          .accessibilityLabel("Mais opções")
+
+          Button {
+            model.sendAction?("toggleKeyboard")
+          } label: {
+            toolbarSymbol(model.keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard", label: model.keyboardVisible ? "Recolher teclado" : "Mostrar teclado")
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(model.keyboardVisible ? "Recolher teclado" : "Mostrar teclado")
+      }
+        .padding(.horizontal, 2)
+        .frame(minWidth: geometry.size.width, alignment: .center)
+      }
+      .background {
+        if #available(iOS 26.0, *) {
+          Capsule()
+            .fill(.clear)
+            .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+          Capsule()
+            .fill(.regularMaterial)
+            .overlay {
+              Capsule().strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5)
+            }
+        }
       }
     }
+    .frame(height: 56)
     .preferredColorScheme(model.colorScheme)
+    .tint(iconColor)
   }
 
   private func toolbarButton(_ symbol: String, label: String, action: String) -> some View {
@@ -81,6 +99,7 @@ private struct RichNoteKeyboardToolbarContent: View {
       .font(.system(size: 18, weight: .medium))
       .frame(width: controlSize, height: controlSize)
       .contentShape(Rectangle())
+      .foregroundStyle(iconColor)
       .accessibilityLabel(label)
   }
 
@@ -114,6 +133,7 @@ public final class SaveAppRichNoteKeyboardToolbarView: ExpoView {
   private var hostingController: UIHostingController<RichNoteKeyboardToolbarContent>?
   private var overlayConstraints: [NSLayoutConstraint] = []
   private var toolbarConstraints: [NSLayoutConstraint] = []
+  private var keyboardObservers: [NSObjectProtocol] = []
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -178,11 +198,13 @@ public final class SaveAppRichNoteKeyboardToolbarView: ExpoView {
     host.view.isHidden = !isActive
     parent.addChild(host)
     overlay.addSubview(host.view)
+    let preferredToolbarWidth = host.view.widthAnchor.constraint(equalToConstant: 332)
+    preferredToolbarWidth.priority = .defaultHigh
     toolbarConstraints = [
       host.view.centerXAnchor.constraint(equalTo: parentView.safeAreaLayoutGuide.centerXAnchor),
-      host.view.widthAnchor.constraint(equalToConstant: 300),
-      host.view.widthAnchor.constraint(lessThanOrEqualTo: parentView.safeAreaLayoutGuide.widthAnchor, constant: -16),
-      host.view.heightAnchor.constraint(equalToConstant: 60),
+      preferredToolbarWidth,
+      host.view.widthAnchor.constraint(lessThanOrEqualTo: parentView.safeAreaLayoutGuide.widthAnchor, constant: -8),
+      host.view.heightAnchor.constraint(equalToConstant: 56),
       host.view.bottomAnchor.constraint(equalTo: parentView.keyboardLayoutGuide.topAnchor, constant: -8),
     ]
     NSLayoutConstraint.activate(toolbarConstraints)
@@ -193,6 +215,9 @@ public final class SaveAppRichNoteKeyboardToolbarView: ExpoView {
     parentController = parent
     overlayView = overlay
     hostingController = host
+    observeKeyboard()
+    parentView.layoutIfNeeded()
+    model.keyboardVisible = parentView.keyboardLayoutGuide.layoutFrame.height > 0
   }
 
   private func nearestViewController(in window: UIWindow) -> UIViewController? {
@@ -207,6 +232,8 @@ public final class SaveAppRichNoteKeyboardToolbarView: ExpoView {
   }
 
   private func detachToolbar() {
+    keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    keyboardObservers.removeAll()
     NSLayoutConstraint.deactivate(toolbarConstraints)
     NSLayoutConstraint.deactivate(overlayConstraints)
     toolbarConstraints.removeAll()
@@ -222,6 +249,17 @@ public final class SaveAppRichNoteKeyboardToolbarView: ExpoView {
     overlayView = nil
     parentController = nil
     attachedWindow = nil
+  }
+
+  private func observeKeyboard() {
+    keyboardObservers = [
+      NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { [weak self] _ in
+        self?.model.keyboardVisible = true
+      },
+      NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+        self?.model.keyboardVisible = false
+      },
+    ]
   }
 }
 

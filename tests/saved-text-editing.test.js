@@ -9,6 +9,7 @@ const { savedContentRowToModel } = require('../src/features/home-content/savedCo
 const detailSource = readFileSync(join(__dirname, '../src/app/texts/[id].tsx'), 'utf8');
 const composeSource = readFileSync(join(__dirname, '../src/app/texts/compose.tsx'), 'utf8');
 const editorSource = readFileSync(join(__dirname, '../src/components/homeContent/RichNoteEditor.tsx'), 'utf8');
+const documentSource = readFileSync(join(__dirname, '../src/features/home-content/richNoteDocument.ts'), 'utf8');
 const librarySource = readFileSync(join(__dirname, '../src/features/home-content/savedContentLibrary.ts'), 'utf8');
 const providerSource = readFileSync(join(__dirname, '../src/features/home-content/LocalSavedContentProvider.tsx'), 'utf8');
 
@@ -17,13 +18,35 @@ afterEach(() => {
 });
 
 describe('saved text inline editing and autosave', () => {
+  test('edits the note title as the first rich block and keeps the legacy database value untouched on load', () => {
+    expect(detailSource).toContain('withRichNoteEditorTitle(result.richDocument)');
+    expect(detailSource).toContain('latestDraftRef.current = result?.storageText ?? null');
+    expect(detailSource).toContain('largeTitle={null}');
+    expect(detailSource).toContain('compactTitle="Texto"');
+    expect(detailSource).toContain('contentGap={0}');
+    expect(detailSource).not.toMatch(/largeTitle=\{<Text[\s\S]*?>Texto<\/Text>\}/);
+    expect(composeSource).toContain('const [hasDraft, setHasDraft] = useState(false)');
+    expect(composeSource).toMatch(/const handleChange = useCallback\([\s\S]*?setHasDraft\(hasRichNoteContent\(next\)\)/);
+    expect(documentSource).toContain("role: 'document-title'");
+    expect(documentSource).toContain('blocks: [title, createRichNoteParagraph()]');
+    expect(editorSource).toContain("placeholder={block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined}");
+    expect(editorSource).toContain('theme.typography.largeTitle.fontSize + 2');
+    expect(editorSource).toContain('theme.typography.largeTitle.lineHeight');
+    expect(editorSource).toContain("case 'format.body': applyParagraphUpdate({ style: 'body', bold: false");
+    expect(editorSource).toContain("case 'format.title': applyParagraphUpdate({ style: 'title', bold: true");
+    expect(editorSource).toContain("case 'format.subtitle': applyParagraphUpdate({ style: 'subtitle'");
+    expect(editorSource).toContain("case 'undo': undo(); break");
+  });
+
   test('loads legacy and rich text into the shared block editor without opening the keyboard automatically', () => {
     expect(detailSource).toContain('getText(id)');
     expect(detailSource).toMatch(/<RichNoteEditor[\s\S]*?document=\{document\}[\s\S]*?onChange=\{handleChange\}/);
     expect(editorSource).toMatch(/<TextInput[\s\S]*?multiline[\s\S]*?value=\{block\.text\}/);
     expect(editorSource).not.toMatch(/InputAccessoryView|inputAccessoryViewID|ACCESSORY_ID/);
     expect(editorSource).toMatch(/renderParagraph[\s\S]*?<TextInput[\s\S]*?value=\{block\.text\}/);
-    expect(editorSource).toContain('<TextField\n              autoFocus');
+    expect(editorSource).toContain('accessibilityLabel="Endereço do link"');
+    expect(editorSource).toContain('renderInlineLinkComposer');
+    expect(editorSource).not.toMatch(/BottomSheet|presentationDetents|TextField/);
     expect(editorSource).toContain('onSelectionChange');
     expect(detailSource).not.toContain('Editar texto');
     expect(detailSource).not.toContain('Salvando…');
@@ -191,7 +214,7 @@ describe('saved text inline editing and autosave', () => {
     expect(detailSource).toContain("Keyboard.addListener('keyboardDidHide', flushEdits)");
   });
 
-  test('lets the blank page area focus at the end, then dismisses the keyboard without stealing editor taps or scrolls', () => {
+  test('toggles focus from blank page taps without stealing editor taps or scrolls', () => {
     expect(detailSource).toContain('onTouchStartCapture={pageTouches.onTouchStartCapture}');
     expect(detailSource).toContain('onTouchMove={pageTouches.onTouchMove}');
     expect(detailSource).toContain('onTouchEnd={pageTouches.onTouchEnd}');
@@ -199,13 +222,14 @@ describe('saved text inline editing and autosave', () => {
     expect(editorSource).toContain('touch.moved');
     expect(editorSource).toContain('focusAtEnd: () => void');
     expect(editorSource).toContain('target.setNativeProps({ selection });');
-    expect(editorSource).toContain('Keyboard.dismiss()');
+    expect(editorSource).toContain('Keyboard.isVisible()');
+    expect(editorSource).toContain("handleToolbarAction('toggleKeyboard')");
     expect(detailSource).toContain('onInteractionStart={pageTouches.markInteractiveTouch}');
     expect(composeSource).toContain('onInteractionStart={pageTouches.markInteractiveTouch}');
     expect(detailSource).toContain("keyboardDismissMode: Platform.OS === 'ios' ? 'interactive' : 'on-drag'");
   });
 
-  test('uses one persistent UIKit-anchored toolbar and covers text, checklist, image, link, more, and dismiss actions', () => {
+  test('uses one persistent UIKit-anchored toolbar with undo, monochrome icons, and a keyboard toggle', () => {
     const toolbarSource = readFileSync(join(__dirname, '../modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift'), 'utf8');
     const toolbarComponentSource = readFileSync(join(__dirname, '../src/components/homeContent/RichNoteKeyboardToolbar.ios.tsx'), 'utf8');
     expect(editorSource).not.toMatch(/InputAccessoryView|inputAccessoryViewID|ACCESSORY_ID/);
@@ -219,7 +243,12 @@ describe('saved text inline editing and autosave', () => {
     expect(toolbarSource).toContain('followsUndockedKeyboard = true');
     expect(toolbarSource).toContain('toolbarSymbol("textformat"');
     expect(toolbarSource).toContain('toolbarSymbol("ellipsis"');
-    for (const symbol of ['checklist', 'photo', 'link', 'keyboard.chevron.compact.down']) {
+    expect(toolbarSource).toContain('toolbarButton("arrow.uturn.backward", label: "Desfazer", action: "undo")');
+    expect(toolbarSource).toContain('"toggleKeyboard"');
+    expect(toolbarSource).toContain('foregroundStyle(iconColor)');
+    expect(toolbarSource).toContain('.tint(iconColor)');
+    expect(toolbarSource).toContain('widthAnchor.constraint(equalToConstant: 332)');
+    for (const symbol of ['checklist', 'photo', 'link']) {
       expect(toolbarSource).toContain(`toolbarButton("${symbol}"`);
     }
     expect(toolbarSource).toContain('Menu {');
@@ -228,11 +257,44 @@ describe('saved text inline editing and autosave', () => {
     expect(detailSource).toMatch(/<RichNoteKeyboardToolbar[\s\S]*?active=\{isFocused && !auxiliaryPresentationVisible && savedText != null && document != null\}/);
     expect(composeSource).not.toContain('KeyboardAvoidingView');
     expect(detailSource).not.toContain('KeyboardAvoidingView');
-    expect(toolbarSource).not.toMatch(/keyboardDidShow|keyboardDidHide|keyboardWillShow|keyboardWillHide/);
+    expect(toolbarSource).toContain('keyboardWillShowNotification');
+    expect(toolbarSource).toContain('keyboardWillHideNotification');
+    expect(toolbarSource).not.toMatch(/keyboardDidShow|keyboardDidHide/);
     expect(editorSource).toContain('insertChecklist');
     expect(editorSource).toContain('openImagePicker');
-    expect(editorSource).toContain('openLinkDialog');
-    expect(editorSource).toContain('pendingDismissFocusRef');
-    expect(editorSource).toContain('handleLinkSheetDismiss');
+    expect(editorSource).toContain('openLinkComposer');
+    expect(editorSource).toContain('commitLinkComposer');
+    expect(editorSource).toContain('insertAtAnchor([block], linkComposer.anchor, false)');
+    expect(editorSource).toContain('scheduleFocus({ kind: \'checklist\', blockId, itemId }');
+    expect(editorSource).toContain('submitBehavior="newline"');
+    expect(editorSource).toContain('selectionByInputRef.current.set(block.id, event.nativeEvent.selection)');
+    expect(editorSource).toContain("case 'undo': undo(); break");
+    expect(editorSource).toContain('undoStackRef.current.push(current)');
+  });
+
+  test('image picker inserts selected assets into the document and the existing save pipeline materializes them', () => {
+    const librarySource = readFileSync(join(__dirname, '../src/features/home-content/savedContentLibrary.ts'), 'utf8');
+    expect(editorSource).toContain("mediaTypes: ['images']");
+    expect(editorSource).toContain('const images = result.assets.map');
+    expect(editorSource).toContain('sourceUri: asset.uri');
+    expect(editorSource).toContain('insertAtAnchor(images, insertionAnchor, false)');
+    expect(editorSource).toContain("Alert.alert('Não foi possível inserir as imagens'");
+    expect(librarySource).toContain('materializeRichNoteAssets(normalized, null)');
+    expect(librarySource).toContain('materializeRichNoteAssets(normalized, previousDocument)');
+  });
+
+  test('inline link composer offers preview or text and cancels without mutating the note', () => {
+    expect(editorSource).toContain("(['preview', 'text'] as const)");
+    expect(editorSource).toContain("presentation === 'preview' ? 'Prévia' : 'Link simples'");
+    expect(editorSource).toContain('const cancelLinkComposer');
+    expect(editorSource).toContain('const commitLinkComposer');
+    expect(editorSource).toContain('normalizeWebLink(linkURL)');
+    expect(editorSource).toContain('onSubmitEditing={commitLinkComposer}');
+    expect(editorSource).toContain('const anchor = currentInsertionAnchor()');
+    expect(editorSource).toContain('const before = { ...activeParagraph, text: activeParagraph.text.slice(0, start) }');
+    expect(editorSource).toContain('const after = createRichNoteParagraph(activeParagraph.text.slice(end)');
+    const cancelStart = editorSource.indexOf('const cancelLinkComposer');
+    const cancelEnd = editorSource.indexOf('const applyParagraphUpdate', cancelStart);
+    expect(editorSource.slice(cancelStart, cancelEnd)).not.toContain('publishDocument(');
   });
 });

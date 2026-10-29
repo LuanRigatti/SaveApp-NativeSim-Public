@@ -53,11 +53,13 @@ describe('native progressive detail headers', () => {
     expect(progressiveScreenSource).toContain('<BlurView intensity={15} tint={progressiveBlurTint}');
   });
 
-  test('keeps fixed titles for text and document details and dynamic titles for folders and links', () => {
+  test('keeps the editable text title in the document and fixed document header with dynamic folder/link titles', () => {
     expect(detailRoutes.folder).toContain('compactTitle={folderTitle}');
     expect(detailRoutes.folder).toContain('{folderTitle}');
     expect(detailRoutes.text).toContain('compactTitle="Texto"');
-    expect(detailRoutes.text).toMatch(/>\s*Texto\s*<\/Text>/);
+    expect(detailRoutes.text).toContain('largeTitle={null}');
+    expect(detailRoutes.text).toContain('withRichNoteEditorTitle(result.richDocument)');
+    expect(detailRoutes.text).not.toMatch(/largeTitle=\{<Text[\s\S]*?>Texto<\/Text>\}/);
     expect(detailRoutes.text).toContain('<RichNoteEditor');
     expect(detailRoutes.text).toContain('document={document}');
     expect(detailRoutes.text).toContain('initialText: savedText.storageText');

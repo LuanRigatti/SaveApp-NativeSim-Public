@@ -199,6 +199,12 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     const quickSaveBranch = quickSaveButton.match(
       /if props\.target == saveAppQuickSaveTarget \{([\s\S]*?)\n    \} else \{/,
     )?.[1] ?? '';
+    const expandedLeadingFrame = activityLayout.match(
+      /expandedLeading:[\s\S]*?frame\(\{ width: (\d+), height: (\d+) \}\)/,
+    );
+    const quickSaveButtonFrame = quickSaveBranch.match(
+      /\n        \.frame\(width: (\d+), height: (\d+)\)/,
+    );
 
     expect(activityLayout).toContain("ready: 'Salvar link'");
     expect(activityLayout).toContain("processing: 'Salvando link'");
@@ -219,6 +225,8 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).toContain('SaveLinkQuickSaveIntent(activityID: props.source)');
     expect(quickSaveBranch).toContain('Circle()');
     expect(quickSaveBranch).toContain('.frame(width: 44, height: 44)');
+    expect(expandedLeadingFrame?.slice(1)).toEqual(quickSaveButtonFrame?.slice(1));
+    expect(quickSaveBranch).toContain('.strokeBorder(Color.white, lineWidth: 2)');
     expect(quickSaveBranch).toContain('.font(.system(size: 18, weight: .semibold))');
     expect(quickSaveBranch).toContain('.foregroundStyle(.white)');
     expect(quickSaveButton).toContain('Color(red: 0.13, green: 0.45, blue: 0.27)');

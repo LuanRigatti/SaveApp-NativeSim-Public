@@ -65,9 +65,10 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(toolbarNativeSource).toContain('if #available(iOS 26.0, *)');
     expect(toolbarNativeSource).toContain('.frame(width: controlSize, height: controlSize)');
     expect(toolbarNativeSource.match(/toolbarButton\("/g)).toHaveLength(4);
-    for (const label of ['Formatação', 'Inserir checklist', 'Inserir imagem', 'Inserir link', 'Mais opções', 'Recolher teclado']) {
+    for (const label of ['Formatação', 'Inserir checklist', 'Inserir imagem', 'Inserir link', 'Mais opções']) {
       expect(toolbarNativeSource).toContain(`label: "${label}"`);
     }
+    expect(toolbarNativeSource).toContain('label: model.keyboardVisible ? "Recolher teclado" : "Mostrar teclado"');
     for (const action of [
       'format.body',
       'format.title',
@@ -80,7 +81,8 @@ describe('home link composer and shared rich text editor contract', () => {
       'insertChecklist',
       'insertImage',
       'insertLink',
-      'dismissKeyboard',
+      'toggleKeyboard',
+      'undo',
     ]) {
       expect(toolbarNativeSource).toContain(action);
       expect(editorSource).toContain(action);
@@ -98,7 +100,13 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(detailRouteSource).toContain('automaticallyAdjustKeyboardInsets: Platform.OS === \'ios\'');
     expect(composeRouteSource.indexOf('</ScrollView>')).toBeLessThan(composeRouteSource.indexOf('<RichNoteKeyboardToolbar'));
     expect(detailRouteSource.indexOf('</ProgressiveCollapsibleScreen>')).toBeLessThan(detailRouteSource.indexOf('<RichNoteKeyboardToolbar'));
-    expect(toolbarNativeSource).not.toMatch(/keyboardDidShow|keyboardDidHide|keyboardWillShow|keyboardWillHide/);
+    const keyboardObserver = toolbarNativeSource.match(/private func observeKeyboard\(\) \{([\s\S]*?)\n  \}/)?.[1] ?? '';
+    expect(keyboardObserver).toContain('keyboardWillShowNotification');
+    expect(keyboardObserver).toContain('model.keyboardVisible = true');
+    expect(keyboardObserver).toContain('keyboardWillHideNotification');
+    expect(keyboardObserver).toContain('model.keyboardVisible = false');
+    expect(keyboardObserver).not.toMatch(/layoutIfNeeded|setNeedsLayout|NSLayoutConstraint|\.constant\s*=|\.frame\s*=/);
+    expect(toolbarNativeSource).not.toMatch(/keyboardDidShow|keyboardDidHide/);
   });
 
   test('lets long paragraphs and checklist tasks expand in the editor scroll view', () => {
@@ -115,10 +123,10 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(editorSource).toContain('attemptedPreviewUrlsRef');
     expect(librarySource).toContain('materializeRichNoteAssets');
     expect(editorSource).toContain('normalizeWebLink(linkURL)');
-    expect(editorSource).toContain('insertAfterActivePosition([block], false)');
-    expect(editorSource).toContain('<BottomSheet');
-    expect(editorSource).toContain('<TextField');
-    expect(editorSource).toContain('presentationDetents([{ height: 320 }, \'medium\'])');
+    expect(editorSource).toContain('insertAtAnchor([block], linkComposer.anchor, false)');
+    expect(editorSource).toContain('renderInlineLinkComposer');
+    expect(editorSource).toContain("(['preview', 'text'] as const)");
+    expect(editorSource).not.toMatch(/<BottomSheet|<TextField|presentationDetents/);
     expect(editorSource).toContain('<NativeCardContextMenu');
     expect(editorSource).not.toContain('<Modal');
     expect(editorSource).toContain('onError={() => setFailedPreviewIds');

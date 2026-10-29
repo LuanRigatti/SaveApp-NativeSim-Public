@@ -15,6 +15,7 @@ export type RichNoteParagraphBlock = {
   type: 'paragraph';
   text: string;
   style: RichNoteParagraphStyle;
+  role?: 'document-title';
   bold: boolean;
   italic: boolean;
   underline: boolean;
@@ -102,11 +103,51 @@ export function createRichNoteParagraph(
 }
 
 export function createEmptyRichNoteDocument(): RichNoteDocument {
+  const title = createRichNoteParagraph('Texto', {
+    bold: true,
+    role: 'document-title',
+    style: 'title',
+  });
   return {
     format: RICH_NOTE_FORMAT,
     version: RICH_NOTE_VERSION,
-    blocks: [createRichNoteParagraph()],
+    blocks: [title, createRichNoteParagraph()],
   };
+}
+
+/**
+ * Adds the former static detail heading to the editor's in-memory document.
+ * The marker survives formatting and deletion, so reopening an edited note
+ * never recreates its title. Callers keep the original storage value until a
+ * user edit is reported by the editor.
+ */
+export function withRichNoteEditorTitle(document: RichNoteDocument): RichNoteDocument {
+  const firstBlock = document.blocks[0];
+  let blocks: RichNoteBlock[];
+
+  if (firstBlock?.type === 'paragraph' && firstBlock.role === 'document-title') {
+    const lastBlock = document.blocks[document.blocks.length - 1];
+    if (lastBlock?.type === 'paragraph' && lastBlock.style === 'body') return document;
+    blocks = [...document.blocks, createRichNoteParagraph()];
+  } else if (firstBlock?.type === 'paragraph' && firstBlock.style === 'title') {
+    blocks = [{ ...firstBlock, role: 'document-title' }, ...document.blocks.slice(1)];
+  } else {
+    blocks = [
+      createRichNoteParagraph('Texto', {
+        bold: true,
+        role: 'document-title',
+        style: 'title',
+      }),
+      ...document.blocks,
+    ];
+  }
+
+  const lastBlock = blocks[blocks.length - 1];
+  if (lastBlock?.type !== 'paragraph' || lastBlock.style !== 'body') {
+    blocks.push(createRichNoteParagraph());
+  }
+
+  return { ...document, blocks };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -136,6 +177,7 @@ function normalizeBlock(value: unknown): RichNoteBlock | null {
       type: 'paragraph',
       text: value.text,
       style,
+      ...(value.role === 'document-title' ? { role: 'document-title' as const } : {}),
       bold: value.bold === true,
       italic: value.italic === true,
       underline: value.underline === true,

@@ -148,7 +148,7 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
               }
           } else {
             Circle()
-              .stroke(Color.white, lineWidth: 2)
+              .strokeBorder(Color.white, lineWidth: 2)
               .overlay {
                 Image(systemName: "checkmark")
                   .font(.system(size: 18, weight: .medium))

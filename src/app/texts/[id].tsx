@@ -19,7 +19,7 @@ import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentP
 import type { TextAutoSaveController, TextAutoSaveState } from '@/features/home-content/textAutoSave';
 import { createTextAutoSaveController } from '@/features/home-content/textAutoSave';
 import type { SavedText } from '@/features/home-content/homeContentTypes';
-import { encodeRichNoteDraft, type RichNoteDocument } from '@/features/home-content/richNoteDocument';
+import { encodeRichNoteDraft, type RichNoteDocument, withRichNoteEditorTitle } from '@/features/home-content/richNoteDocument';
 import { useAppSafeAreaInsets } from '@/providers';
 import { useAppTheme } from '@/theme';
 
@@ -78,7 +78,7 @@ function SavedTextContent({ id }: { id: number | null }) {
       if (!isActive) return;
       setLoadedText({ id, value: result });
       latestDraftRef.current = result?.storageText ?? null;
-      setDocumentRecord(result ? { id, value: result.richDocument } : null);
+      setDocumentRecord(result ? { id, value: withRichNoteEditorTitle(result.richDocument) } : null);
     });
     return () => { isActive = false; };
   }, [getText, id]);
@@ -153,9 +153,9 @@ function SavedTextContent({ id }: { id: number | null }) {
         >
           <ProgressiveCollapsibleScreen
             compactTitle="Texto"
-            contentGap={theme.spacing.md}
+            contentGap={0}
             contentTopInset={theme.spacing.xl + theme.spacing.xxl + theme.spacing.xxs * 2 + 2}
-            largeTitle={<Text accessibilityRole="header" style={[theme.typography.largeTitle, { color: theme.colors.textPrimary, fontSize: theme.typography.largeTitle.fontSize + 2 }]}>Texto</Text>}
+            largeTitle={null}
             nativeHeader
             scrollContentContainerStyle={{ paddingBottom: insets.bottom + 76 }}
             scrollViewProps={{ automaticallyAdjustKeyboardInsets: Platform.OS === 'ios', keyboardDismissMode: Platform.OS === 'ios' ? 'interactive' : 'on-drag', keyboardShouldPersistTaps: 'handled' }}

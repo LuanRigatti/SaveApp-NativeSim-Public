@@ -26,6 +26,10 @@ module.exports = {
       bundleIdentifier: 'com.luanrigatti.saveapp',
       supportsTablet: true,
       deploymentTarget: '16.4',
+      icon: {
+        light: './assets/icon.png',
+        dark: './assets/icon-dark.png',
+      },
       infoPlist: {
         // Compatibility-only: the inherited toolbar plugin reads this key.
         StarterToolbarMorphExperimentVariant: toolbarVariant,

@@ -12,7 +12,7 @@ import {
 } from './activityLinkAuthorization';
 
 type SaveLinkActivityProps = {
-  iconUri: string;
+  iconUri: { light: string; dark: string };
   composeUrl: string;
   expandedHomeUrl: string;
   quickSaveStatus: 'ready';
@@ -28,6 +28,7 @@ type LiveActivityFactory = {
 };
 
 const APP_GROUP_ICON_NAME = 'saveapp-live-activity-icon.png';
+const APP_GROUP_DARK_ICON_NAME = 'saveapp-live-activity-icon-dark.png';
 const activityFactoryLoader = createOptionalNativeModuleLoader(
   'ExpoWidgets',
   requireOptionalNativeModule,
@@ -50,7 +51,7 @@ export function isSaveLinkActivityAvailable(): boolean {
   return activityFactoryLoader.isAvailable();
 }
 
-async function getSharedAppIconUri(): Promise<string> {
+async function getSharedAppIconUri(): Promise<{ light: string; dark: string }> {
   // Keep modules introduced for this feature lazy so an older installed binary
   // can continue to launch the app and report activation as unavailable.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -63,13 +64,21 @@ async function getSharedAppIconUri(): Promise<string> {
 
   const sharedDirectory = new Directory(widgetsDirectory);
   await sharedDirectory.create({ idempotent: true, intermediates: true });
-  const sharedIcon = new File(sharedDirectory, APP_GROUP_ICON_NAME);
-  if (!sharedIcon.exists) {
-    const [asset] = await Asset.loadAsync(require('../../../assets/live-activity-icon.png'));
-    if (!asset?.localUri) throw new Error('Não foi possível preparar o ícone do SaveApp.');
-    await new File(asset.localUri).copy(sharedIcon);
+  const [lightAsset, darkAsset] = await Asset.loadAsync([
+    require('../../../assets/icon.png'),
+    require('../../../assets/icon-dark.png'),
+  ]);
+  if (!lightAsset?.localUri || !darkAsset?.localUri) {
+    throw new Error('Não foi possível preparar os ícones do SaveApp.');
   }
-  return sharedIcon.uri;
+
+  const lightIcon = new File(sharedDirectory, APP_GROUP_ICON_NAME);
+  const darkIcon = new File(sharedDirectory, APP_GROUP_DARK_ICON_NAME);
+  await Promise.all([
+    new File(lightAsset.localUri).copy(lightIcon, { overwrite: true }),
+    new File(darkAsset.localUri).copy(darkIcon, { overwrite: true }),
+  ]);
+  return { light: lightIcon.uri, dark: darkIcon.uri };
 }
 
 const reconcileInstances = createActivityReconciler({

@@ -104,11 +104,22 @@ const richNoteToolbarMarkers = [
   'glassEffect(.regular.interactive(), in: Capsule())',
   '.fill(.regularMaterial)',
 ];
+const keyboardObserverBlock = richNoteToolbarNativeSource.match(
+  /private func observeKeyboard\(\) \{([\s\S]*?)\n  \}/,
+)?.[1] ?? '';
+const keyboardNotificationsAreIndicatorOnly =
+  keyboardObserverBlock.includes('keyboardWillShowNotification') &&
+  keyboardObserverBlock.includes('model.keyboardVisible = true') &&
+  keyboardObserverBlock.includes('keyboardWillHideNotification') &&
+  keyboardObserverBlock.includes('model.keyboardVisible = false') &&
+  !/layoutIfNeeded|setNeedsLayout|NSLayoutConstraint|\.constant\s*=|\.frame\s*=/.test(keyboardObserverBlock) &&
+  !/keyboardDidShow|keyboardDidHide/.test(richNoteToolbarNativeSource) &&
+  [...richNoteToolbarNativeSource.matchAll(/keyboardWill(?:Show|Hide)Notification/g)].length === 2;
 if (
   !richNoteToolbarNativeSource ||
   richNoteToolbarMarkers.some((marker) => !richNoteToolbarNativeSource.includes(marker)) ||
   /\bName\("Dock"\)|usesBottomSafeArea\s*=/.test(richNoteToolbarNativeSource) ||
-  /keyboardDidShow|keyboardDidHide|keyboardWillShow|keyboardWillHide/.test(richNoteToolbarNativeSource) ||
+  !keyboardNotificationsAreIndicatorOnly ||
   !richNoteToolbarComponentSource.includes('requireOptionalNativeModule') ||
   !richNoteToolbarComponentSource.includes('ViewPrototypes?.[`${moduleName}_Dock`]') ||
   !richNoteToolbarComponentSource.includes("requireNativeViewManager<NativeToolbarProps>(moduleName, 'Dock')") ||

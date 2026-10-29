@@ -1,18 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import { BottomSheet, Button as NativeButton, HStack, Host, Picker, Text as NativeText, TextField, VStack, useNativeState } from '@expo/ui/swift-ui';
-import {
-  padding as nativePadding,
-  pickerStyle,
-  presentationCornerRadius,
-  presentationDetents,
-  presentationDragIndicator,
-  foregroundStyle,
-  tag,
-} from '@expo/ui/swift-ui/modifiers';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import {
   Alert,
   Keyboard,
@@ -63,7 +53,14 @@ type RichNoteEditorProps = {
 };
 
 type EditorInput = { kind: 'paragraph'; blockId: string } | { kind: 'checklist'; blockId: string; itemId: string };
-type LinkDialogState = { blockId: string | null; presentation: 'text' | 'preview' };
+type InsertionAnchor = { input: EditorInput | null; selection: { start: number; end: number } };
+type LinkComposerState = {
+  blockId: string | null;
+  presentation: 'text' | 'preview';
+  anchor: InsertionAnchor;
+  restoreFocus: { input: EditorInput; selection: { start: number; end: number } } | null;
+  restoreKeyboard: boolean;
+};
 
 function imageUri(block: Extract<RichNoteBlock, { type: 'image' }>): string | null {
   if (block.sourceUri) return block.sourceUri;
@@ -94,23 +91,30 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   initialFocus = false,
   disabled = false,
 }: RichNoteEditorProps, forwardedRef) {
-  const { resolvedMode, theme } = useAppTheme();
+  const { theme } = useAppTheme();
   const documentRef = useRef(document);
   const inputRefs = useRef(new Map<string, TextInputInstance>());
+  const linkURLInputRef = useRef<TextInputInstance>(null);
   const activeInputRef = useRef<EditorInput | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const selectionByInputRef = useRef(new Map<string, { start: number; end: number }>());
+  const undoStackRef = useRef<RichNoteDocument[]>([]);
+  const undoGroupRef = useRef<{ key: string; timestamp: number } | null>(null);
+  const pendingFocusRef = useRef<{ input: EditorInput; selection?: { start: number; end: number } } | null>(null);
   const previewRequestsRef = useRef(new Map<string, AbortController>());
   const attemptedPreviewUrlsRef = useRef(new Map<string, string>());
   const didInitialFocusRef = useRef(false);
   const editorHasFocusRef = useRef(false);
-  const linkRestoreFocusRef = useRef<{ input: EditorInput; selection: { start: number; end: number } } | null>(null);
-  const pendingDismissFocusRef = useRef<{ input: EditorInput; selection: { start: number; end: number } } | null>(null);
-  const [linkDialog, setLinkDialog] = useState<LinkDialogState | null>(null);
+  const [linkComposer, setLinkComposer] = useState<LinkComposerState | null>(null);
   const [linkURL, setLinkURL] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);
   const [failedPreviewIds, setFailedPreviewIds] = useState<Set<string>>(new Set());
   const [measuredInputHeights, setMeasuredInputHeights] = useState<Record<string, number>>({});
-  const nativeLinkURL = useNativeState('');
+
+  const hasLinkComposer = linkComposer !== null;
+  useLayoutEffect(() => {
+    if (hasLinkComposer) linkURLInputRef.current?.focus();
+  }, [hasLinkComposer]);
 
   useEffect(() => {
     documentRef.current = document;
@@ -126,13 +130,27 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     };
   }, []);
 
-  const publishDocument = useCallback((next: RichNoteDocument) => {
+  const publishDocument = useCallback((next: RichNoteDocument, historyGroup?: string, recordUndo = true) => {
+    const current = documentRef.current;
+    const now = Date.now();
+    const previousGroup = undoGroupRef.current;
+    const startsNewUndoStep = !historyGroup || !previousGroup || previousGroup.key !== historyGroup || now - previousGroup.timestamp > 700;
+    if (recordUndo && startsNewUndoStep) {
+      undoStackRef.current.push(current);
+      if (undoStackRef.current.length > 80) undoStackRef.current.shift();
+    }
+    undoGroupRef.current = historyGroup ? { key: historyGroup, timestamp: now } : null;
     documentRef.current = next;
     onChange(next);
   }, [onChange]);
 
   const focusInput = useCallback((input: EditorInput, selection?: { start: number; end: number }) => {
     activeInputRef.current = input;
+    if (selection) {
+      const inputId = input.kind === 'paragraph' ? input.blockId : input.itemId;
+      selectionByInputRef.current.set(inputId, selection);
+      selectionRef.current = selection;
+    }
     requestAnimationFrame(() => {
       const target = inputRefs.current.get(input.kind === 'paragraph' ? input.blockId : input.itemId);
       if (!target) return;
@@ -141,9 +159,21 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     });
   }, []);
 
+  const scheduleFocus = useCallback((input: EditorInput, selection?: { start: number; end: number }) => {
+    const pending = { input, selection };
+    pendingFocusRef.current = pending;
+    requestAnimationFrame(() => {
+      if (pendingFocusRef.current !== pending) return;
+      pendingFocusRef.current = null;
+      focusInput(input, selection);
+    });
+  }, [focusInput]);
+
   const focusAtEnd = useCallback(() => {
     const current = documentRef.current;
-    let paragraph = [...current.blocks].reverse().find((block): block is RichNoteParagraphBlock => block.type === 'paragraph');
+    let paragraph = current.blocks.at(-1)?.type === 'paragraph'
+      ? current.blocks.at(-1) as RichNoteParagraphBlock
+      : undefined;
     if (!paragraph) {
       paragraph = createRichNoteParagraph();
       publishDocument({ ...current, blocks: [...current.blocks, paragraph] });
@@ -174,22 +204,31 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
 
   const markInteraction = useCallback(() => onInteractionStart?.(), [onInteractionStart]);
 
-  const updateBlock = useCallback((blockId: string, update: (block: RichNoteBlock) => RichNoteBlock) => {
+  const currentInsertionAnchor = useCallback((): InsertionAnchor => {
+    const input = activeInputRef.current;
+    const inputId = input?.kind === 'paragraph' ? input.blockId : input?.itemId;
+    return {
+      input,
+      selection: inputId ? { ...(selectionByInputRef.current.get(inputId) ?? selectionRef.current) } : { ...selectionRef.current },
+    };
+  }, []);
+
+  const updateBlock = useCallback((blockId: string, update: (block: RichNoteBlock) => RichNoteBlock, historyGroup?: string, recordUndo = true) => {
     const current = documentRef.current;
     publishDocument({
       ...current,
       blocks: current.blocks.map((block) => block.id === blockId ? update(block) : block),
-    });
+    }, historyGroup, recordUndo);
   }, [publishDocument]);
 
   const updateParagraphText = useCallback((blockId: string, text: string) => {
-    updateBlock(blockId, (block) => block.type === 'paragraph' ? { ...block, text } : block);
+    updateBlock(blockId, (block) => block.type === 'paragraph' ? { ...block, text } : block, `paragraph:${blockId}`);
   }, [updateBlock]);
 
-  const updateChecklistItem = useCallback((blockId: string, itemId: string, update: (item: RichNoteChecklistBlock['items'][number]) => RichNoteChecklistBlock['items'][number]) => {
+  const updateChecklistItem = useCallback((blockId: string, itemId: string, update: (item: RichNoteChecklistBlock['items'][number]) => RichNoteChecklistBlock['items'][number], historyGroup?: string) => {
     updateBlock(blockId, (block) => block.type === 'checklist'
       ? { ...block, items: block.items.map((item) => item.id === itemId ? update(item) : item) }
-      : block);
+      : block, historyGroup);
   }, [updateBlock]);
 
   const measureInput = useCallback((inputId: string, contentHeight: number, minimumHeight: number, verticalPadding = 0) => {
@@ -197,9 +236,9 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     setMeasuredInputHeights((current) => current[inputId] === nextHeight ? current : { ...current, [inputId]: nextHeight });
   }, []);
 
-  const insertAfterActivePosition = useCallback((inserted: RichNoteBlock[], focusAfter = true) => {
+  const insertAtAnchor = useCallback((inserted: RichNoteBlock[], anchor: InsertionAnchor, focusAfter = true) => {
     const current = documentRef.current;
-    const active = activeInputRef.current;
+    const active = anchor.input;
     const activeParagraph = active?.kind === 'paragraph'
       ? current.blocks.find((block): block is RichNoteParagraphBlock => block.type === 'paragraph' && block.id === active.blockId)
       : undefined;
@@ -207,7 +246,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     let focusParagraph: RichNoteParagraphBlock | null = null;
 
     if (activeParagraph) {
-      const selection = selectionRef.current;
+      const selection = anchor.selection;
       const start = Math.max(0, Math.min(selection.start, activeParagraph.text.length));
       const end = Math.max(start, Math.min(selection.end, activeParagraph.text.length));
       const before = { ...activeParagraph, text: activeParagraph.text.slice(0, start) };
@@ -237,20 +276,27 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
 
     publishDocument({ ...current, blocks: nextBlocks });
     if (focusAfter && focusParagraph) {
-      focusInput({ kind: 'paragraph', blockId: focusParagraph.id }, { start: 0, end: 0 });
+      scheduleFocus({ kind: 'paragraph', blockId: focusParagraph.id }, { start: 0, end: 0 });
     }
     return focusParagraph;
-  }, [focusInput, publishDocument]);
+  }, [publishDocument, scheduleFocus]);
+
+  const insertAfterActivePosition = useCallback((inserted: RichNoteBlock[], focusAfter = true) => {
+    return insertAtAnchor(inserted, currentInsertionAnchor(), focusAfter);
+  }, [currentInsertionAnchor, insertAtAnchor]);
 
   const openImagePicker = useCallback(async (replaceBlockId?: string) => {
     markInteraction();
     const editorWasFocused = editorHasFocusRef.current;
+    const keyboardWasVisible = Keyboard.isVisible();
+    const insertionAnchor = currentInsertionAnchor();
     const focusBeforePicker = activeInputRef.current
-      ? { input: activeInputRef.current, selection: { ...selectionRef.current } }
+      ? { input: activeInputRef.current, selection: { ...insertionAnchor.selection } }
       : null;
     onAuxiliaryPresentationChange?.(true);
     dismissKeyboard();
-    let focusAfterPicker: { input: EditorInput; selection: { start: number; end: number } } | null = null;
+    let focusAfterPicker: { input: EditorInput; selection: { start: number; end: number } } | null =
+      editorWasFocused && keyboardWasVisible ? focusBeforePicker : null;
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
@@ -275,32 +321,36 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
         if (editorWasFocused) focusAfterPicker = focusBeforePicker;
         return;
       }
-      const after = insertAfterActivePosition(images, false);
+      const after = insertAtAnchor(images, insertionAnchor, false);
       if (after) focusAfterPicker = { input: { kind: 'paragraph', blockId: after.id }, selection: { start: 0, end: 0 } };
     } catch {
       Alert.alert('Não foi possível inserir as imagens', 'Tente selecionar as fotos novamente.');
     } finally {
       onAuxiliaryPresentationChange?.(false);
-      if (focusAfterPicker) requestAnimationFrame(() => focusInput(focusAfterPicker!.input, focusAfterPicker!.selection));
+      if (focusAfterPicker) scheduleFocus(focusAfterPicker.input, focusAfterPicker.selection);
     }
-  }, [dismissKeyboard, focusInput, insertAfterActivePosition, markInteraction, onAuxiliaryPresentationChange, updateBlock]);
+  }, [currentInsertionAnchor, dismissKeyboard, insertAtAnchor, markInteraction, onAuxiliaryPresentationChange, scheduleFocus, updateBlock]);
 
-  const openLinkDialog = useCallback((blockId: string | null = null) => {
+  const openLinkComposer = useCallback((blockId: string | null = null) => {
     markInteraction();
     const existing = blockId
       ? documentRef.current.blocks.find((block): block is RichNoteLinkBlock => block.type === 'link' && block.id === blockId)
       : undefined;
-    linkRestoreFocusRef.current = editorHasFocusRef.current && activeInputRef.current
-      ? { input: activeInputRef.current, selection: { ...selectionRef.current } }
+    const anchor = currentInsertionAnchor();
+    const restoreFocus = editorHasFocusRef.current && activeInputRef.current
+      ? { input: activeInputRef.current, selection: { ...anchor.selection } }
       : null;
     const nextURL = existing?.url ?? '';
     setLinkURL(nextURL);
-    nativeLinkURL.set(nextURL);
     setLinkError(null);
-    onAuxiliaryPresentationChange?.(true);
-    dismissKeyboard();
-    setLinkDialog({ blockId, presentation: existing?.presentation ?? 'preview' });
-  }, [dismissKeyboard, markInteraction, nativeLinkURL, onAuxiliaryPresentationChange]);
+    setLinkComposer({
+      blockId,
+      presentation: existing?.presentation ?? 'preview',
+      anchor,
+      restoreFocus,
+      restoreKeyboard: Keyboard.isVisible(),
+    });
+  }, [currentInsertionAnchor, markInteraction]);
 
   const requestPreviewMetadata = useCallback((blockId: string, url: string) => {
     if (attemptedPreviewUrlsRef.current.get(blockId) === url) return;
@@ -319,7 +369,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             domain: metadata.domain || block.domain,
             previewImageUrl: metadata.imageUrl && canFetchLinkPreview(metadata.imageUrl) ? metadata.imageUrl : null,
           }
-        : block);
+        : block, undefined, false);
     }).catch(() => {
       if (!controller.signal.aborted && attemptedPreviewUrlsRef.current.get(blockId) === url) {
         attemptedPreviewUrlsRef.current.delete(blockId);
@@ -330,8 +380,8 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     });
   }, [updateBlock]);
 
-  const commitLinkDialog = useCallback(() => {
-    if (!linkDialog) return;
+  const commitLinkComposer = useCallback(() => {
+    if (!linkComposer) return;
     let normalized: ReturnType<typeof normalizeWebLink>;
     try {
       normalized = normalizeWebLink(linkURL);
@@ -340,15 +390,16 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       return;
     }
     setLinkError(null);
-    if (linkDialog.blockId) {
-      const blockId = linkDialog.blockId;
+    if (linkComposer.blockId) {
+      const blockId = linkComposer.blockId;
       updateBlock(blockId, (block) => block.type === 'link'
-        ? { ...block, url: normalized.url, domain: normalized.domain, title: fallbackLinkTitle(normalized.url), description: null, previewImageUrl: null, presentation: linkDialog.presentation }
+        ? { ...block, url: normalized.url, domain: normalized.domain, title: fallbackLinkTitle(normalized.url), description: null, previewImageUrl: null, presentation: linkComposer.presentation }
         : block);
-      pendingDismissFocusRef.current = linkRestoreFocusRef.current;
-      linkRestoreFocusRef.current = null;
-      setLinkDialog(null);
-      if (linkDialog.presentation === 'preview') requestPreviewMetadata(blockId, normalized.url);
+      const restore = linkComposer.restoreKeyboard ? linkComposer.restoreFocus : null;
+      setLinkComposer(null);
+      if (restore) scheduleFocus(restore.input, restore.selection);
+      else Keyboard.dismiss();
+      if (linkComposer.presentation === 'preview') requestPreviewMetadata(blockId, normalized.url);
       return;
     }
 
@@ -357,18 +408,24 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       id: blockId,
       type: 'link',
       url: normalized.url,
-      presentation: linkDialog.presentation,
+      presentation: linkComposer.presentation,
       title: fallbackLinkTitle(normalized.url),
       description: null,
       domain: normalized.domain,
     };
-    const after = insertAfterActivePosition([block], false);
-    pendingDismissFocusRef.current = after
-      ? { input: { kind: 'paragraph', blockId: after.id }, selection: { start: 0, end: 0 } }
-      : null;
-    setLinkDialog(null);
+    const after = insertAtAnchor([block], linkComposer.anchor, false);
+    setLinkComposer(null);
+    if (after) scheduleFocus({ kind: 'paragraph', blockId: after.id }, { start: 0, end: 0 });
     if (block.presentation === 'preview') requestPreviewMetadata(blockId, normalized.url);
-  }, [insertAfterActivePosition, linkDialog, linkURL, requestPreviewMetadata, updateBlock]);
+  }, [insertAtAnchor, linkComposer, linkURL, requestPreviewMetadata, scheduleFocus, updateBlock]);
+
+  const cancelLinkComposer = useCallback(() => {
+    const current = linkComposer;
+    setLinkComposer(null);
+    if (current?.restoreKeyboard && current.restoreFocus) {
+      scheduleFocus(current.restoreFocus.input, current.restoreFocus.selection);
+    } else Keyboard.dismiss();
+  }, [linkComposer, scheduleFocus]);
 
   const applyParagraphUpdate = useCallback((updates: Partial<RichNoteParagraphBlock>) => {
     const active = activeInputRef.current;
@@ -393,8 +450,8 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       return { ...block, items };
     });
     activeInputRef.current = { kind: 'checklist', blockId, itemId };
-    requestAnimationFrame(() => inputRefs.current.get(itemId)?.focus());
-  }, [updateBlock]);
+    scheduleFocus({ kind: 'checklist', blockId, itemId }, { start: 0, end: 0 });
+  }, [scheduleFocus, updateBlock]);
 
   const insertChecklist = useCallback(() => {
     const blockId = createRichNoteId('checklist');
@@ -406,8 +463,8 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     };
     insertAfterActivePosition([block], false);
     activeInputRef.current = { kind: 'checklist', blockId, itemId };
-    requestAnimationFrame(() => inputRefs.current.get(itemId)?.focus());
-  }, [insertAfterActivePosition]);
+    scheduleFocus({ kind: 'checklist', blockId, itemId }, { start: 0, end: 0 });
+  }, [insertAfterActivePosition, scheduleFocus]);
 
   const removeChecklistItem = useCallback((blockId: string, itemId: string) => {
     updateBlock(blockId, (block) => block.type === 'checklist'
@@ -435,30 +492,89 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     return [
       { id: 'open', title: 'Abrir link', systemImage: 'arrow.up.right', onPress: () => confirmSavedLinkOpen(() => Linking.openURL(block.url)) },
       { id: 'copy', title: 'Copiar link', systemImage: 'doc.on.doc', onPress: () => void Clipboard.setStringAsync(block.url).catch(() => Alert.alert('Não foi possível copiar', 'Tente novamente.')) },
-      { id: 'edit', title: 'Editar URL', systemImage: 'pencil', onPress: () => openLinkDialog(block.id) },
+      { id: 'edit', title: 'Editar URL', systemImage: 'pencil', onPress: () => openLinkComposer(block.id) },
       { id: 'presentation', title: block.presentation === 'preview' ? 'Mostrar link simples' : 'Mostrar prévia', systemImage: 'rectangle.on.rectangle', onPress: () => {
         updateBlock(block.id, (current) => current.type === 'link' ? { ...current, presentation: nextPresentation } : current);
         if (nextPresentation === 'preview') requestPreviewMetadata(block.id, block.url);
       } },
       { id: 'remove', title: 'Remover link', systemImage: 'trash', destructive: true, onPress: () => removeBlock(block.id) },
     ];
-  }, [openLinkDialog, removeBlock, requestPreviewMetadata, updateBlock]);
+  }, [openLinkComposer, removeBlock, requestPreviewMetadata, updateBlock]);
 
   const checklistItemActions = useCallback((blockId: string, itemId: string): NativeCardContextMenuAction[] => [
     { id: 'remove-task', title: 'Remover tarefa', systemImage: 'trash', destructive: true, onPress: () => removeChecklistItem(blockId, itemId) },
   ], [removeChecklistItem]);
 
   const insertImage = useCallback(() => { void openImagePicker(); }, [openImagePicker]);
-  const insertLink = useCallback(() => openLinkDialog(), [openLinkDialog]);
+  const insertLink = useCallback(() => openLinkComposer(), [openLinkComposer]);
+
+  const undo = useCallback(() => {
+    const previous = undoStackRef.current.pop();
+    if (!previous) return;
+    undoGroupRef.current = null;
+    documentRef.current = previous;
+    onChange(previous);
+    const active = activeInputRef.current;
+    if (active?.kind === 'paragraph') {
+      const paragraph = previous.blocks.find((block): block is RichNoteParagraphBlock => block.type === 'paragraph' && block.id === active.blockId);
+      if (paragraph) {
+        const selection = selectionByInputRef.current.get(active.blockId) ?? selectionRef.current;
+        const cursor = Math.min(selection.end, paragraph.text.length);
+        focusInput(active, { start: cursor, end: cursor });
+        return;
+      }
+    } else if (active?.kind === 'checklist') {
+      const checklist = previous.blocks.find((block): block is RichNoteChecklistBlock => block.type === 'checklist' && block.id === active.blockId);
+      const item = checklist?.items.find((candidate) => candidate.id === active.itemId);
+      if (item) {
+        const cursor = Math.min(selectionByInputRef.current.get(active.itemId)?.end ?? item.text.length, item.text.length);
+        focusInput(active, { start: cursor, end: cursor });
+        return;
+      }
+    }
+    const fallback = [...previous.blocks].reverse().find((block): block is RichNoteParagraphBlock => block.type === 'paragraph');
+    if (fallback) focusInput({ kind: 'paragraph', blockId: fallback.id }, { start: fallback.text.length, end: fallback.text.length });
+  }, [focusInput, onChange]);
+
+  const toggleKeyboard = useCallback(() => {
+    if (linkComposer) {
+      if (Keyboard.isVisible()) dismissKeyboard();
+      else linkURLInputRef.current?.focus();
+      return;
+    }
+    if (Keyboard.isVisible()) {
+      dismissKeyboard();
+      return;
+    }
+    const active = activeInputRef.current;
+    if (active?.kind === 'paragraph') {
+      const paragraph = documentRef.current.blocks.find((block): block is RichNoteParagraphBlock => block.type === 'paragraph' && block.id === active.blockId);
+      const selection = selectionByInputRef.current.get(active.blockId);
+      if (paragraph) {
+        focusInput(active, selection ?? { start: paragraph.text.length, end: paragraph.text.length });
+        return;
+      }
+    } else if (active?.kind === 'checklist') {
+      const checklist = documentRef.current.blocks.find((block): block is RichNoteChecklistBlock => block.type === 'checklist' && block.id === active.blockId);
+      const item = checklist?.items.find((candidate) => candidate.id === active.itemId);
+      if (item) {
+        const selection = selectionByInputRef.current.get(active.itemId);
+        focusInput(active, selection ?? { start: item.text.length, end: item.text.length });
+        return;
+      }
+    }
+    focusAtEnd();
+  }, [dismissKeyboard, focusAtEnd, focusInput, linkComposer]);
 
   const handleToolbarAction = useCallback((action: string) => {
+    if (linkComposer && action !== 'toggleKeyboard' && action !== 'undo') return;
     const active = activeInputRef.current;
     const paragraph = active?.kind === 'paragraph'
       ? documentRef.current.blocks.find((block): block is RichNoteParagraphBlock => block.type === 'paragraph' && block.id === active.blockId)
       : undefined;
     switch (action) {
       case 'format.body': applyParagraphUpdate({ style: 'body', bold: false, italic: false, underline: false, listStyle: 'none' }); break;
-      case 'format.title': applyParagraphUpdate({ style: 'title', listStyle: 'none' }); break;
+      case 'format.title': applyParagraphUpdate({ style: 'title', bold: true, listStyle: 'none' }); break;
       case 'format.subtitle': applyParagraphUpdate({ style: 'subtitle', listStyle: 'none' }); break;
       case 'format.bold': if (paragraph) applyParagraphUpdate({ bold: !paragraph.bold }); break;
       case 'format.italic': if (paragraph) applyParagraphUpdate({ italic: !paragraph.italic }); break;
@@ -469,10 +585,11 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       case 'insertChecklist': insertChecklist(); break;
       case 'insertImage': insertImage(); break;
       case 'insertLink': insertLink(); break;
-      case 'dismissKeyboard': dismissKeyboard(); break;
+      case 'undo': undo(); break;
+      case 'toggleKeyboard': toggleKeyboard(); break;
       default: break;
     }
-  }, [applyParagraphUpdate, dismissKeyboard, insertChecklist, insertImage, insertLink]);
+  }, [applyParagraphUpdate, insertChecklist, insertImage, insertLink, linkComposer, toggleKeyboard, undo]);
 
   useImperativeHandle(forwardedRef, () => ({
     dismissKeyboard,
@@ -483,12 +600,24 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     handleToolbarAction,
   }), [dismissKeyboard, focusAtEnd, handleToolbarAction, insertChecklist, insertImage, insertLink]);
 
-  const paragraphFontSize = (style: RichNoteParagraphStyle) => style === 'title' ? 28 : style === 'subtitle' ? 21 : 17;
+  const paragraphFontSize = (style: RichNoteParagraphStyle) => style === 'title'
+    ? theme.typography.largeTitle.fontSize + 2
+    : style === 'subtitle' ? 21 : 17;
+  const paragraphLineHeight = (style: RichNoteParagraphStyle, fontSize: number) => style === 'title'
+    ? theme.typography.largeTitle.lineHeight
+    : fontSize * 1.45;
+  const lastBlock = document.blocks[document.blocks.length - 1];
+  const bodyPlaceholderBlockId = lastBlock?.type === 'paragraph'
+    && lastBlock.style === 'body'
+    && lastBlock.text.length === 0
+    ? lastBlock.id
+    : null;
 
   const renderParagraph = (block: RichNoteParagraphBlock, index: number) => {
     const marker = block.listStyle === 'bullet' ? '•' : block.listStyle === 'numbered' ? `${listNumber(document.blocks, block.id)}.` : null;
     const fontSize = paragraphFontSize(block.style);
-    const lineHeight = fontSize * 1.45;
+    const lineHeight = paragraphLineHeight(block.style, fontSize);
+    const fontWeight = block.bold ? block.style === 'title' ? theme.typography.largeTitle.fontWeight : '600' : '400';
     return (
       <View key={block.id} style={{ alignItems: 'flex-start', flexDirection: 'row', gap: marker ? theme.spacing.xs : 0, minWidth: 0, width: '100%' }}>
         {marker ? <Text style={{ color: theme.colors.textPrimary, fontSize, lineHeight: fontSize * 1.45, minWidth: 22 }}>{marker}</Text> : null}
@@ -505,9 +634,12 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             editorHasFocusRef.current = true;
             activeInputRef.current = input;
           }}
-          onSelectionChange={(event) => { selectionRef.current = event.nativeEvent.selection; }}
+          onSelectionChange={(event) => {
+            selectionRef.current = event.nativeEvent.selection;
+            selectionByInputRef.current.set(block.id, event.nativeEvent.selection);
+          }}
           onTouchStart={markInteraction}
-          placeholder={index === 0 ? 'Comece a escrever...' : undefined}
+          placeholder={block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined}
           placeholderTextColor={theme.colors.textTertiary}
           ref={(node) => { if (node) inputRefs.current.set(block.id, node); else inputRefs.current.delete(block.id); }}
           selectionColor={theme.colors.primary}
@@ -516,7 +648,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             flex: 1,
             fontSize,
             fontStyle: block.italic ? 'italic' : 'normal',
-            fontWeight: block.bold || block.style === 'title' ? '600' : '400',
+            fontWeight,
             height: measuredInputHeights[block.id] ?? lineHeight,
             lineHeight,
             minHeight: lineHeight,
@@ -526,6 +658,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             textDecorationLine: block.underline ? 'underline' : 'none',
           }}
           scrollEnabled={false}
+          submitBehavior="newline"
           value={block.text}
         />
       </View>
@@ -615,11 +748,15 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             multiline
             onContentSizeChange={(event) => measureInput(item.id, event.nativeEvent.contentSize.height, theme.sizes.touchTargetMinimum, theme.spacing.xs * 2)}
             onBlur={handleInputBlur}
-            onChangeText={(text) => updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }))}
+            onChangeText={(text) => updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`)}
             onFocus={() => {
               const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
               editorHasFocusRef.current = true;
               activeInputRef.current = input;
+            }}
+            onSelectionChange={(event) => {
+              selectionRef.current = event.nativeEvent.selection;
+              selectionByInputRef.current.set(item.id, event.nativeEvent.selection);
             }}
             onSubmitEditing={() => addChecklistItem(block.id, item.id)}
             onTouchStart={markInteraction}
@@ -647,61 +784,115 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     </View>
   );
 
-  const handleLinkSheetDismiss = useCallback(() => {
-    onAuxiliaryPresentationChange?.(false);
-    linkRestoreFocusRef.current = null;
-    const pending = pendingDismissFocusRef.current;
-    pendingDismissFocusRef.current = null;
-    if (pending) requestAnimationFrame(() => focusInput(pending.input, pending.selection));
-  }, [focusInput, onAuxiliaryPresentationChange]);
+  const renderInlineLinkComposer = () => (
+    <View
+      accessibilityLabel={linkComposer?.blockId ? 'Editar link na nota' : 'Compor link na nota'}
+      onTouchStart={markInteraction}
+      style={{ backgroundColor: theme.colors.surfaceMuted, borderColor: theme.colors.separator, borderRadius: theme.radius.card, borderWidth: 1, gap: theme.spacing.sm, padding: theme.spacing.md, width: '100%' }}
+    >
+      <TextInput
+        accessibilityLabel="Endereço do link"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        onChangeText={(value) => { setLinkURL(value); setLinkError(null); }}
+        onSubmitEditing={commitLinkComposer}
+        onTouchStart={markInteraction}
+        placeholder="Cole ou digite uma URL"
+        placeholderTextColor={theme.colors.textTertiary}
+        ref={linkURLInputRef}
+        returnKeyType="done"
+        style={[theme.typography.body, { color: theme.colors.textPrimary, minHeight: theme.sizes.touchTargetMinimum, paddingHorizontal: theme.spacing.sm, paddingVertical: theme.spacing.xs }]}
+        value={linkURL}
+      />
+      <View style={{ backgroundColor: theme.colors.background, borderRadius: theme.radius.pill, flexDirection: 'row', padding: 3 }}>
+        {(['preview', 'text'] as const).map((presentation) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: linkComposer?.presentation === presentation }}
+            key={presentation}
+            onPress={() => setLinkComposer((current) => current ? { ...current, presentation } : null)}
+            onPressIn={markInteraction}
+            style={{ alignItems: 'center', backgroundColor: linkComposer?.presentation === presentation ? theme.colors.surfaceMuted : 'transparent', borderRadius: theme.radius.pill, flex: 1, justifyContent: 'center', minHeight: 40 }}
+          >
+            <Text style={[theme.typography.footnote, { color: theme.colors.textPrimary, fontWeight: linkComposer?.presentation === presentation ? '600' : '400' }]}>
+              {presentation === 'preview' ? 'Prévia' : 'Link simples'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {linkError ? <Text accessibilityRole="alert" style={[theme.typography.footnote, { color: theme.colors.danger }]}>{linkError}</Text> : null}
+      <View style={{ alignItems: 'center', flexDirection: 'row', gap: theme.spacing.sm, justifyContent: 'flex-end' }}>
+        <Pressable accessibilityRole="button" onPress={cancelLinkComposer} onPressIn={markInteraction} style={{ alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 72, paddingHorizontal: theme.spacing.sm }}>
+          <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>Cancelar</Text>
+        </Pressable>
+        <Pressable accessibilityRole="button" onPress={commitLinkComposer} onPressIn={markInteraction} style={{ alignItems: 'center', backgroundColor: theme.colors.textPrimary, borderRadius: theme.radius.pill, justifyContent: 'center', minHeight: 44, minWidth: 82, paddingHorizontal: theme.spacing.md }}>
+          <Text style={[theme.typography.body, { color: theme.colors.background, fontWeight: '600' }]}>Inserir</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+
+  const renderParagraphWithLinkComposer = (block: RichNoteParagraphBlock) => {
+    const start = Math.max(0, Math.min(linkComposer?.anchor.selection.start ?? 0, block.text.length));
+    const end = Math.max(start, Math.min(linkComposer?.anchor.selection.end ?? start, block.text.length));
+    const fontSize = paragraphFontSize(block.style);
+    const lineHeight = paragraphLineHeight(block.style, fontSize);
+    const frozenTextStyle = {
+      color: theme.colors.textPrimary,
+      fontSize,
+      fontStyle: block.italic ? 'italic' as const : 'normal' as const,
+      fontWeight: block.bold ? block.style === 'title' ? theme.typography.largeTitle.fontWeight : '600' as const : '400' as const,
+      lineHeight,
+      textDecorationLine: block.underline ? 'underline' as const : 'none' as const,
+    };
+    return (
+      <View key={`link-composer-anchor-${block.id}`} style={{ gap: theme.spacing.xs, width: '100%' }}>
+        {block.text.slice(0, start) ? <Text style={frozenTextStyle}>{block.text.slice(0, start)}</Text> : null}
+        {renderInlineLinkComposer()}
+        {block.text.slice(end) ? <Text style={frozenTextStyle}>{block.text.slice(end)}</Text> : null}
+      </View>
+    );
+  };
 
   return (
     <View style={{ flexGrow: 1, width: '100%' }}>
       <View style={{ gap: theme.spacing.md, width: '100%' }}>
-        {document.blocks.map((block, index) => {
-          if (block.type === 'paragraph') return renderParagraph(block, index);
-          if (block.type === 'image') return renderImage(block);
-          if (block.type === 'link') return renderLink(block);
-          return renderChecklist(block);
-        })}
-      </View>
+        {(() => {
+          const composer = linkComposer;
+          const paragraphAnchor = composer?.blockId == null && composer?.anchor.input?.kind === 'paragraph'
+            ? composer.anchor.input.blockId
+            : null;
+          const editedLinkIndex = composer?.blockId == null ? -1 : document.blocks.findIndex((block) => block.id === composer.blockId && block.type === 'link');
+          const paragraphAnchorIndex = paragraphAnchor == null ? -1 : document.blocks.findIndex((block) => block.id === paragraphAnchor && block.type === 'paragraph');
+          const checklistAnchorIndex = composer?.blockId == null && composer?.anchor.input?.kind === 'checklist'
+            ? document.blocks.findIndex((block) => block.id === composer.anchor.input?.blockId)
+            : -1;
+          const rendered = document.blocks.flatMap((block, index) => {
+            let row: ReactElement;
+            if (block.type === 'paragraph') row = renderParagraph(block, index);
+            else if (block.type === 'image') row = renderImage(block);
+            else if (block.type === 'link') row = renderLink(block);
+            else row = renderChecklist(block);
 
-      <Host colorScheme={resolvedMode} matchContents={false} style={{ height: 1, width: 1 }}>
-        <BottomSheet
-          isPresented={linkDialog != null}
-          modifiers={[
-            presentationDetents([{ height: 320 }, 'medium']),
-            presentationDragIndicator('visible'),
-            presentationCornerRadius(28),
-          ]}
-          onDismiss={handleLinkSheetDismiss}
-          onIsPresentedChange={(presented) => { if (!presented) setLinkDialog(null); }}
-        >
-          <VStack spacing={theme.spacing.md} modifiers={[nativePadding({ all: theme.spacing.lg })]}>
-            <NativeText>{linkDialog?.blockId ? 'Editar link' : 'Adicionar link'}</NativeText>
-            <TextField
-              autoFocus
-              onTextChange={(value) => { setLinkURL(value); setLinkError(null); }}
-              placeholder="https://exemplo.com"
-              text={nativeLinkURL}
-            />
-            <Picker
-              label="Apresentação"
-              modifiers={[pickerStyle('segmented')]}
-              onSelectionChange={(presentation) => setLinkDialog((current) => current ? { ...current, presentation: presentation as 'text' | 'preview' } : null)}
-              selection={linkDialog?.presentation ?? 'preview'}
-            >
-              <NativeText modifiers={[tag('preview')]}>Prévia</NativeText>
-              <NativeText modifiers={[tag('text')]}>Link simples</NativeText>
-            </Picker>
-            {linkError ? <NativeText modifiers={[foregroundStyle(theme.colors.danger)]}>{linkError}</NativeText> : null}
-            <HStack spacing={theme.spacing.md}>
-              <NativeButton label="Cancelar" onPress={() => setLinkDialog(null)} role="cancel" />
-              <NativeButton label="Inserir" onPress={commitLinkDialog} />
-            </HStack>
-          </VStack>
-        </BottomSheet>
-      </Host>
+            if (!composer) return [row];
+            if (index === editedLinkIndex && block.type === 'link') {
+              return [<View key={`link-composer-edit-${block.id}`}>{renderInlineLinkComposer()}</View>];
+            }
+            if (index === paragraphAnchorIndex && block.type === 'paragraph') {
+              return [renderParagraphWithLinkComposer(block)];
+            }
+            if (index === checklistAnchorIndex) {
+              return [row, <View key="link-composer-after-checklist">{renderInlineLinkComposer()}</View>];
+            }
+            return [row];
+          });
+          if (composer && editedLinkIndex < 0 && paragraphAnchorIndex < 0 && checklistAnchorIndex < 0) {
+            return [...rendered, <View key="link-composer-inline-fallback">{renderInlineLinkComposer()}</View>];
+          }
+          return rendered;
+        })()}
+      </View>
     </View>
   );
 });
@@ -725,7 +916,7 @@ export function useRichNoteKeyboardInteractions(editorRef: { current: RichNoteEd
     const touch = touchRef.current;
     touchRef.current = null;
     if (!touch || touch.moved || touch.touchedInteractive) return;
-    editorRef.current?.dismissKeyboard();
+    editorRef.current?.handleToolbarAction('toggleKeyboard');
   }, [editorRef]);
 
   return { markInteractiveTouch, onTouchEnd, onTouchMove, onTouchStartCapture };
