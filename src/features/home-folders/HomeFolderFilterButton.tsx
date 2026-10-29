@@ -4,6 +4,7 @@ import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider';
 import { useHomeViewMode } from '@/features/home-content/HomeViewModeProvider';
+import { HOME_CATEGORIES } from '@/features/home-content/homeCategories';
 import { getHomeFolderAccentColor } from '@/features/home-folders/homeFolderColor';
 import { useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
 import type { HomeViewMode } from '@/features/home-content/homeViewMode';
@@ -12,17 +13,19 @@ import { triggerSelectionHaptic } from '@/utils/haptics';
 
 export default function HomeFolderFilterButton() {
   const { setViewMode, viewMode } = useHomeViewMode();
-  const { authorizeFolder, folders, isFolderAuthorized, selectFolder, selectView, selection, view } = useLocalHomeFolders();
+  const { authorizeFolder, folders, isFolderAuthorized, selectCategory, selectFolder, selectView, selection, view } = useLocalHomeFolders();
   const { accentColor, resolvedMode, theme } = useAppTheme();
   const { favoritesOnly, setFavoritesOnly } = useHomeFavorites();
   const [isOpen, setIsOpen] = useState(false);
   const selectedFolderId = selection.kind === 'folder' ? selection.folderId : null;
+  const selectedCategory = selection.kind === 'category' ? selection.category : null;
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId);
   const selectedFolderColor = selectedFolder
     ? getHomeFolderAccentColor(selectedFolder.color, accentColor, resolvedMode)
     : theme.colors.primary;
   const currentLabel = selectedFolder?.name ?? (
-    view === 'folders' ? 'Pastas' : 'Todos'
+    HOME_CATEGORIES.find((category) => category.id === selectedCategory)?.label ??
+      (view === 'folders' ? 'Pastas' : 'Todos')
   );
 
   const selectLayout = (mode: HomeViewMode) => {
@@ -43,7 +46,8 @@ export default function HomeFolderFilterButton() {
     title: string,
     selected: boolean,
     onPress: () => void,
-    icon: 'folder-outline' | 'grid-outline' | 'grid' | 'list-outline' | 'list' | 'menu-outline',
+    icon: 'folder-outline' | 'grid-outline' | 'grid' | 'list-outline' | 'list' | 'menu-outline' |
+      'images-outline' | 'document-text-outline' | 'link-outline' | 'checkbox-outline' | 'text-outline',
     iconColor?: string,
   ) => (
     <Pressable
@@ -103,19 +107,44 @@ export default function HomeFolderFilterButton() {
         >
           <View
             onStartShouldSetResponder={() => true}
-            style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radius.lg, maxWidth: 360, overflow: 'hidden', width: '100%' }}
+            style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radius.lg, maxHeight: '80%', maxWidth: 360, overflow: 'hidden', width: '100%' }}
           >
             <ScrollView>
-              {renderOption('all-items', 'Todos', view === 'all-items', () => {
+              {renderOption('all-items', 'Todos', !selectedCategory && view === 'all-items', () => {
                 setFavoritesOnly(false);
                 selectView('all-items');
                 setIsOpen(false);
               }, 'grid-outline')}
-              {renderOption('folders', 'Pastas', view === 'folders', () => {
+              {renderOption('folders', 'Pastas', !selectedCategory && view === 'folders', () => {
                 setFavoritesOnly(false);
                 selectView('folders');
                 setIsOpen(false);
               }, 'folder-outline')}
+              <View style={{ borderBottomColor: theme.colors.separator, borderBottomWidth: 0.5, paddingHorizontal: theme.spacing.md, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.xs }}>
+                <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>CATEGORIAS</Text>
+              </View>
+              {HOME_CATEGORIES.map((category) => renderOption(
+                `category:${category.id}`,
+                category.label,
+                selectedCategory === category.id,
+                () => {
+                  setFavoritesOnly(false);
+                  selectCategory(category.id);
+                  setIsOpen(false);
+                },
+                category.id === 'media'
+                  ? 'images-outline'
+                  : category.id === 'documents'
+                    ? 'document-text-outline'
+                    : category.id === 'links'
+                      ? 'link-outline'
+                      : category.id === 'lists'
+                        ? 'checkbox-outline'
+                        : 'text-outline',
+              ))}
+              <View style={{ borderBottomColor: theme.colors.separator, borderBottomWidth: 0.5, paddingHorizontal: theme.spacing.md, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.xs }}>
+                <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>MINHAS PASTAS</Text>
+              </View>
               {folders.map((folder) => renderOption(
                 `folder:${folder.id}`,
                 folder.name,
@@ -126,6 +155,11 @@ export default function HomeFolderFilterButton() {
                 'folder-outline',
                 getHomeFolderAccentColor(folder.color, accentColor, resolvedMode),
               ))}
+              {folders.length === 0 ? (
+                <View style={{ minHeight: theme.sizes.touchTargetMinimum, justifyContent: 'center', paddingHorizontal: theme.spacing.md }}>
+                  <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>Nenhuma pasta criada</Text>
+                </View>
+              ) : null}
               <View style={{ borderBottomColor: theme.colors.separator, borderBottomWidth: 0.5, paddingHorizontal: theme.spacing.md, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.xs }}>
                 <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>VISUALIZAÇÃO</Text>
               </View>

@@ -52,19 +52,25 @@ export default function HomeScreen() {
   const {
     media,
     isReady: photoLibraryReady,
-    importFromPhotoLibrary,
-    importVideosFromPhotoLibrary,
+    hasCatalogLoadSucceeded: photoCatalogLoadSucceeded,
+    importMediaFromPhotoLibrary,
   } = useLocalPhotoLibrary();
   const {
     contents,
     isReady: savedContentReady,
+    hasCatalogLoadSucceeded: savedContentLoadSucceeded,
     refresh: refreshSavedContent,
     consumePendingTextReveal,
   } = useLocalSavedContent();
-  const { checklists, isReady: checklistLibraryReady } = useLocalChecklists();
+  const {
+    checklists,
+    isReady: checklistLibraryReady,
+    hasCatalogLoadSucceeded: checklistCatalogLoadSucceeded,
+  } = useLocalChecklists();
   const {
     documents,
     isReady: documentLibraryReady,
+    hasCatalogLoadSucceeded: documentCatalogLoadSucceeded,
     importDocumentsFromPicker,
   } = useLocalDocumentLibrary();
   const [revealSavedTextId, setRevealSavedTextId] = useState<number | null>(null);
@@ -119,6 +125,10 @@ export default function HomeScreen() {
     viewModeReady,
     homeFoldersReady,
   });
+  const homeCatalogsLoadedSuccessfully = photoCatalogLoadSucceeded &&
+    savedContentLoadSucceeded &&
+    documentCatalogLoadSucceeded &&
+    checklistCatalogLoadSucceeded;
 
   const openPendingFolder = useCallback(() => {
     const folderId = consumePendingFolderOpen();
@@ -281,16 +291,10 @@ export default function HomeScreen() {
             separateBackground
           >
             <Stack.Toolbar.MenuAction
-              icon="photo"
-              onPress={() => void runExternalPicker(importFromPhotoLibrary)}
+              icon="photo.on.rectangle.angled"
+              onPress={() => void runExternalPicker(importMediaFromPhotoLibrary)}
             >
-              Adicionar imagens
-            </Stack.Toolbar.MenuAction>
-            <Stack.Toolbar.MenuAction
-              icon="video"
-              onPress={() => void runExternalPicker(importVideosFromPhotoLibrary)}
-            >
-              Adicionar vídeos
+              Adicionar mídia
             </Stack.Toolbar.MenuAction>
             <Stack.Toolbar.MenuAction icon="link" onPress={openLinkComposer}>
               Adicionar link
@@ -371,6 +375,7 @@ export default function HomeScreen() {
                   favoritesOnly={favoritesOnly}
                   hidden={(view === 'folders' && !favoritesOnly) || (!favoritesOnly && isSelectedProtectedFolderLocked)}
                   isInitialFeedReady={homeFeedReady}
+                  homeCatalogsLoadedSuccessfully={homeCatalogsLoadedSuccessfully}
                   media={media}
                   revealNewestSignal={revealNewestSignal}
                   revealSavedTextId={revealSavedTextId}

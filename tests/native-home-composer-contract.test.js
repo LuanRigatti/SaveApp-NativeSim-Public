@@ -5,149 +5,141 @@ const { join } = require('node:path');
 
 const readSource = (path) => readFileSync(join(__dirname, path), 'utf8');
 const composerSource = readSource('../src/components/homeContent/HomeContentComposer.tsx');
-const swiftUIComposerSource = readSource(
-  '../src/components/homeContent/HomeContentComposerSwiftUI.ios.tsx',
-);
-const linkSavingSource = readSource(
-  '../src/components/homeContent/HomeContentComposerLinkSavingSwiftUI.ios.tsx',
-);
-const controllerSource = readSource(
-  '../src/components/homeContent/HomeContentComposerController.ts',
-);
-const tabsLayoutSource = readSource('../src/app/(tabs)/_layout.tsx');
-const rootLayoutSource = readSource('../src/app/_layout.tsx');
+const linkSavingSource = readSource('../src/components/homeContent/HomeContentComposerLinkSavingSwiftUI.ios.tsx');
+const controllerSource = readSource('../src/components/homeContent/HomeContentComposerController.ts');
 const composeRouteSource = readSource('../src/app/texts/compose.tsx');
+const detailRouteSource = readSource('../src/app/texts/[id].tsx');
+const editorSource = readSource('../src/components/homeContent/RichNoteEditor.tsx');
+const toolbarSource = readSource('../src/components/homeContent/RichNoteKeyboardToolbar.ios.tsx');
+const toolbarNativeSource = readSource('../modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift');
+const librarySource = readSource('../src/features/home-content/savedContentLibrary.ts');
+const catalogSource = readSource('../src/features/home-content/savedContentCatalog.ts');
+const rootLayoutSource = readSource('../src/app/_layout.tsx');
+const tabsLayoutSource = readSource('../src/app/(tabs)/_layout.tsx');
 const homeSource = readSource('../src/app/(tabs)/index.tsx');
-const gallerySource = readSource('../src/components/photos/PhotoMasonryGallery.tsx');
 
-describe('home link and text composer presentation contract', () => {
+describe('home link composer and shared rich text editor contract', () => {
   test('keeps the UIKit link prompt and its existing retry flow', () => {
     expect(composerSource).toMatch(/kind === 'link' && Platform\.OS === 'ios'/);
     expect(composerSource).toMatch(/Alert\.prompt\(/);
     expect(composerSource).toMatch(/'Adicionar link'/);
     expect(composerSource).toMatch(/submitLinkFromNativePrompt/);
     expect(composerSource).toMatch(/'Tentar novamente'/);
-    expect(composerSource).toMatch(/presentPromptRef\.current\(retryValue\)/);
     expect(composerSource).toMatch(/HomeContentComposerLinkSavingSwiftUI\.ios/);
-    expect(composerSource).toMatch(/function AddLinkFallback/);
     expect(composerSource).not.toMatch(/kind === 'text'/);
-    expect(swiftUIComposerSource).not.toMatch(/Adicionar link|useLinkComposerController/);
   });
 
-  test('opens a dedicated root Native Stack card while keeping the tabs mounted underneath', () => {
+  test('opens the same shared rich editor for creation and saved-note editing', () => {
+    expect(composeRouteSource).toContain('<RichNoteEditor');
+    expect(detailRouteSource).toContain('<RichNoteEditor');
+    expect(composeRouteSource).toContain('createEmptyRichNoteDocument');
+    expect(detailRouteSource).toContain('savedText.richDocument');
+    expect(composeRouteSource).not.toContain('HomeContentComposerSwiftUI.ios');
+    expect(detailRouteSource).not.toMatch(/<TextInput/);
+  });
+
+  test('keeps the existing root Native Stack card, transition focus, and discard protection', () => {
     expect(tabsLayoutSource).toMatch(/<NativeTabs\s+hidden=\{Platform\.OS === 'ios'\}[\s\S]*?<NativeTabs\.Trigger name="settings"/);
     expect(homeSource).toMatch(/router\.push\(TEXT_COMPOSER_ROUTE\)/);
-    expect(homeSource).toMatch(/<HomeContentComposer\s+kind=\{composerKind\}/);
     expect(rootLayoutSource).toMatch(/<Stack\.Screen[\s\S]*?name="texts\/compose"[\s\S]*?presentation: 'card'/);
     expect(rootLayoutSource).toMatch(/name="\(tabs\)"/);
-    expect(composeRouteSource).toMatch(/router\.back\(\)/);
-    expect(composeRouteSource).toMatch(/Stack\.Screen\.BackButton displayMode="minimal"/);
-    expect(composeRouteSource).not.toMatch(/<Modal|NativeSheet|BottomSheet|router\.replace\(/);
-    expect(composerSource).not.toMatch(/HomeContentComposerSwiftUI\.ios/);
-  });
-
-  test('shows the large creation title above the editor in native and fallback composers', () => {
-    expect(composeRouteSource).toMatch(/<NativeTextComposerView[\s\S]*?title="Adicionar texto"/);
-    expect(composeRouteSource).toMatch(/<TextComposerFallback[\s\S]*?title="Adicionar texto"/);
-    expect(composeRouteSource).toMatch(/accessibilityRole="header"[\s\S]*?theme\.typography\.largeTitle/);
-    expect(composeRouteSource).toMatch(/KeyboardAvoidingView[\s\S]*?behavior=\{Platform\.OS === 'ios' \? 'padding' : undefined\}/);
-    expect(swiftUIComposerSource).toMatch(/font\(\{ textStyle: 'largeTitle', design: 'rounded', weight: 'bold' \}\)/);
-    expect(swiftUIComposerSource).toMatch(/foregroundStyle\(theme\.colors\.textPrimary\)/);
-    expect(swiftUIComposerSource.indexOf('{title}')).toBeLessThan(
-      swiftUIComposerSource.indexOf('<VStack\n            alignment="leading"'),
-    );
-    expect(swiftUIComposerSource).toMatch(/alignment="leading"[\s\S]*?spacing=\{theme\.spacing\.md\}/);
-  });
-
-  test('uses one full-frame interactive Glass surface and waits for Native Stack transition before focusing', () => {
-    for (const nativeControl of [
-      'Host',
-      'ZStack',
-      'VStack',
-      'HStack',
-      'Text',
-      'TextField',
-      'Button',
-      'ProgressView',
-    ]) {
-      expect(swiftUIComposerSource).toContain(nativeControl);
-    }
-
-    expect(swiftUIComposerSource).toMatch(/ignoreSafeArea="container"/);
-    expect(swiftUIComposerSource).toMatch(/matchContents=\{false\}/);
-    expect(swiftUIComposerSource).toMatch(/axis="vertical"/);
-    expect(swiftUIComposerSource).toMatch(/lineLimit\(\{ min: 1, max: 12 \}\)/);
-    expect(swiftUIComposerSource).toMatch(/textSelection\(true\)/);
-    expect(swiftUIComposerSource).toMatch(/placeholder="Comece a escrever\.\.\."/);
-    expect(swiftUIComposerSource).toMatch(/<TextField[\s\S]*?ref=\{textFieldRef\}/);
-    expect(swiftUIComposerSource).toMatch(/textFieldRef\.current\?\.focus\(\)/);
-    expect(swiftUIComposerSource).not.toMatch(/autoFocus/);
-    expect(swiftUIComposerSource).toMatch(/const CARD_CORNER_RADIUS = 36/);
-    expect(swiftUIComposerSource).toMatch(/glassEffect\(\{[\s\S]*?variant: 'regular', interactive: true/);
-    expect(swiftUIComposerSource).toMatch(/cornerRadius: cardCornerRadius,[\s\S]*?shape: 'roundedRectangle'/);
-    expect(swiftUIComposerSource).toMatch(/shapes\.roundedRectangle\(\{\s*cornerRadius: cardCornerRadius/);
-    expect(swiftUIComposerSource).not.toMatch(/MIN_CARD_CORNER_RADIUS|MAX_CARD_CORNER_RADIUS/);
-    expect(swiftUIComposerSource).not.toMatch(/clipShape|contentShape/);
-    expect(swiftUIComposerSource).toMatch(/frame\(\{ height: cardHeight \}\),[\s\S]*?frame\(\{ maxWidth: Infinity, alignment: 'topLeading' \}\),[\s\S]*?cardSurfaceModifier/);
-    expect(swiftUIComposerSource).toMatch(/buttonStyle\('glass'\)/);
-    expect(swiftUIComposerSource).toMatch(/controlSize\('regular'\)/);
-    expect(swiftUIComposerSource).toMatch(/buttonBorderShape\('capsule'\)/);
-    expect(swiftUIComposerSource).not.toMatch(/glassProminent|borderedProminent|tint\(theme\.colors\.contrastSurface\)/);
-    expect(swiftUIComposerSource).toMatch(/background\(theme\.colors\.background\)/);
-    expect(swiftUIComposerSource).toMatch(/disabled\(isSaving \|\| !canSave\)/);
-    expect(swiftUIComposerSource).toMatch(/\{isSaving \? <ProgressView \/> : null\}/);
-    expect(swiftUIComposerSource).toMatch(/font\(\{ textStyle: 'body', weight: 'semibold' \}\)/);
-    expect(swiftUIComposerSource).toMatch(/foregroundStyle\(resolvedMode === 'dark' \? '#FFFFFF' : '#000000'\)/);
-    const saveButton = swiftUIComposerSource.match(/<Button[\s\S]*?<\/Button>/)?.[0] ?? '';
-    expect(saveButton).toMatch(/buttonStyle\('glass'\)/);
-    expect(saveButton).toMatch(/controlSize\('regular'\)/);
-    expect(saveButton).toMatch(/buttonBorderShape\('capsule'\)/);
-    expect(saveButton).toMatch(/>\s*Salvar\s*<\/Text>/);
-    expect(saveButton).not.toMatch(/frame\(|padding\(/);
-    expect(swiftUIComposerSource).not.toMatch(/\{(?:canSave|isSaving)\s*&&\s*<Button/);
-    expect((swiftUIComposerSource.match(/<Button\b/g) ?? []).length).toBe(1);
-    expect((swiftUIComposerSource.match(/glassEffect\(/g) ?? []).length).toBe(1);
-    expect(swiftUIComposerSource).not.toMatch(/Close|Fechar|Cancelar|onTapGesture|onDragGesture|Gesture\.Pan/);
-    expect(swiftUIComposerSource).not.toMatch(/Modal|NativeSheet|TextInput|Pressable|TouchableOpacity/);
-    expect(swiftUIComposerSource).not.toMatch(/setTimeout|requestAnimationFrame|Keyboard\.addListener/);
-    expect(composeRouteSource).toMatch(/useNavigation<NativeStackNavigationProp/);
     expect(composeRouteSource).toMatch(/navigation\.addListener\('transitionEnd'/);
-    expect(composeRouteSource).toMatch(/closing: event\.data\.closing/);
-    expect(composeRouteSource).toMatch(/setShouldFocusInput\(true\)/);
-    expect(composeRouteSource).toMatch(/unsubscribe\(\)/);
-    expect(composeRouteSource).toMatch(/textInputRef\.current\?\.focus\(\)/);
-    expect(composeRouteSource).not.toMatch(/autoFocus|setTimeout|requestAnimationFrame/);
-  });
-
-  test('uses native back removal protection for drafts and returns after confirmed save', () => {
+    expect(composeRouteSource).toMatch(/shouldFocusTextComposerAfterTransitionEnd/);
     expect(composeRouteSource).toMatch(/usePreventRemove\(shouldPreventRemoval/);
-    expect(composeRouteSource).toMatch(/gestureEnabled: !isSaving/);
     expect(composeRouteSource).toMatch(/Alert\.alert\('Descartar rascunho\?'/);
-    expect(composeRouteSource).toMatch(/Continuar escrevendo/);
-    expect(composeRouteSource).toMatch(/repeat\(\)/);
-    expect(composeRouteSource).toMatch(/const saved = await submit\(value\)/);
-    expect(composeRouteSource).toMatch(/disableRemovalPrevention\(\)/);
-    expect(composeRouteSource).toMatch(/router\.back\(\)/);
-    expect(controllerSource).toMatch(/saveText\(text, controller\.signal\)/);
-    expect(controllerSource).toMatch(/textAbortController\.current \|\| !isMounted\.current/);
-    expect(controllerSource).toMatch(/Não foi possível salvar o texto/);
+    expect(composeRouteSource).toMatch(/disableRemovalPrevention\(\)[\s\S]*?router\.back\(\)/);
   });
 
-  test('reveals a saved text after returning without changing scroll on cancel', () => {
-    expect(homeSource).toMatch(/useFocusEffect\(/);
-    expect(homeSource).toMatch(/consumePendingTextReveal\(\)/);
-    expect(homeSource).toMatch(/revealSavedTextId=\{revealSavedTextId\}/);
-    expect(gallerySource).toMatch(/hasSavedTextGalleryEntry\(entries, revealSavedTextId\)/);
-    expect(gallerySource).toMatch(/scrollToOffset\(\{ offset: 0, animated: !reduceMotionEnabled \}\)/);
-    expect(gallerySource).toMatch(/lastRevealedTextIdRef/);
-    expect(homeSource).toMatch(/<HomeContentComposer/);
+  test('mounts one native toolbar continuously and anchors it to UIKit keyboard geometry', () => {
+    expect(editorSource).not.toMatch(/InputAccessoryView|inputAccessoryViewID|ACCESSORY_ID/);
+    expect(toolbarSource).toContain("requireNativeViewManager<NativeToolbarProps>(moduleName, 'Dock')");
+    expect(toolbarNativeSource).toContain('parentView.keyboardLayoutGuide.usesBottomSafeArea = true');
+    expect(toolbarNativeSource).toContain('parentView.keyboardLayoutGuide.followsUndockedKeyboard = true');
+    expect(toolbarNativeSource).toContain('parentView.keyboardLayoutGuide.topAnchor');
+    expect(toolbarNativeSource).toContain('host.view.bottomAnchor.constraint(equalTo: parentView.keyboardLayoutGuide.topAnchor, constant: -8)');
+    expect(toolbarNativeSource).toContain('host.view.isHidden = !isActive');
+    expect(toolbarNativeSource).toContain('.fill(.regularMaterial)');
+    expect(toolbarNativeSource).toContain('.glassEffect(.regular.interactive(), in: Capsule())');
+    expect(toolbarNativeSource).toContain('if #available(iOS 26.0, *)');
+    expect(toolbarNativeSource).toContain('.frame(width: controlSize, height: controlSize)');
+    expect(toolbarNativeSource.match(/toolbarButton\("/g)).toHaveLength(4);
+    for (const label of ['Formatação', 'Inserir checklist', 'Inserir imagem', 'Inserir link', 'Mais opções', 'Recolher teclado']) {
+      expect(toolbarNativeSource).toContain(`label: "${label}"`);
+    }
+    for (const action of [
+      'format.body',
+      'format.title',
+      'format.subtitle',
+      'format.bold',
+      'format.italic',
+      'format.underline',
+      'format.bullet',
+      'format.numbered',
+      'insertChecklist',
+      'insertImage',
+      'insertLink',
+      'dismissKeyboard',
+    ]) {
+      expect(toolbarNativeSource).toContain(action);
+      expect(editorSource).toContain(action);
+    }
+    for (const formatting of ['Texto normal', 'Título', 'Subtítulo', 'Negrito', 'Itálico', 'Sublinhado', 'Lista com marcadores', 'Lista numerada']) {
+      expect(toolbarNativeSource).toContain(formatting);
+    }
+    expect(composeRouteSource).toMatch(/<RichNoteKeyboardToolbar[\s\S]*?active=\{isFocused && !auxiliaryPresentationVisible\}/);
+    expect(detailRouteSource).toMatch(/<RichNoteKeyboardToolbar[\s\S]*?active=\{isFocused && !auxiliaryPresentationVisible && savedText != null && document != null\}/);
+    expect(composeRouteSource).not.toContain('<KeyboardAvoidingView');
+    expect(detailRouteSource).not.toContain('<KeyboardAvoidingView');
+    expect(composeRouteSource).not.toContain('keyboardVisible');
+    expect(detailRouteSource).not.toContain('keyboardVisible');
+    expect(composeRouteSource).toContain('automaticallyAdjustKeyboardInsets={Platform.OS === \'ios\'}');
+    expect(detailRouteSource).toContain('automaticallyAdjustKeyboardInsets: Platform.OS === \'ios\'');
+    expect(composeRouteSource.indexOf('</ScrollView>')).toBeLessThan(composeRouteSource.indexOf('<RichNoteKeyboardToolbar'));
+    expect(detailRouteSource.indexOf('</ProgressiveCollapsibleScreen>')).toBeLessThan(detailRouteSource.indexOf('<RichNoteKeyboardToolbar'));
+    expect(toolbarNativeSource).not.toMatch(/keyboardDidShow|keyboardDidHide|keyboardWillShow|keyboardWillHide/);
+  });
+
+  test('lets long paragraphs and checklist tasks expand in the editor scroll view', () => {
+    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(block\.id[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{block\.text\}/);
+    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(item\.id[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{item\.text\}/);
+  });
+
+  test('inserts local multiple images and safe asynchronous link previews at the active position', () => {
+    expect(editorSource).toContain("mediaTypes: ['images']");
+    expect(editorSource).toContain('allowsMultipleSelection: replaceBlockId == null');
+    expect(editorSource).toContain('orderedSelection: true');
+    expect(editorSource).toContain('getLinkPreview(url, controller.signal)');
+    expect(editorSource).toMatch(/if \(nextPresentation === 'preview'\) requestPreviewMetadata\(block\.id, block\.url\)/);
+    expect(editorSource).toContain('attemptedPreviewUrlsRef');
+    expect(librarySource).toContain('materializeRichNoteAssets');
+    expect(editorSource).toContain('normalizeWebLink(linkURL)');
+    expect(editorSource).toContain('insertAfterActivePosition([block], false)');
+    expect(editorSource).toContain('<BottomSheet');
+    expect(editorSource).toContain('<TextField');
+    expect(editorSource).toContain('presentationDetents([{ height: 320 }, \'medium\'])');
+    expect(editorSource).toContain('<NativeCardContextMenu');
+    expect(editorSource).not.toContain('<Modal');
+    expect(editorSource).toContain('onError={() => setFailedPreviewIds');
+    expect(editorSource).toContain('confirmSavedLinkOpen');
+  });
+
+  test('preserves the existing SQLite row and exposes plain text to Home for rich notes', () => {
+    expect(librarySource).toContain('UPDATE saved_content SET text_content = ?');
+    expect(librarySource).toContain('withExclusiveTransactionAsync');
+    expect(librarySource).not.toMatch(/CREATE TABLE.*rich_note/s);
+    expect(librarySource).toContain('encodePersistedRichNote');
+    expect(librarySource).toContain('materializeRichNoteAssets');
+    expect(librarySource).toContain('cleanupOrphanedRichNoteAssets');
+    expect(catalogSource).toContain('getRichNotePlainText(parsedNote.document)');
+    expect(detailRouteSource).toContain('createTextAutoSaveController');
+    expect(detailRouteSource).toContain('controller.flush()');
+    expect(controllerSource).toContain('saveText(text, controller.signal)');
   });
 
   test('keeps the non-blocking native link progress feedback', () => {
     expect(linkSavingSource).toMatch(/<Host[\s\S]*?matchContents=\{false\}/);
     expect(linkSavingSource).toMatch(/pointerEvents="none"/);
     expect(linkSavingSource).toMatch(/<ProgressView/);
-    expect(linkSavingSource).toMatch(/Salvando link/);
     expect(linkSavingSource).toMatch(/material: 'regular'/);
     expect(linkSavingSource).not.toMatch(/Rectangle|Modal|Alert|NavigationStack/);
   });

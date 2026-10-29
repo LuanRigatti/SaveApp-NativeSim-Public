@@ -201,8 +201,9 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource).not.toContain('expandedBottom:');
     expect(layoutSource).toContain("clipShape('roundedRectangle'");
     expect(expandedLeading).toContain('frame({ width: 44, height: 44 })');
-    expect(expandedLeading).toContain("clipShape('roundedRectangle', 10)");
-    expect(expandedLeading).toContain('padding({ top: 8 })');
+    expect(expandedLeading).toContain("clipShape('circle')");
+    expect(expandedLeading).not.toContain("clipShape('roundedRectangle'");
+    expect(expandedLeading).not.toContain('padding({ top: 8 })');
     expect(layoutSource).toContain("multilineTextAlignment('center')");
     expect(layoutSource).toContain('Salvar link');
     expect(expandedCenter).not.toContain('Toque para salvar');

@@ -36,7 +36,7 @@ const collectionsSource = readSource('src/app/(tabs)/collections.tsx');
 const detailSource = readSource('src/app/details/[id].tsx');
 const authorizationPromptSource = readSource('src/features/home-folders/HomeFolderAuthorizationPrompt.tsx');
 const savedDocumentThumbnailSource = readSource('src/components/homeContent/SavedDocumentThumbnail.tsx');
-const glassComposerSource = readSource('src/components/homeContent/HomeContentComposerSwiftUI.ios.tsx');
+const richNoteToolbarSource = readSource('modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift');
 
 function relativeLuminance(hexColor) {
   const channels = hexColor.slice(1).match(/.{2}/g).map((channel) => parseInt(channel, 16) / 255);
@@ -193,7 +193,9 @@ describe('appearance preferences', () => {
     expect(authorizationPromptSource).not.toContain('theme.colors.primary');
     expect(savedDocumentThumbnailSource).toContain('theme.colors.info');
     expect(savedDocumentThumbnailSource).not.toContain('theme.colors.primary');
-    expect(glassComposerSource).toContain('seedColor={theme.colors.info}');
+    expect(richNoteToolbarSource).toContain('.glassEffect(.regular.interactive(), in: Capsule())');
+    expect(richNoteToolbarSource).toContain('.fill(.regularMaterial)');
+    expect(richNoteToolbarSource).toContain('.preferredColorScheme(model.colorScheme)');
   });
 
   test('maintains readable contrast for accent buttons and selected labels in both schemes', () => {

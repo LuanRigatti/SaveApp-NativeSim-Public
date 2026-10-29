@@ -58,7 +58,10 @@ describe('native progressive detail headers', () => {
     expect(detailRoutes.folder).toContain('{folderTitle}');
     expect(detailRoutes.text).toContain('compactTitle="Texto"');
     expect(detailRoutes.text).toMatch(/>\s*Texto\s*<\/Text>/);
-    expect(detailRoutes.text).toContain('{savedText.text}');
+    expect(detailRoutes.text).toContain('<RichNoteEditor');
+    expect(detailRoutes.text).toContain('document={document}');
+    expect(detailRoutes.text).toContain('initialText: savedText.storageText');
+    expect(detailRoutes.text).not.toContain('{savedText.text}');
     expect(detailRoutes.text).not.toContain('presentation.title');
     expect(detailRoutes.document).toContain('compactTitle="Documento"');
     expect(detailRoutes.document).toMatch(/>\s*Documento\s*<\/Text>/);

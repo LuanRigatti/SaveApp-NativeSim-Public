@@ -76,6 +76,7 @@ export const SAVEAPP_DIAGNOSTIC_EVENTS = [
   'home.gallery.links_filtered_out',
   'home.filter.all',
   'home.filter.folder',
+  'home.filter.category',
   'home.filter.favorites',
   'quick_save.import.started',
   'quick_save.import.sqlite_commit_confirmed',

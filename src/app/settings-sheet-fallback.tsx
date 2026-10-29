@@ -507,6 +507,11 @@ function SettingsSheetFallbackContent({ initialPage }: { initialPage: 'root' | '
               {recentlyDeleted.operationError}
             </Text>
           ) : null}
+          {recentlyDeleted.operationMessage ? (
+            <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>
+              {recentlyDeleted.operationMessage}
+            </Text>
+          ) : null}
           {recentlyDeleted.isLoading && recentlyDeleted.items.length === 0 ? (
             <Text style={[theme.typography.body, { color: theme.colors.textSecondary, paddingVertical: theme.spacing.md }]}>Carregando…</Text>
           ) : recentlyDeleted.loadFailed ? (
@@ -515,7 +520,46 @@ function SettingsSheetFallbackContent({ initialPage }: { initialPage: 'root' | '
             </Pressable>
           ) : recentlyDeleted.items.length === 0 ? (
             <Text style={[theme.typography.body, { color: theme.colors.textSecondary, paddingVertical: theme.spacing.md }]}>Nada apagado recentemente</Text>
-          ) : recentlyDeleted.items.map((item) => {
+          ) : (
+            <>
+              <View style={{ flexDirection: 'row', gap: theme.spacing.sm }}>
+                <Pressable
+                  accessibilityLabel="Restaurar tudo"
+                  accessibilityRole="button"
+                  disabled={recentlyDeleted.isLoading || recentlyDeleted.isBulkOperationPending}
+                  onPress={() => void recentlyDeleted.restoreAll()}
+                  style={{ alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, flex: 1, flexDirection: 'row', gap: theme.spacing.xs, justifyContent: 'center', minHeight: 48, opacity: recentlyDeleted.isLoading || recentlyDeleted.isBulkOperationPending ? 0.55 : 1, paddingHorizontal: theme.spacing.sm }}
+                >
+                  <Ionicons color={theme.colors.primary} name="arrow-undo-outline" size={18} />
+                  <Text style={[theme.typography.caption, { color: theme.colors.primary }]}>Restaurar tudo</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Apagar tudo definitivamente"
+                  accessibilityRole="button"
+                  disabled={recentlyDeleted.isLoading || recentlyDeleted.isBulkOperationPending}
+                  onPress={() => Alert.alert(
+                    'Apagar tudo?',
+                    `Os ${recentlyDeleted.items.length} conteúdos serão removidos do SaveApp e não poderão ser restaurados.`,
+                    [
+                      { text: 'Cancelar', style: 'cancel' },
+                      {
+                        text: 'Apagar tudo',
+                        style: 'destructive',
+                        onPress: () => void recentlyDeleted.permanentlyDeleteAll(),
+                      },
+                    ],
+                    { cancelable: true },
+                  )}
+                  style={{ alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, flex: 1, flexDirection: 'row', gap: theme.spacing.xs, justifyContent: 'center', minHeight: 48, opacity: recentlyDeleted.isLoading || recentlyDeleted.isBulkOperationPending ? 0.55 : 1, paddingHorizontal: theme.spacing.sm }}
+                >
+                  <Ionicons color={theme.colors.danger} name="trash-outline" size={18} />
+                  <Text style={[theme.typography.caption, { color: theme.colors.danger }]}>Apagar tudo</Text>
+                </Pressable>
+              </View>
+              {recentlyDeleted.isBulkOperationPending ? (
+                <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Processando…</Text>
+              ) : null}
+              {recentlyDeleted.items.map((item) => {
             const days = getRecentlyDeletedDaysRemaining(item.deletedAt);
             const title = item.requiresAuthorization ? 'Conteúdo protegido' : item.title ?? getRecentlyDeletedItemLabel(item.itemType);
             const icon = item.requiresAuthorization
@@ -567,7 +611,9 @@ function SettingsSheetFallbackContent({ initialPage }: { initialPage: 'root' | '
                 </View>
               </Pressable>
             );
-          })}
+              })}
+            </>
+          )}
         </ScrollView>
       ) : currentPage === 'folders' ? (
         <ScrollView contentContainerStyle={{ gap: theme.spacing.xs, padding: theme.spacing.md }}>

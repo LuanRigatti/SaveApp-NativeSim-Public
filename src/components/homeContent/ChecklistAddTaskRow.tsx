@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, type TextInputInstance, View } from 'react-native';
 
 import { ChecklistCheckboxIndicator } from '@/components/homeContent/ChecklistTaskRow';
@@ -9,11 +9,21 @@ import { useAppTheme } from '@/theme';
 type ChecklistAddTaskRowProps = {
   onInputFocus: () => void;
   onSubmit: (text: string) => Promise<boolean>;
+  onDraftChange?: (text: string) => void;
+  focusRequest?: number;
+  disabled?: boolean;
+  rowMinimumHeight?: number;
+  checkboxColumnWidth?: number;
 };
 
 export function ChecklistAddTaskRow({
   onInputFocus,
   onSubmit,
+  onDraftChange,
+  focusRequest = 0,
+  disabled = false,
+  rowMinimumHeight,
+  checkboxColumnWidth = 32,
 }: ChecklistAddTaskRowProps) {
   const { theme } = useAppTheme();
   const textInputRef = useRef<TextInputInstance | null>(null);
@@ -23,11 +33,15 @@ export function ChecklistAddTaskRow({
   const bodyLineHeight = typeof theme.typography.body.lineHeight === 'number'
     ? theme.typography.body.lineHeight
     : Math.ceil(bodyFontSize * 1.3);
-  const minimumTextHeight = Math.ceil(bodyLineHeight);
+  const rowHeight = Math.max(theme.sizes.touchTargetMinimum, rowMinimumHeight ?? theme.sizes.touchTargetMinimum);
+  const minimumTextHeight = rowMinimumHeight === undefined
+    ? Math.ceil(bodyLineHeight)
+    : Math.max(Math.ceil(bodyLineHeight), rowHeight);
   const [draft, setDraft] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [textHeight, setTextHeight] = useState(minimumTextHeight);
   const [textWidth, setTextWidth] = useState(0);
+  const previousFocusRequestRef = useRef(focusRequest);
   const rowStyle = {
     alignItems: 'flex-start' as const,
     alignSelf: 'stretch' as const,
@@ -35,7 +49,7 @@ export function ChecklistAddTaskRow({
     flexDirection: 'row' as const,
     flexShrink: 0,
     gap: 0,
-    minHeight: theme.sizes.touchTargetMinimum,
+    minHeight: rowHeight,
     minWidth: 0,
     paddingLeft: 0,
     paddingRight: theme.spacing.xxs,
@@ -47,10 +61,17 @@ export function ChecklistAddTaskRow({
     requestAnimationFrame(() => textInputRef.current?.focus());
   }, []);
 
+  useEffect(() => {
+    if (focusRequest === previousFocusRequestRef.current) return;
+    previousFocusRequestRef.current = focusRequest;
+    beginEditing();
+  }, [beginEditing, focusRequest]);
+
   const handleTextChange = useCallback((value: string) => {
     draftRef.current = value;
     setDraft(value);
-  }, []);
+    onDraftChange?.(value);
+  }, [onDraftChange]);
 
   const handleSubmit = useCallback(async () => {
     const submittedText = draftRef.current;
@@ -97,7 +118,7 @@ export function ChecklistAddTaskRow({
   }, []);
 
   const leadingCheckbox = (
-    <View style={{ alignItems: 'flex-start', height: 44, justifyContent: 'center', width: 32 }}>
+    <View style={{ alignItems: 'flex-start', height: rowHeight, justifyContent: 'center', width: checkboxColumnWidth }}>
       <ChecklistCheckboxIndicator isCompleted={false} />
     </View>
   );
@@ -108,11 +129,13 @@ export function ChecklistAddTaskRow({
         accessibilityHint="Toque para escrever uma tarefa e pressione Return para adicioná-la."
         accessibilityLabel="Adicionar tarefa"
         accessibilityRole="button"
+        accessibilityState={{ disabled }}
+        disabled={disabled}
         onPress={beginEditing}
         style={rowStyle}
       >
         {leadingCheckbox}
-        <View style={{ flex: 1, justifyContent: 'center', minHeight: 44, minWidth: 0 }}>
+        <View style={{ flex: 1, justifyContent: 'center', minHeight: rowHeight, minWidth: 0 }}>
           <Text style={[theme.typography.body, { color: theme.colors.textSecondary, flexShrink: 1, minWidth: 0 }]}>
             Adicionar tarefa
           </Text>
@@ -124,10 +147,11 @@ export function ChecklistAddTaskRow({
   return (
     <View style={rowStyle}>
       {leadingCheckbox}
-      <View style={{ flex: 1, justifyContent: 'center', minHeight: 44, minWidth: 0 }}>
+      <View style={{ flex: 1, justifyContent: 'center', minHeight: rowHeight, minWidth: 0 }}>
         <TextInput
           accessibilityHint="Pressione Return para salvar e continuar adicionando tarefas."
           accessibilityLabel="Adicionar tarefa"
+          editable={!disabled}
           maxLength={CHECKLIST_TASK_MAX_LENGTH}
           multiline
           onBlur={handleBlur}

@@ -44,6 +44,8 @@ export function useRecentlyDeletedItems(isActive: boolean) {
   const [isLoading, setIsLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [operationMessage, setOperationMessage] = useState<string | null>(null);
+  const [isBulkOperationPending, setIsBulkOperationPending] = useState(false);
   const [revealedFolderIds, setRevealedFolderIds] = useState<ReadonlySet<string>>(() => new Set());
   const revealedFolderIdsRef = useRef<ReadonlySet<string>>(new Set());
   const operationEpochRef = useRef(lockEpoch);
@@ -93,6 +95,7 @@ export function useRecentlyDeletedItems(isActive: boolean) {
     setIsLoading(true);
     setLoadFailed(false);
     setOperationError(null);
+    setOperationMessage(null);
     try {
       const allowed = new Set(authorizedFolderIds);
       if (extraAuthorizedFolderId) allowed.add(extraAuthorizedFolderId);
@@ -186,6 +189,7 @@ export function useRecentlyDeletedItems(isActive: boolean) {
   }, [authorizeItem, refresh, setRevealedFolders]);
 
   const restore = useCallback(async (item: RecentlyDeletedItem) => {
+    if (isBulkOperationPending) return false;
     const epoch = operationEpochRef.current;
     const outcome = await authorizeItem(item);
     if (outcome !== 'authorized') {
@@ -222,10 +226,12 @@ export function useRecentlyDeletedItems(isActive: boolean) {
       Alert.alert('Não foi possível restaurar', 'O conteúdo continua em Apagados recentemente. Tente novamente.');
       return false;
     }
-  }, [authorizeItem, refresh, refreshChecklists, refreshContent, refreshDocuments, refreshFolders, refreshMedia]);
+  }, [authorizeItem, isBulkOperationPending, refresh, refreshChecklists, refreshContent, refreshDocuments, refreshFolders, refreshMedia]);
 
   const permanentlyDelete = useCallback(async (item: RecentlyDeletedItem) => {
+    if (isBulkOperationPending) return false;
     setOperationError(null);
+    setOperationMessage(null);
     const epoch = operationEpochRef.current;
     const outcome = await authorizeItem(item);
     if (outcome !== 'authorized') {
@@ -253,9 +259,138 @@ export function useRecentlyDeletedItems(isActive: boolean) {
       setOperationError('Não foi possível apagar definitivamente. O conteúdo continua disponível na lixeira.');
       return false;
     }
-  }, [authorizeItem, refresh]);
+  }, [authorizeItem, isBulkOperationPending, refresh]);
 
-  return { items: visibleItems, isLoading, loadFailed, operationError, refresh, reveal, restore, permanentlyDelete };
+  const runBulkOperation = useCallback(async (action: 'restore' | 'delete') => {
+    if (isBulkOperationPending || isLoading || items.length === 0) return;
+
+    const batchItems = [...items];
+    const requestEpoch = operationEpochRef.current;
+    setIsBulkOperationPending(true);
+    setOperationError(null);
+    setOperationMessage(null);
+
+    try {
+      const protectedItems = batchItems.filter((item) => item.folderIsProtected);
+      const protectedFolderIds = [...new Set(protectedItems.flatMap((item) => {
+        if (!item.folderId) return [];
+        const folder = foldersRef.current.find((candidate) => candidate.id === item.folderId);
+        return folder?.isProtected ? [folder.id] : [];
+      }))];
+      const needsFallbackFaceId = protectedItems.some((item) => {
+        const folder = item.folderId
+          ? foldersRef.current.find((candidate) => candidate.id === item.folderId)
+          : undefined;
+        return folder?.isProtected !== true;
+      });
+
+      for (const folderId of protectedFolderIds) {
+        const outcome = await authorizeFolder(folderId);
+        if (outcome !== 'authenticated' || !isFolderAuthorized(folderId)) {
+          if (outcome === 'unavailable' || outcome === 'failed') {
+            Alert.alert('Face ID indisponível', getFolderAuthenticationFailureMessage(outcome));
+          }
+          return;
+        }
+        if (operationEpochRef.current !== requestEpoch || !isAppActiveRef.current || AppState.currentState !== 'active') return;
+      }
+
+      if (needsFallbackFaceId) {
+        const outcome = await authenticateWithFaceId('Autentique para modificar conteúdos protegidos.');
+        if (outcome !== 'authenticated') {
+          if (outcome === 'unavailable' || outcome === 'failed') {
+            Alert.alert('Face ID indisponível', getFolderAuthenticationFailureMessage(outcome));
+          }
+          return;
+        }
+      }
+
+      if (operationEpochRef.current !== requestEpoch || !isAppActiveRef.current || AppState.currentState !== 'active') return;
+
+      let completedCount = 0;
+      let failedCount = 0;
+      let restoreConflictCount = 0;
+
+      for (const item of batchItems) {
+        if (operationEpochRef.current !== requestEpoch || !isAppActiveRef.current || AppState.currentState !== 'active') {
+          failedCount += batchItems.length - completedCount - failedCount;
+          break;
+        }
+
+        try {
+          const completed = action === 'restore'
+            ? await restoreRecentlyDeletedItem(item.itemType, item.itemId)
+            : await permanentlyDeleteRecentlyDeletedItem(item.itemType, item.itemId);
+          if (completed) completedCount += 1;
+          else failedCount += 1;
+        } catch (error) {
+          failedCount += 1;
+          if (error instanceof RecentlyDeletedRestoreConflictError) restoreConflictCount += 1;
+        }
+      }
+
+      if (action === 'restore' && completedCount > 0) {
+        await Promise.allSettled([
+          refreshMedia(),
+          refreshContent(),
+          refreshDocuments(),
+          refreshChecklists(),
+          refreshFolders(),
+        ]);
+      }
+
+      const remainingItems = await refresh();
+      if (remainingItems === null) {
+        setOperationError('Não foi possível atualizar Apagados recentemente. Tente novamente.');
+      } else if (failedCount > 0) {
+        setOperationError(action === 'restore' && restoreConflictCount > 0 && restoreConflictCount === failedCount
+          ? 'Alguns links já existem na biblioteca e continuam em Apagados recentemente.'
+          : 'Alguns conteúdos não puderam ser processados e continuam em Apagados recentemente.');
+      }
+
+      if (completedCount > 0) {
+        setOperationMessage(action === 'restore'
+          ? `${completedCount} ${completedCount === 1 ? 'conteúdo restaurado' : 'conteúdos restaurados'}.`
+          : `${completedCount} ${completedCount === 1 ? 'conteúdo apagado definitivamente' : 'conteúdos apagados definitivamente'}.`);
+      }
+    } catch {
+      setOperationError(action === 'restore'
+        ? 'Não foi possível restaurar todos os conteúdos. Os itens permanecem disponíveis em Apagados recentemente.'
+        : 'Não foi possível apagar todos os conteúdos. Os itens permanecem disponíveis em Apagados recentemente.');
+    } finally {
+      setIsBulkOperationPending(false);
+    }
+  }, [
+    authorizeFolder,
+    isBulkOperationPending,
+    isFolderAuthorized,
+    isLoading,
+    items,
+    refresh,
+    refreshChecklists,
+    refreshContent,
+    refreshDocuments,
+    refreshFolders,
+    refreshMedia,
+  ]);
+
+  const restoreAll = useCallback(() => runBulkOperation('restore'), [runBulkOperation]);
+  const permanentlyDeleteAll = useCallback(() => runBulkOperation('delete'), [runBulkOperation]);
+
+  return {
+    items: visibleItems,
+    isLoading,
+    loadFailed,
+    operationError,
+    operationMessage,
+    isBulkOperationPending,
+    refresh,
+    reveal,
+    restore,
+    permanentlyDelete,
+    restoreAll,
+    permanentlyDeleteAll,
+  };
 }
 
 export function getRecentlyDeletedItemLabel(itemType: RecentlyDeletedItemType): string {

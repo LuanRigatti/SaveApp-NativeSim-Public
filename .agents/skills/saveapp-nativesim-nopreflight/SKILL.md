@@ -14,7 +14,7 @@ Use only the private source `C:\Projetos\SaveApp` (`LuanRigatti/SaveApp`, `main`
 Use the shared official launcher, which retains the snapshot, mirror, provenance, CLI, transport, OSLog, and NativeSim gates:
 
 ```powershell
-pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\Start-SaveAppNativeSim.ps1 -SkipSwiftPreflight -CaptureOSLog
+pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\Start-SaveAppNativeSim.ps1 -SkipSwiftPreflight
 ```
 
 `-SkipSwiftPreflight` is the sole operational difference. It skips invoking, querying, dispatching, or waiting for Swift Preflight. The launcher does not modify the installed NativeSim CLI. Without that explicit switch, Swift Preflight remains mandatory.
@@ -27,7 +27,7 @@ Skipping Swift Preflight does not bypass any other requirement. The shared launc
 - The complete local snapshot gate and its tests, hashes, required paths, and safe explicit mirror allowlist before any public write.
 - Secret/content scanners, path validation, exact source-to-public provenance, public SHA, destination isolation, fast-forward publication, and post-push equality.
 - The installed NativeSim CLI and scaffold contract, exact workflow/template compatibility, isolated checkout at the audited public SHA, export behavior, and local push sink.
-- OSLog opt-in agreement and a valid public age recipient when `-CaptureOSLog` is requested. Never display, store, or publish the private age identity or authenticated Simulator key.
+- Exact per-run OSLog choice handshake. Capture is OFF unless `-CaptureOSLog` is explicitly supplied; only that mode requires a valid public age recipient. Never display, store, or publish the private age identity or authenticated Simulator key.
 - Exact NativeSim run, initial attempt, repository, workflow, public SHA, status, tunnel, GitHub Actions URL, and complete authenticated Simulator URL before link handoff.
 - The NativeSim workflow's real macOS build, app and extension signing, App Group entitlements, embedded extension, installation, launch, and any other workflow gates. Skipping Preflight does not make those build gates optional.
 
@@ -35,11 +35,19 @@ The mirror snapshot still runs local JavaScript/Expo/Jest, native contracts and 
 
 ## OSLog and early link handoff
 
-Use the same existing capture integration as the primary skill. With capture enabled, the workflow starts the filtered OSLog collector before launching SaveApp and publishes capture readiness only after its fixed startup probe is present. The session transport link and OSLog readiness are separate states; a delivered link means `TRANSPORTE PRONTO — BUILD/OSLOG PENDENTES`, not that build or capture has succeeded.
+OSLog is OFF by default for this skill. The command above starts a normal visual session: no collector, OSLog readiness gate, artifact, or later `$oslog` recovery is required. A configured public `SAVEAPP_LOG_AGE_RECIPIENT` does not enable capture; the legacy `SAVEAPP_OSLOG_CAPTURE_ENABLED` repository variable is ignored.
 
-As soon as the shared launcher validates the current run ID, initial attempt, public SHA, session, tunnel origin, complete authenticated Simulator URL, and Actions URL, return both full links with the run identity and the pending state. Never reconstruct, shorten, log, or persist the authenticated URL/key. Then end local CLI execution and Codex follow-up immediately. Do not wait for build, OSLog readiness, artifact upload, user testing, or workflow completion; do not poll or cancel the remote workflow. The GitHub Actions workflow continues independently.
+To instrument one run, require the public Actions variable `SAVEAPP_LOG_AGE_RECIPIENT` to contain a valid public age recipient and explicitly pass `-CaptureOSLog`:
 
-The user can later confirm the exact `native-sim-capture/<session>` status for that run/attempt/SHA and use the installed `$oslog` skill to stop and recover the encrypted artifact. Only that capture status confirms logs are ready for recovery; a pending or failed capture must be reported as such.
+```powershell
+pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\Start-SaveAppNativeSim.ps1 -SkipSwiftPreflight -CaptureOSLog
+```
+
+The installed CLI does not accept additional workflow inputs. The shared launcher therefore publishes an explicit status choice bound to this run ID, attempt, session, and public SHA. The workflow accepts exactly one status from the dispatch actor and fails closed on missing, stale, duplicated, or mismatched choices after a bounded wait. It does not toggle a global variable. Only an explicit `capture=true` choice prepares the age-encrypted artifact and capture statuses.
+
+Both modes publish the tunnel transport status before Expo prebuild and return the validated Actions and authenticated Simulator links immediately. A normal run is reported as `TRANSPORTE PRONTO — OSLOG NÃO SOLICITADO`; an instrumented run as `TRANSPORTE PRONTO — BUILD/OSLOG PENDENTES`. The link is not proof of build or capture readiness. In capture mode, the stream starts before app launch and the independent `native-sim-capture/<session>` status becomes successful only after the fixed startup probe reaches the filtered file. The workflow keeps its normal build, signing, entitlements, App Group, install, and launch gates in both modes.
+
+After manual tests from an instrumented run, use `$oslog` with the exact run ID, `-Profile SaveApp -Stop` to stop gracefully and recover the encrypted artifact. Do not use `$oslog` for a normal run. Never reconstruct, shorten, log, or persist the authenticated URL/key, and never publish the private age identity. The workflow remains remote after the local CLI and Codex handoff ends.
 
 ## Stop conditions
 

@@ -1,5 +1,6 @@
 import { fallbackLinkTitle, normalizeWebLink } from './linkValidation';
 import type { SavedHomeContent, SavedLink, SavedText } from './homeContentTypes';
+import { getRichNotePlainText, parseRichNoteStorage } from './richNoteDocument';
 
 export type SavedContentRow = {
   id: number;
@@ -42,12 +43,15 @@ export function savedContentRowToModel(
   }
 
   if (row.content_type === 'text') {
-    if (row.text_content == null || !row.text_content.trim()) return null;
+    if (row.text_content == null) return null;
+    const parsedNote = parseRichNoteStorage(row.text_content);
     const text: SavedText = {
       id: row.id,
       contentType: 'text',
       createdAt: row.created_at,
-      text: row.text_content,
+      text: getRichNotePlainText(parsedNote.document),
+      storageText: row.text_content,
+      richDocument: parsedNote.document,
     };
     return text;
   }

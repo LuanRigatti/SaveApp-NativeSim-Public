@@ -19,15 +19,16 @@ import {
   updateSavedChecklistTaskText,
   updateSavedChecklistTitle,
 } from './checklistLibrary';
-import type { SavedChecklist, SavedChecklistSummary, SavedChecklistTask } from './checklistTypes';
+import type { InitialChecklistTask, SavedChecklist, SavedChecklistSummary, SavedChecklistTask } from './checklistTypes';
 import { moveSavedItemToRecentlyDeleted } from '@/features/home-trash/trashLibrary';
 
 type ChecklistLibraryContextValue = {
   checklists: SavedChecklistSummary[];
   isReady: boolean;
+  hasCatalogLoadSucceeded: boolean;
   refresh: () => Promise<void>;
   getChecklist: (id: number) => Promise<SavedChecklist | null>;
-  createChecklist: (title: string, taskTexts?: readonly string[]) => Promise<number>;
+  createChecklist: (title: string, tasks?: readonly (string | InitialChecklistTask)[]) => Promise<number>;
   updateTitle: (id: number, title: string) => Promise<boolean>;
   addTask: (checklistId: number, text: string) => Promise<SavedChecklistTask>;
   updateTaskText: (checklistId: number, taskId: number, text: string) => Promise<boolean>;
@@ -41,15 +42,24 @@ const ChecklistLibraryContext = createContext<ChecklistLibraryContextValue | nul
 export function LocalChecklistLibraryProvider({ children }: PropsWithChildren) {
   const [checklists, setChecklists] = useState<SavedChecklistSummary[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [hasCatalogLoadSucceeded, setHasCatalogLoadSucceeded] = useState(false);
   const mountedRef = useRef(true);
   const refreshGenerationRef = useRef(0);
 
   const refresh = useCallback(async () => {
     const generation = ++refreshGenerationRef.current;
-    const nextChecklists = await listSavedChecklists();
-    if (mountedRef.current && generation === refreshGenerationRef.current) {
-      setChecklists(nextChecklists);
-      setIsReady(true);
+    try {
+      const nextChecklists = await listSavedChecklists();
+      if (mountedRef.current && generation === refreshGenerationRef.current) {
+        setChecklists(nextChecklists);
+        setIsReady(true);
+        setHasCatalogLoadSucceeded(true);
+      }
+    } catch (error) {
+      if (mountedRef.current && generation === refreshGenerationRef.current) {
+        setHasCatalogLoadSucceeded(false);
+      }
+      throw error;
     }
   }, []);
 
@@ -71,8 +81,8 @@ export function LocalChecklistLibraryProvider({ children }: PropsWithChildren) {
     }
   }, [refresh]);
 
-  const createChecklist = useCallback(async (title: string, taskTexts: readonly string[] = []) => {
-    const id = await createSavedChecklist(title, taskTexts);
+  const createChecklist = useCallback(async (title: string, tasks: readonly (string | InitialChecklistTask)[] = []) => {
+    const id = await createSavedChecklist(title, tasks);
     await refreshAfterWrite();
     return id;
   }, [refreshAfterWrite]);
@@ -116,6 +126,7 @@ export function LocalChecklistLibraryProvider({ children }: PropsWithChildren) {
   const value = useMemo<ChecklistLibraryContextValue>(() => ({
     checklists,
     isReady,
+    hasCatalogLoadSucceeded,
     refresh,
     getChecklist: getSavedChecklist,
     createChecklist,
@@ -131,6 +142,7 @@ export function LocalChecklistLibraryProvider({ children }: PropsWithChildren) {
     createChecklist,
     deleteTask,
     isReady,
+    hasCatalogLoadSucceeded,
     refresh,
     removeChecklist,
     setTaskCompleted,

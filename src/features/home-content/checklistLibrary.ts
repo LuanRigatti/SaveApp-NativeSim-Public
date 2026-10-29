@@ -9,6 +9,7 @@ import {
   type SavedChecklist,
   type SavedChecklistSummary,
   type SavedChecklistTask,
+  type InitialChecklistTask,
 } from "./checklistTypes";
 
 type ChecklistRow = {
@@ -54,14 +55,26 @@ function requireChecklistId(id: number): number {
   return id;
 }
 
-function normalizeInitialTasks(tasks: readonly string[] | undefined): string[] {
+function normalizeInitialTasks(
+  tasks: readonly (string | InitialChecklistTask)[] | undefined,
+): InitialChecklistTask[] {
   if (tasks === undefined) return [];
   if (!Array.isArray(tasks)) throw new ChecklistLibraryError("invalid-task");
   return tasks.flatMap((task) => {
-    if (typeof task !== "string")
+    if (typeof task === "string") {
+      if (!task.trim()) return [];
+      return [{ text: normalizeChecklistTaskText(task), isCompleted: false }];
+    }
+    if (
+      typeof task !== "object" ||
+      task === null ||
+      typeof task.text !== "string" ||
+      typeof task.isCompleted !== "boolean"
+    ) {
       throw new ChecklistLibraryError("invalid-task");
-    if (!task.trim()) return [];
-    return [normalizeChecklistTaskText(task)];
+    }
+    if (!task.text.trim()) return [];
+    return [{ text: normalizeChecklistTaskText(task.text), isCompleted: task.isCompleted }];
   });
 }
 
@@ -190,7 +203,7 @@ export async function getSavedChecklist(
 
 export async function createSavedChecklist(
   titleValue: string,
-  initialTaskTexts?: readonly string[],
+  initialTaskTexts?: readonly (string | InitialChecklistTask)[],
 ): Promise<number> {
   const title = normalizeChecklistTitle(titleValue);
   const tasks = normalizeInitialTasks(initialTaskTexts);
@@ -207,13 +220,14 @@ export async function createSavedChecklist(
     );
     checklistId = result.lastInsertRowId;
 
-    for (const [position, text] of tasks.entries()) {
+    for (const [position, task] of tasks.entries()) {
       await transaction.runAsync(
         `INSERT INTO saved_checklist_items
           (checklist_id, text, is_completed, position, created_at, updated_at)
-         VALUES (?, ?, 0, ?, ?, ?);`,
+         VALUES (?, ?, ?, ?, ?, ?);`,
         checklistId,
-        text,
+        task.text,
+        task.isCompleted ? 1 : 0,
         position,
         timestamp,
         timestamp,

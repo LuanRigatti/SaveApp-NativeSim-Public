@@ -3,6 +3,11 @@ export const CHECKLIST_TASK_MAX_LENGTH = 10_000;
 export const MAX_CHECKLIST_TITLE_LENGTH = CHECKLIST_TITLE_MAX_LENGTH;
 export const MAX_CHECKLIST_TASK_LENGTH = CHECKLIST_TASK_MAX_LENGTH;
 
+export type InitialChecklistTask = {
+  text: string;
+  isCompleted: boolean;
+};
+
 export type SavedChecklistTask = {
   id: number;
   checklistId: number;

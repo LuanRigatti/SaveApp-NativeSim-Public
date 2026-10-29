@@ -49,7 +49,7 @@ describe('saved content catalog mapping', () => {
     expect(paths.fileExists).toHaveBeenCalledWith('home-content/link-previews/preview-1.jpg');
   });
 
-  test('preserves text including line breaks and rejects empty or invalid records', () => {
+  test('preserves text including line breaks and intentional empty edits while rejecting invalid records', () => {
     const textRow = makeRow({
       content_type: 'text',
       url: null,
@@ -62,7 +62,17 @@ describe('saved content catalog mapping', () => {
       contentType: 'text',
       text: 'linha 1\n\nlinha 2',
     });
-    expect(savedContentRowToModel({ ...textRow, text_content: '  \n ' }, makePaths())).toBeNull();
+    expect(savedContentRowToModel({ ...textRow, text_content: '' }, makePaths())).toMatchObject({
+      id: 17,
+      contentType: 'text',
+      text: '',
+    });
+    expect(savedContentRowToModel({ ...textRow, text_content: '  \n ' }, makePaths())).toMatchObject({
+      id: 17,
+      contentType: 'text',
+      text: '  \n ',
+    });
+    expect(savedContentRowToModel({ ...textRow, text_content: null }, makePaths())).toBeNull();
     expect(savedContentRowToModel({ ...textRow, id: 0 }, makePaths())).toBeNull();
   });
 

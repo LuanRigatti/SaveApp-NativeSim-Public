@@ -14,8 +14,8 @@ const {
 const { buildHomeGalleryEntries } = require('../src/features/home-content/homeFeed');
 
 describe('Home view mode preference and layout', () => {
-  test('uses Maiores as the first-use default and rejects unknown stored modes', async () => {
-    expect(DEFAULT_HOME_VIEW_MODE).toBe('large');
+  test('uses Lista as the first-use default and rejects unknown stored modes', async () => {
+    expect(DEFAULT_HOME_VIEW_MODE).toBe('list');
     expect(isHomeViewMode('list')).toBe(true);
     expect(isHomeViewMode('compact-list')).toBe(true);
     expect(isHomeViewMode('single-line')).toBe(true);
@@ -23,11 +23,11 @@ describe('Home view mode preference and layout', () => {
     expect(isHomeViewMode('large')).toBe(true);
     expect(isHomeViewMode('invalid')).toBe(false);
     expect(await restoreHomeViewMode({ getItem: async () => null, setItem: async () => {} })).toBe(
-      'large',
+      'list',
     );
     expect(
       await restoreHomeViewMode({ getItem: async () => 'invalid', setItem: async () => {} }),
-    ).toBe('large');
+    ).toBe('list');
   });
 
   test('persists and restores the selected mode under the SaveApp preference key', async () => {
@@ -51,7 +51,7 @@ describe('Home view mode preference and layout', () => {
     }
   });
 
-  test('keeps storage failures non-fatal and falls back to Maiores', async () => {
+  test('keeps storage failures non-fatal and falls back to Lista', async () => {
     const brokenStorage = {
       getItem: async () => {
         throw new Error('read failed');
@@ -61,7 +61,7 @@ describe('Home view mode preference and layout', () => {
       },
     };
 
-    await expect(restoreHomeViewMode(brokenStorage)).resolves.toBe('large');
+    await expect(restoreHomeViewMode(brokenStorage)).resolves.toBe('list');
     await expect(persistHomeViewMode('list', brokenStorage)).resolves.toBeUndefined();
   });
 

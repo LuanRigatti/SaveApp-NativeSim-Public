@@ -31,6 +31,7 @@ import { moveSavedItemToRecentlyDeleted } from '@/features/home-trash/trashLibra
 type DocumentLibraryContextValue = {
   documents: SavedDocument[];
   isReady: boolean;
+  hasCatalogLoadSucceeded: boolean;
   refresh: () => Promise<void>;
   importDocumentsFromPicker: () => Promise<void>;
   openDocument: (document: SavedDocument) => Promise<void>;
@@ -47,6 +48,7 @@ const DocumentLibraryContext = createContext<DocumentLibraryContextValue | null>
 export function LocalDocumentLibraryProvider({ children }: { children: ReactNode }) {
   const [documents, setDocuments] = useState<SavedDocument[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [hasCatalogLoadSucceeded, setHasCatalogLoadSucceeded] = useState(false);
   const initializationRef = useRef<Promise<void> | null>(null);
   const isImportingRef = useRef(false);
   const thumbnailQueueRef = useRef<DocumentThumbnailQueue | null>(null);
@@ -80,8 +82,12 @@ export function LocalDocumentLibraryProvider({ children }: { children: ReactNode
   const initialize = useCallback((): Promise<void> => {
     if (!initializationRef.current) {
       initializationRef.current = listSavedDocuments()
-        .then(setDocuments)
+        .then((nextDocuments) => {
+          setDocuments(nextDocuments);
+          setHasCatalogLoadSucceeded(true);
+        })
         .catch((error: unknown) => {
+          setHasCatalogLoadSucceeded(false);
           initializationRef.current = null;
           throw error;
         })
@@ -91,8 +97,15 @@ export function LocalDocumentLibraryProvider({ children }: { children: ReactNode
   }, []);
 
   const refresh = useCallback(async () => {
-    setDocuments(await listSavedDocuments());
-    setIsReady(true);
+    try {
+      const nextDocuments = await listSavedDocuments();
+      setDocuments(nextDocuments);
+      setHasCatalogLoadSucceeded(true);
+      setIsReady(true);
+    } catch (error) {
+      setHasCatalogLoadSucceeded(false);
+      throw error;
+    }
   }, []);
 
   useEffect(() => {
@@ -216,8 +229,8 @@ export function LocalDocumentLibraryProvider({ children }: { children: ReactNode
   );
 
   const value = useMemo(
-    () => ({ documents, isReady, refresh, importDocumentsFromPicker, openDocument, getDocument, requestDeleteDocument }),
-    [documents, getDocument, importDocumentsFromPicker, isReady, openDocument, refresh, requestDeleteDocument],
+    () => ({ documents, isReady, hasCatalogLoadSucceeded, refresh, importDocumentsFromPicker, openDocument, getDocument, requestDeleteDocument }),
+    [documents, getDocument, hasCatalogLoadSucceeded, importDocumentsFromPicker, isReady, openDocument, refresh, requestDeleteDocument],
   );
 
   return <DocumentLibraryContext.Provider value={value}>{children}</DocumentLibraryContext.Provider>;

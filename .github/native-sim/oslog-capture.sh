@@ -2,6 +2,88 @@
 # Narrow SaveApp capture glue. Recovery, validation, decryption, and export stay
 # in the shared Emporio OSLog collector.
 
+saveapp_capture_resolve_session_choice() {
+  local session_id="${SESSION_ID:-}"
+  local minutes="${SESSION_MINUTES:-}"
+  local run_id="${GITHUB_RUN_ID:-}"
+  local attempt="${GITHUB_RUN_ATTEMPT:-}"
+  local sha="${GITHUB_SHA:-}"
+  local repository="${GITHUB_REPOSITORY:-}"
+  local actor="${GITHUB_ACTOR:-}"
+  local output="${GITHUB_OUTPUT:-}"
+
+  if [[ "$repository" != 'LuanRigatti/SaveApp-NativeSim-Public' ||
+        ! "$session_id" =~ ^[a-f0-9]{8}$ || ! "$minutes" =~ ^[0-9]{1,3}$ ||
+        ! "$run_id" =~ ^[0-9]+$ || ! "$attempt" =~ ^[0-9]+$ ||
+        ! "$sha" =~ ^[0-9a-fA-F]{40}$ || -z "$actor" || -z "$output" ]]; then
+    echo '::error::SaveApp per-run OSLog choice has an invalid workflow identity'
+    return 1
+  fi
+  if (( minutes < 1 || minutes > 350 )); then
+    echo '::error::SaveApp per-run OSLog choice has an invalid session duration'
+    return 1
+  fi
+
+  local run_json
+  if ! run_json=$(gh api "repos/$repository/actions/runs/$run_id" 2>/dev/null); then
+    echo '::error::Could not verify the SaveApp NativeSim run for its OSLog choice'
+    return 1
+  fi
+  if ! jq -e \
+    --arg run_id "$run_id" --arg attempt "$attempt" --arg sha "$sha" \
+    --arg session "$session_id" --arg minutes "$minutes" --arg actor "$actor" \
+    '.id|tostring == $run_id' >/dev/null <<<"$run_json"; then
+    echo '::error::SaveApp NativeSim run ID does not match the active workflow'
+    return 1
+  fi
+  if ! jq -e \
+    --arg run_id "$run_id" --arg attempt "$attempt" --arg sha "$sha" \
+    --arg session "$session_id" --arg minutes "$minutes" --arg actor "$actor" \
+    '.run_attempt|tostring == $attempt' >/dev/null <<<"$run_json" ||
+     ! jq -e \
+    --arg run_id "$run_id" --arg attempt "$attempt" --arg sha "$sha" \
+    --arg session "$session_id" --arg minutes "$minutes" --arg actor "$actor" \
+    '.path == ".github/workflows/native-sim.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $sha and .actor.login == $actor and .status == "in_progress" and .conclusion == null and .display_title == ("native-sim " + $session + " · release · " + $minutes + "m")' >/dev/null <<<"$run_json"; then
+    echo '::error::SaveApp NativeSim run metadata does not match the exact session, attempt, actor, and SHA'
+    return 1
+  fi
+
+  local context="saveapp/oslog-choice/$run_id/$attempt/$session_id"
+  local deadline=$((SECONDS + 60))
+  local pages statuses count status expected_description
+  while (( SECONDS < deadline )); do
+    if pages=$(gh api --paginate "repos/$repository/commits/$sha/statuses?per_page=100" 2>/dev/null) &&
+       statuses=$(jq -s 'add' <<<"$pages"); then
+      count=$(jq --arg context "$context" '[.[] | select(.context == $context)] | length' <<<"$statuses")
+      if [[ "$count" =~ ^[0-9]+$ ]] && (( count > 1 )); then
+        echo '::error::SaveApp per-run OSLog choice is ambiguous'
+        return 1
+      fi
+      if [[ "$count" == '1' ]]; then
+        status=$(jq -c --arg context "$context" '[.[] | select(.context == $context)][0]' <<<"$statuses")
+        local capture_requested
+        capture_requested=$(jq -r 'try (.description | capture("^SaveApp OSLog choice capture=(?<choice>true|false) sha=[0-9a-fA-F]{40}$").choice) catch ""' <<<"$status")
+        expected_description="SaveApp OSLog choice capture=$capture_requested sha=$sha"
+        if [[ "$capture_requested" != 'true' && "$capture_requested" != 'false' ]] ||
+           ! jq -e --arg context "$context" --arg description "$expected_description" \
+          --arg sha "$sha" --arg actor "$actor" \
+          '.context == $context and .state == "success" and .description == $description and .sha == $sha and .creator.login == $actor and (.target_url == null or .target_url == "")' \
+          >/dev/null <<<"$status"; then
+          echo '::error::SaveApp per-run OSLog choice failed exact identity validation'
+          return 1
+        fi
+        printf 'enabled=%s\n' "$capture_requested" >> "$output"
+        echo "Validated explicit SaveApp OSLog choice for run $run_id attempt $attempt and this session."
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+
+  echo '::error::No exact per-run SaveApp OSLog choice arrived before the bounded timeout'
+  return 1
+}
+
 saveapp_capture_configure() {
   SAVEAPP_CAPTURE_FILTER_MODE='subsystem'
   SAVEAPP_CAPTURE_SUBSYSTEMS_JSON='[{"match":"prefix","value":"com.luanrigatti.saveapp"}]'
@@ -9,7 +91,7 @@ saveapp_capture_configure() {
 }
 
 saveapp_capture_preflight() {
-  if [ "${SAVEAPP_OSLOG_CAPTURE_ENABLED:-false}" != 'true' ]; then
+  if [ "${SAVEAPP_CAPTURE_ENABLED:-false}" != 'true' ]; then
     echo '::error::SaveApp OSLog capture is not enabled'
     return 1
   fi

@@ -47,11 +47,10 @@ describe('SaveApp NativeSim explicit Preflight modes', () => {
     expect(launcher).toContain('$nativeProcess.Kill($true)');
     expect(launcher).not.toContain('gh run cancel');
     expect(primarySkill).toContain('TRANSPORTE PRONTO — BUILD/OSLOG PENDENTES');
-    expect(primarySkill).toContain('stops only its local CLI after handoff');
-    expect(primarySkill).toContain('The remote workflow continues.');
+    expect(primarySkill).toContain('stops only its local CLI, and the remote workflow continues.');
     expect(primarySkill).toContain('-CaptureOSLog');
     expect(noPreflightSkill).toContain('native-sim-capture/<session>');
-    expect(noPreflightSkill).toContain('do not poll or cancel the remote workflow');
+    expect(noPreflightSkill).toContain('workflow remains remote after the local CLI and Codex handoff ends');
     expect(noPreflightSkill).toContain('complete authenticated Simulator URL');
   });
 

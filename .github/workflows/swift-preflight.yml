@@ -121,6 +121,7 @@ jobs:
             modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift
             modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift
             modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift
+            modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift
           )
 
           for source in "${local_sources[@]}"; do

@@ -35,8 +35,10 @@ describe('saved text Home presentation and native interactions', () => {
     expect(gallerySource).toMatch(/<Link\.MenuAction title="Apagar texto" icon="trash" destructive onPress=\{deleteItem\} \/>/);
     expect(previewSource).toMatch(/presentation\.previewText/);
     expect(detailSource).toMatch(/getText\(id\)/);
-    expect(detailSource).toContain('{savedText.text}');
-    expect(detailSource.match(/\{savedText\.text\}/g)).toHaveLength(1);
+    expect(detailSource).toContain('document={document}');
+    expect(detailSource).toContain('savedText.richDocument');
+    expect(detailSource).toContain('initialText: savedText.storageText');
+    expect(detailSource).not.toContain('{savedText.text}');
     expect(detailSource).not.toContain('presentation.body');
     expect(detailSource).not.toContain('getSavedTextDetailPresentation');
     expect(detailSource).toContain('compactTitle="Texto"');

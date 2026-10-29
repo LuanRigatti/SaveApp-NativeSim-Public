@@ -260,6 +260,38 @@ function Assert-SaveAppNativeSimExportBehavior {
   return $true
 }
 
+function Assert-SaveAppNativeSimCaptureChoiceCompatibility {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$NativeSimUpText,
+    [Parameter(Mandatory)][string]$WorkflowText,
+    [Parameter(Mandatory)][string]$CaptureHelperText
+  )
+
+  $dispatch = [regex]::Match($NativeSimUpText,'(?s)await\s+gh\.dispatch\([^,]+,\s*WORKFLOW,\s*branch,\s*\{(?<inputs>.*?)\}\s*\);')
+  if (-not $dispatch.Success) {
+    throw 'Installed NativeSim CLI dispatch contract is not recognizable; per-session OSLog choice cannot be sent safely.'
+  }
+  $inputs = $dispatch.Groups['inputs'].Value
+  foreach ($required in @('session','gate_token','minutes','export_app')) {
+    $fieldPattern = if ($required -eq 'session') { '(?m)^\s*session\s*[,,:]' } else { "(?m)^\s*$required\s*:" }
+    if ($inputs -notmatch $fieldPattern) {
+      throw "Installed NativeSim CLI dispatch input is missing its required field: $required"
+    }
+  }
+  if ($inputs -match '(?i)capture[_-]?oslog' -or $NativeSimUpText -match '(?i)flags\[[^]]*capture[_-]?oslog[^]]*\]') {
+    throw 'Installed NativeSim CLI capture input behavior changed; review the per-run OSLog handshake before launching.'
+  }
+  if ($WorkflowText -match '(?m)^\s*capture_oslog:\s*$' -or
+      $WorkflowText -notmatch '(?m)^\s*- name: Resolve exact-run OSLog choice\s*$' -or
+      $WorkflowText -notmatch "steps\.capture_decision\.outputs\.enabled == 'true'" -or
+      $CaptureHelperText -notmatch 'saveapp_capture_resolve_session_choice' -or
+      $CaptureHelperText -notmatch 'saveapp/oslog-choice/\$run_id/\$attempt/\$session_id') {
+    throw 'SaveApp workflow does not implement the reviewed exact-run status handshake for per-session OSLog choice.'
+  }
+  return $true
+}
+
 function Assert-SaveAppOSLogCaptureConfiguration {
   [CmdletBinding()]
   param(
@@ -267,29 +299,105 @@ function Assert-SaveAppOSLogCaptureConfiguration {
     [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Variables
   )
 
-  $enabledEntries = @($Variables | Where-Object { [string]$_.name -ceq 'SAVEAPP_OSLOG_CAPTURE_ENABLED' })
   $recipientEntries = @($Variables | Where-Object { [string]$_.name -ceq 'SAVEAPP_LOG_AGE_RECIPIENT' })
-  if ($enabledEntries.Count -gt 1 -or $recipientEntries.Count -gt 1) {
-    throw 'SaveApp OSLog capture configuration contains duplicate repository variables.'
-  }
-
-  $enabledValue = if ($enabledEntries.Count -eq 1) { [string]$enabledEntries[0].value } else { '' }
-  if ($enabledValue -notin @('', 'true', 'false')) {
-    throw 'SaveApp OSLog capture enablement must be exactly true or false.'
-  }
-  $enabled = $enabledValue -ceq 'true'
-  if ($enabled -ne $CaptureRequested) {
-    throw 'SaveApp OSLog capture opt-in and launcher -CaptureOSLog option must agree.'
-  }
+  if ($recipientEntries.Count -gt 1) { throw 'SaveApp OSLog configuration contains duplicate public age recipients.' }
 
   $recipient = if ($recipientEntries.Count -eq 1) { [string]$recipientEntries[0].value } else { '' }
-  if ($enabled -and ($recipient -notmatch '^age1[0-9a-z]{20,100}$')) {
-    throw 'SaveApp OSLog capture requires one valid public age recipient variable.'
+  if ($CaptureRequested -and ($recipient -notmatch '^age1[0-9a-z]{20,100}$')) {
+    throw 'Explicit SaveApp OSLog capture requires one valid public age recipient.'
   }
 
   return [pscustomobject]@{
-    CaptureEnabled = $enabled
+    CaptureEnabled = $CaptureRequested
     RecipientConfigured = [bool]$recipient
+  }
+}
+
+function New-SaveAppOSLogCaptureDecisionContract {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$ExpectedRunId,
+    [Parameter(Mandatory)][int]$ExpectedAttempt,
+    [Parameter(Mandatory)][string]$ExpectedSession,
+    [Parameter(Mandatory)][string]$ExpectedSha,
+    [Parameter(Mandatory)][bool]$CaptureRequested
+  )
+
+  if ($ExpectedRunId -notmatch '^\d+$' -or $ExpectedAttempt -lt 1 -or
+      $ExpectedSession -notmatch '^[a-f0-9]{8}$' -or $ExpectedSha -notmatch '^[0-9a-fA-F]{40}$') {
+    throw 'SaveApp OSLog choice has an invalid run, attempt, session, or SHA identity.'
+  }
+
+  $choice = if ($CaptureRequested) { 'true' } else { 'false' }
+  return [pscustomobject]@{
+    Context = "saveapp/oslog-choice/$ExpectedRunId/$ExpectedAttempt/$ExpectedSession"
+    Description = "SaveApp OSLog choice capture=$choice sha=$ExpectedSha"
+    CaptureEnabled = $CaptureRequested
+    RunId = $ExpectedRunId
+    Attempt = $ExpectedAttempt
+    Session = $ExpectedSession
+    Sha = $ExpectedSha
+  }
+}
+
+function Test-SaveAppOSLogCaptureDecision {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$ExpectedRunId,
+    [Parameter(Mandatory)][int]$ExpectedAttempt,
+    [Parameter(Mandatory)][string]$ExpectedSession,
+    [Parameter(Mandatory)][string]$ExpectedSha,
+    [Parameter(Mandatory)][bool]$CaptureRequested,
+    [AllowNull()][object]$Run,
+    [AllowEmptyCollection()][object[]]$Statuses = @()
+  )
+
+  $contract = New-SaveAppOSLogCaptureDecisionContract `
+    -ExpectedRunId $ExpectedRunId -ExpectedAttempt $ExpectedAttempt `
+    -ExpectedSession $ExpectedSession -ExpectedSha $ExpectedSha `
+    -CaptureRequested $CaptureRequested
+  if ($null -eq $Run) { return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'choice_run_not_visible' -Session $ExpectedSession }
+
+  $attempt = 0
+  $title = [regex]::Match([string]$Run.display_title,'^native-sim (?<session>[a-f0-9]{8}) · release · (?<minutes>[0-9]{1,3})m$')
+  if ([string]$Run.id -cne $ExpectedRunId -or
+      -not [int]::TryParse([string]$Run.run_attempt,[ref]$attempt) -or $attempt -ne $ExpectedAttempt -or
+      [string]$Run.path -cne '.github/workflows/native-sim.yml' -or
+      [string]$Run.event -cne 'workflow_dispatch' -or [string]$Run.head_branch -cne 'main' -or
+      [string]$Run.head_sha -cne $ExpectedSha -or $null -ne $Run.conclusion -or
+      [string]$Run.status -notin @('queued','in_progress') -or
+      -not $title.Success -or $title.Groups['session'].Value -cne $ExpectedSession -or
+      [string]::IsNullOrWhiteSpace([string]$Run.actor.login)) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_run_identity_mismatch' -Session $ExpectedSession
+  }
+
+  $matching = @($Statuses | Where-Object { [string]$_.context -ceq $contract.Context })
+  if ($matching.Count -eq 0) { return New-SaveAppCaptureReadinessResult -State 'waiting' -Reason 'choice_status_not_visible' -Session $ExpectedSession }
+  if ($matching.Count -ne 1) { return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_ambiguous' -Session $ExpectedSession }
+
+  $status = $matching[0]
+  $runCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $Run.created_at
+  $statusCreatedAt = ConvertTo-SaveAppNativeSimDateTimeOffset -Value $status.created_at
+  if ($null -eq $runCreatedAt -or $null -eq $statusCreatedAt) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_timestamp_invalid' -Session $ExpectedSession
+  }
+  if ([string]$status.state -cne 'success' -or
+      [string]$status.description -cne $contract.Description -or
+      [string]$status.sha -cne $ExpectedSha -or
+      [string]$status.creator.login -cne [string]$Run.actor.login -or
+      -not [string]::IsNullOrEmpty([string]$status.target_url) -or
+      $statusCreatedAt -lt $runCreatedAt) {
+    return New-SaveAppCaptureReadinessResult -State 'failed' -Reason 'choice_status_identity_mismatch' -Session $ExpectedSession
+  }
+
+  return [pscustomobject]@{
+    State = 'ready'
+    Reason = 'exact_run_capture_choice_confirmed'
+    Session = $ExpectedSession
+    CaptureEnabled = $CaptureRequested
+    RunId = $ExpectedRunId
+    Attempt = $ExpectedAttempt
+    Sha = $ExpectedSha
   }
 }
 
@@ -314,6 +422,7 @@ function Test-SaveAppNativeSimTransportReadiness {
     [Parameter(Mandatory)][int]$ExpectedAttempt,
     [Parameter(Mandatory)][string]$ExpectedSha,
     [Parameter(Mandatory)][string]$ExpectedBareUrl,
+    [Parameter(Mandatory)][bool]$ExpectedCaptureRequested,
     [ValidateSet('transport','session')][string]$ExpectedStatusKind = 'transport',
     [AllowNull()][object]$Run,
     [AllowEmptyCollection()][object[]]$Statuses = @()
@@ -347,8 +456,9 @@ function Test-SaveAppNativeSimTransportReadiness {
   }
   $session = $titleMatch.Groups['session'].Value
   $expectedContext = "native-sim/$session"
+  $captureChoice = if ($ExpectedCaptureRequested) { 'true' } else { 'false' }
   $expectedDescription = if ($ExpectedStatusKind -eq 'transport') {
-    "SaveApp transport ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
+    "SaveApp transport ready capture=$captureChoice session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
   } else {
     "SaveApp session ready session=$session run=$ExpectedRunId attempt=$ExpectedAttempt sha=$ExpectedSha"
   }
@@ -418,12 +528,13 @@ function Assert-SaveAppNativeSimTransportHandoff {
     throw 'NativeSim run metadata does not match the Actions URL; session links were withheld.'
   }
 
-  $statusKind = if ($CaptureRequested) { 'transport' } else { 'session' }
+  $statusKind = 'transport'
   $readiness = Test-SaveAppNativeSimTransportReadiness `
     -ExpectedRunId $ExpectedRunId `
     -ExpectedAttempt $ExpectedAttempt `
     -ExpectedSha $ExpectedSha `
     -ExpectedBareUrl $bareUrl `
+    -ExpectedCaptureRequested $CaptureRequested `
     -ExpectedStatusKind $statusKind `
     -Run $Run `
     -Statuses $Statuses
@@ -434,7 +545,7 @@ function Assert-SaveAppNativeSimTransportHandoff {
   # Keep the authenticated URL only in the caller's transient memory. This
   # result intentionally contains no URL, query string, or gate credential.
   return [pscustomobject]@{
-    State = if ($CaptureRequested) { 'transport_ready' } else { 'session_ready' }
+    State = 'transport_ready'
     Repository = $ExpectedRepository
     RunId = $ExpectedRunId
     Attempt = $ExpectedAttempt
@@ -505,6 +616,7 @@ function Test-SaveAppNativeSimCaptureReadiness {
     -ExpectedAttempt $ExpectedAttempt `
     -ExpectedSha $ExpectedSha `
     -ExpectedBareUrl $ExpectedBareUrl `
+    -ExpectedCaptureRequested $true `
     -Run $Run `
     -Statuses $Statuses
   if ($transport.State -ne 'ready') { return $transport }
@@ -773,4 +885,4 @@ process.stdout.write(JSON.stringify({ changed }) + '\n');
   }
 }
 
-Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Invoke-SaveAppSwiftPreflightGate,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppOSLogCaptureConfiguration,Get-SaveAppSimulatorStatusTarget,Assert-SaveAppNativeSimTransportHandoff,ConvertTo-SaveAppNativeSimDateTimeOffset,Get-SaveAppOSLogReadinessDeadline,Test-SaveAppNativeSimCaptureReadiness,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview
+Export-ModuleMember -Function Remove-SaveAppNativeSimEventSubscriptions,Select-SaveAppNativeSimActiveRuns,Assert-SaveAppSwiftPreflightResult,Invoke-SaveAppSwiftPreflightGate,Assert-SaveAppSimulatorUrl,Assert-SaveAppNativeSimExportBehavior,Assert-SaveAppNativeSimCaptureChoiceCompatibility,Assert-SaveAppOSLogCaptureConfiguration,New-SaveAppOSLogCaptureDecisionContract,Test-SaveAppOSLogCaptureDecision,Get-SaveAppSimulatorStatusTarget,Assert-SaveAppNativeSimTransportHandoff,ConvertTo-SaveAppNativeSimDateTimeOffset,Get-SaveAppOSLogReadinessDeadline,Test-SaveAppNativeSimCaptureReadiness,Assert-SaveAppSimulatorArchive,Assert-SaveAppArchiveRun,Select-SaveAppArchiveArtifact,Test-SaveAppArchiveBuildSteps,Assert-SaveAppNativeSimCliCompatible,Invoke-SaveAppNativeSimScaffoldPreview

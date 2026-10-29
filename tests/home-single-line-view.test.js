@@ -45,17 +45,21 @@ describe('Home Linha única view', () => {
   test('shows one truncated title and a bounded folder indicator beside real thumbnails', () => {
     expect(gallerySource).toMatch(/numberOfLines=\{1\}[\s\S]*?getHomeSingleLineTitle\(item\)/);
     expect(gallerySource).toMatch(/numberOfLines=\{1\}[\s\S]*?getHomeSingleLineTitle\(document\)/);
-    expect(gallerySource).toMatch(/HomeFolderIndicator maxWidth="28%" folderColor=\{folder\?\.color \?\? null\} name=\{folderName\}/);
+    expect((gallerySource.match(/<HomeFolderIndicator flexShrink=\{0\} maxWidth="42%" folderColor=\{folder\?\.color \?\? null\} name=\{folderName\} \/>/g) ?? [])).toHaveLength(5);
     expect(gallerySource).toMatch(/item\.previewImageUri[\s\S]*?contentFit="cover"[\s\S]*?link-outline/);
     expect(gallerySource).toMatch(/SavedTextThumbnail height=\{listThumbnailSize\} text=\{item\.text\} width=\{listThumbnailSize\}/);
     expect(gallerySource).toMatch(/<SavedDocumentThumbnail[\s\S]*?height=\{listThumbnailSize\}[\s\S]*?width=\{listThumbnailSize\}/);
     expect(gallerySource).toMatch(/source=\{\{ uri: previewUri \}\}/);
   });
 
-  test('keeps the folder directly after its title and reserves room when the title is long', () => {
-    expect(gallerySource).toMatch(/function getSingleLineTitleTextStyle\(theme: AppTheme, hasFolder: boolean\): TextStyle[\s\S]*?flexGrow: hasFolder \? 0 : 1,[\s\S]*?flexShrink: 1,[\s\S]*?minWidth: 0/);
-    expect((gallerySource.match(/getSingleLineTitleTextStyle\(theme, Boolean\(folderName\)\)/g) ?? [])).toHaveLength(5);
+  test('lets titles shrink before a width-bounded folder indicator on every row type', () => {
+    expect(gallerySource).toMatch(/function getSingleLineTitleTextStyle\(theme: AppTheme\): TextStyle[\s\S]*?flexBasis: 0,[\s\S]*?flexGrow: 1,[\s\S]*?flexShrink: 1,[\s\S]*?minWidth: 0/);
+    expect((gallerySource.match(/getSingleLineTitleTextStyle\(theme\)/g) ?? [])).toHaveLength(5);
+    expect((gallerySource.match(/<HomeFolderIndicator flexShrink=\{0\} maxWidth="42%"/g) ?? [])).toHaveLength(5);
     expect(gallerySource).toMatch(/function getSingleLineRowLayoutStyle[\s\S]*?gap: theme\.spacing\.xs/);
+    expect(gallerySource).toMatch(/const trigger = isSingleLineView \? \([\s\S]*?HomeFolderIndicator flexShrink=\{0\} maxWidth="42%"[\s\S]*?<HomeTagDots[\s\S]*?\) : isListView/);
+    expect(gallerySource).not.toMatch(/maxWidth="(?:24|28)%" folderColor=\{folder\?\.color \?\? null\} name=\{folderName\}/);
+    expect(gallerySource).toMatch(/ellipsizeMode="tail"[\s\S]*?numberOfLines=\{1\}[\s\S]*?flexShrink: 1, minWidth: 0[\s\S]*?\{compactProgress\}/);
   });
 
   test('adds the native submenu selection after the four existing modes', () => {

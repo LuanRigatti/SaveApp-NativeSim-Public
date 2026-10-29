@@ -4,7 +4,7 @@ export const HOME_VIEW_MODE_STORAGE_KEY = '@saveapp/home-view-mode';
 
 export type HomeViewMode = 'list' | 'compact-list' | 'single-line' | 'small' | 'large';
 
-export const DEFAULT_HOME_VIEW_MODE: HomeViewMode = 'large';
+export const DEFAULT_HOME_VIEW_MODE: HomeViewMode = 'list';
 
 export type HomeViewModeStorage = {
   getItem: (key: string) => Promise<string | null>;

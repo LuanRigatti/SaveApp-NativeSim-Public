@@ -520,6 +520,20 @@ describe("structured checklist library", () => {
     );
   });
 
+  test("creates initial tasks with their draft completion state and skips blank placeholder rows", async () => {
+    const checklistId = await checklistLibrary.createSavedChecklist("Compras", [
+      { text: "Papel higiênico", isCompleted: false },
+      { text: "Buscar encomenda", isCompleted: true },
+      { text: "  \n ", isCompleted: false },
+    ]);
+
+    const checklist = await checklistLibrary.getSavedChecklist(checklistId);
+    expect(checklist.tasks.map(({ text, isCompleted, position }) => ({ text, isCompleted, position }))).toEqual([
+      { text: "Papel higiênico", isCompleted: false, position: 0 },
+      { text: "Buscar encomenda", isCompleted: true, position: 1 },
+    ]);
+  });
+
   test("assigns the first added task position zero when the checklist is empty", async () => {
     const checklistId = await checklistLibrary.createSavedChecklist("Vazia");
 

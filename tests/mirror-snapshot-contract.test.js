@@ -32,9 +32,28 @@ describe('sanitized NativeSim mirror snapshot gate', () => {
       'modules/clipboard-url-detection/package.json',
       'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec',
       'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
+      'modules/rich-note-keyboard-toolbar/package.json',
+      'modules/rich-note-keyboard-toolbar/expo-module.config.json',
+      'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbar.podspec',
+      'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift',
+      'modules/rich-note-keyboard-toolbar/src/index.ts',
     ]) {
       expect(mirrorSecurity).toContain("'" + requiredLocalFile + "'");
     }
+  });
+
+  test('allows only the exact rich-note keyboard toolbar module files in the mirror', () => {
+    for (const file of [
+      'modules/rich-note-keyboard-toolbar/package.json',
+      'modules/rich-note-keyboard-toolbar/expo-module.config.json',
+      'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbar.podspec',
+      'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift',
+      'modules/rich-note-keyboard-toolbar/src/index.ts',
+    ]) {
+      expect(mirrorSecurity).toContain("'" + file + "'");
+      expect(snapshotGate).toContain("'" + file + "'");
+    }
+    expect(mirrorSecurity).not.toContain("$allowedDirectories = @('assets','src','docs','.agents/skills','tests','modules')");
   });
 
   test('requires the explicitly scoped no-Preflight skill in the safe mirror snapshot', () => {

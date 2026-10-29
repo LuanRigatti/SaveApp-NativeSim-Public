@@ -60,7 +60,7 @@ describe('native Home shell controls', () => {
 
     expect(menuOpening).not.toMatch(/onPress|onOpenChange|triggerSelectionHaptic/);
     expect(homeToolbarMenuSource).toMatch(/function withSelectionHaptic\(action: \(\) => void\): \(\) => void \{[\s\S]*?triggerSelectionHaptic\(\);[\s\S]*?action\(\);/);
-    expect(homeToolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).toHaveLength(8);
+    expect(homeToolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).toHaveLength(9);
   });
 
   test('uses a mounted SwiftUI Host and the native settings sheet with folder navigation', () => {
@@ -141,12 +141,18 @@ describe('native Home shell controls', () => {
     )?.[0] ?? '';
 
     expect(nativePage).toMatch(/<Text modifiers=\{\[foregroundStyle\(theme\.colors\.textPrimary\), lineLimit\(2\)\]\}>\{title\}<\/Text>/);
-    expect(nativePage).toMatch(/<ContextMenu key=\{`\$\{item\.itemType\}:\$\{item\.itemId\}`\}>[\s\S]*?<ContextMenu\.Items>[\s\S]*?<Button label="Restaurar" onPress=\{\(\) => void restore\(item\)\} systemImage="arrow\.uturn\.backward" \/>[\s\S]*?<Button[\s\S]*?label="Apagar definitivamente"[\s\S]*?role="destructive"[\s\S]*?systemImage="trash"[\s\S]*?<\/ContextMenu\.Items>[\s\S]*?<ContextMenu\.Trigger>[\s\S]*?<HStack[\s\S]*?<Spacer \/>[\s\S]*?<\/HStack>[\s\S]*?<\/ContextMenu\.Trigger>[\s\S]*?<\/ContextMenu>/);
+    expect(nativePage).toMatch(/<ContextMenu key=\{`\$\{item\.itemType\}:\$\{item\.itemId\}`\}>[\s\S]*?<ContextMenu\.Items>[\s\S]*?<Button[\s\S]*?label="Restaurar"[\s\S]*?onPress=\{\(\) => void restore\(item\)\}[\s\S]*?systemImage="arrow\.uturn\.backward"[\s\S]*?<Button[\s\S]*?label="Apagar definitivamente"[\s\S]*?role="destructive"[\s\S]*?systemImage="trash"[\s\S]*?<\/ContextMenu\.Items>[\s\S]*?<ContextMenu\.Trigger>[\s\S]*?<HStack[\s\S]*?<Spacer \/>[\s\S]*?<\/HStack>[\s\S]*?<\/ContextMenu\.Trigger>[\s\S]*?<\/ContextMenu>/);
     expect(nativePage).not.toMatch(/ContextMenu\.Preview|Teste A\/B|menuUsesGlass|Ações do conteúdo apagado|systemImage="ellipsis"/);
     expect(nativePage).not.toMatch(/<Menu\b/);
     expect(nativePage).toContain("accessibilityHint('Toque e segure para restaurar ou apagar definitivamente.')");
-    expect(nativePage).toMatch(/<SwiftUIAlert[\s\S]*?title="Apagar item\?"[\s\S]*?<SwiftUIAlert\.Message>[\s\S]*?Este conteúdo será removido do SaveApp e não poderá ser restaurado\.[\s\S]*?<SwiftUIAlert\.Actions>[\s\S]*?<Button[\s\S]*?label="Cancelar"[\s\S]*?role="cancel"[\s\S]*?<Button[\s\S]*?label="Apagar"[\s\S]*?if \(item\) void permanentlyDelete\(item\)[\s\S]*?role="destructive"/);
-    expect(nativePage).toMatch(/<Button[\s\S]*?label="Cancelar"[\s\S]*?onPress=\{\(\) => setPendingDeletion\(null\)\}[\s\S]*?role="cancel"/);
+    expect(nativePage).toContain("label=\"Restaurar tudo\"");
+    expect(nativePage).toContain("label=\"Apagar tudo\"");
+    expect(nativePage).toContain('void restoreAll()');
+    expect(nativePage).toContain('setPendingDeleteAll(true)');
+    expect(nativePage).toContain('permanentlyDeleteAll()');
+    expect(nativePage).toContain('Os ${items.length} conteúdos serão removidos');
+    expect(nativePage).toMatch(/<SwiftUIAlert[\s\S]*?title=\{pendingDeleteAll \? 'Apagar tudo\?' : 'Apagar item\?'\}[\s\S]*?<SwiftUIAlert\.Message>[\s\S]*?não poderão ser restaurados\.[\s\S]*?<SwiftUIAlert\.Actions>[\s\S]*?<Button[\s\S]*?label="Cancelar"[\s\S]*?role="cancel"[\s\S]*?<Button[\s\S]*?label=\{pendingDeleteAll \? 'Apagar tudo' : 'Apagar'\}[\s\S]*?if \(deleteAll\) void permanentlyDeleteAll\(\);[\s\S]*?else if \(item\) void permanentlyDelete\(item\)[\s\S]*?role="destructive"/);
+    expect(nativePage).toMatch(/<Button[\s\S]*?label="Cancelar"[\s\S]*?setPendingDeletion\(null\);[\s\S]*?setPendingDeleteAll\(false\)[\s\S]*?role="cancel"/);
     expect(nativePage).not.toMatch(/ConfirmationDialog|Alert\.alert|router\.(back|replace|push)|setPath\(/);
     expect(nativePage).toContain('operationError');
 
@@ -158,17 +164,37 @@ describe('native Home shell controls', () => {
     expect(fallbackItemRow).not.toContain('ellipsis-horizontal');
     expect(fallbackItemRow).not.toMatch(/<Text[^>]*>\s*(?:Restaurar|Apagar definitivamente)\s*<\/Text>/);
     expect(fallbackPage).not.toMatch(/setCurrentPage\(|router\.(back|replace|push)/);
+    expect(fallbackPage).toContain('accessibilityLabel="Restaurar tudo"');
+    expect(fallbackPage).toContain('accessibilityLabel="Apagar tudo definitivamente"');
+    expect(fallbackPage).toContain('recentlyDeleted.restoreAll()');
+    expect(fallbackPage).toContain('recentlyDeleted.permanentlyDeleteAll()');
+    expect(fallbackPage).toContain("'Apagar tudo'");
+    expect(fallbackPage).toContain("{ text: 'Cancelar', style: 'cancel' }");
     expect(fallbackMenuHelper).toContain('ActionSheetIOS.showActionSheetWithOptions');
     expect(fallbackMenuHelper).not.toContain('Autenticar para ver');
     expect(fallbackMenuHelper).toContain("{ label: 'Restaurar'");
     expect(fallbackMenuHelper).toContain("{ label: 'Apagar definitivamente'");
     expect(fallbackMenuHelper).toContain("{ text: 'Cancelar', style: 'cancel' as const }");
     expect(fallbackSource).toMatch(/onPermanentlyDelete: \(selectedItem\) => Alert\.alert\([\s\S]*?text: 'Cancelar',[\s\S]*?text: 'Apagar definitivamente',[\s\S]*?recentlyDeleted\.permanentlyDelete\(selectedItem\)/);
+    const trashHookSource = readSource('../src/features/home-trash/useRecentlyDeletedItems.ts');
+    expect(trashHookSource).toContain("const runBulkOperation = useCallback(async (action: 'restore' | 'delete') =>");
+    expect(trashHookSource).toContain('const restoreAll = useCallback(() => runBulkOperation(\'restore\')');
+    expect(trashHookSource).toContain('const permanentlyDeleteAll = useCallback(() => runBulkOperation(\'delete\')');
+    expect(trashHookSource).toContain('const protectedFolderIds = [...new Set(');
+    expect(trashHookSource).toContain('if (isBulkOperationPending || isLoading || items.length === 0) return;');
+    expect(trashHookSource).toContain("authenticateWithFaceId('Autentique para modificar conteúdos protegidos.')");
+    expect(trashHookSource).toContain('await restoreRecentlyDeletedItem(item.itemType, item.itemId)');
+    expect(trashHookSource).toContain('await permanentlyDeleteRecentlyDeletedItem(item.itemType, item.itemId)');
+    expect(trashHookSource).toContain('Alguns conteúdos não puderam ser processados e continuam em Apagados recentemente.');
+    const authorizeBatchIndex = trashHookSource.indexOf('for (const folderId of protectedFolderIds)');
+    const mutateBatchIndex = trashHookSource.indexOf('for (const item of batchItems)', authorizeBatchIndex);
+    expect(authorizeBatchIndex).toBeGreaterThan(-1);
+    expect(mutateBatchIndex).toBeGreaterThan(authorizeBatchIndex);
   });
 
   test('permanent trash deletion reports failure without navigating away or hiding the item', () => {
     const trashHookSource = readSource('../src/features/home-trash/useRecentlyDeletedItems.ts');
-    const deleteHandler = trashHookSource.match(/const permanentlyDelete = useCallback\([\s\S]*?\n  \}, \[authorizeItem, refresh\]\);/)?.[0] ?? '';
+    const deleteHandler = trashHookSource.match(/const permanentlyDelete = useCallback\([\s\S]*?\n  \}, \[authorizeItem, isBulkOperationPending, refresh\]\);/)?.[0] ?? '';
 
     expect(deleteHandler).toContain('permanentlyDeleteRecentlyDeletedItem(item.itemType, item.itemId)');
     expect(deleteHandler).toContain('remainingItems.some((candidate) => candidate.itemType === item.itemType && candidate.itemId === item.itemId)');

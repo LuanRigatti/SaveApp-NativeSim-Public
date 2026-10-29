@@ -43,7 +43,7 @@ describe('home folder regression contract', () => {
     expect(toolbarMenuSource).not.toMatch(/title=\{currentLabel\}|>\s*\{currentLabel\}\s*</);
     expect(tabsLayoutSource).toMatch(/<Stack\.Toolbar\.Button[\s\S]*?icon=\{favoritesOnly \? 'star\.fill' : 'star'\}[\s\S]*?selected=\{favoritesOnly\}[\s\S]*?\{createHomeFolderToolbarMenu\(/);
     expect(tabsLayoutSource).toMatch(/selection\.kind === 'folder' \? selection\.folderId : null/);
-    expect(tabsLayoutSource).toMatch(/currentFolder\?\.name \?\? \(\s*view === 'folders' \? 'Pastas' : 'Todos'/);
+    expect(tabsLayoutSource).toMatch(/currentFolder\?\.name \?\? \(\s*selectedCategory\s*\? getHomeCategoryDefinition\(selectedCategory\)\.label\s*:\s*view === 'folders' \? 'Pastas' : 'Todos'/);
     expect(toolbarMenuSource).toMatch(/>\s*Todos\s*<\/Stack\.Toolbar\.MenuAction>/);
     for (const fallbackSource of [
       readSource('../src/features/home-folders/HomeFolderFilterButton.native.tsx'),
@@ -57,11 +57,13 @@ describe('home folder regression contract', () => {
       expect(fallbackSource).not.toContain("selectView('unfiled')");
     }
     expect(tabsLayoutSource).not.toMatch(/useWindowDimensions|menuMaxWidth/);
-    expect(toolbarMenuSource).toMatch(/Todos[\s\S]*?Pastas[\s\S]*?inline title="Pastas existentes"[\s\S]*?icon="square\.grid\.2x2" title="Visualização"[\s\S]*?Maiores[\s\S]*?Menores[\s\S]*?Lista[\s\S]*?Lista compacta[\s\S]*?Linha única/);
+    expect(toolbarMenuSource).toMatch(/Todos[\s\S]*?Pastas[\s\S]*?inline title="CATEGORIAS"[\s\S]*?HOME_CATEGORIES\.map[\s\S]*?inline title="MINHAS PASTAS"[\s\S]*?icon="square\.grid\.2x2" title="Visualização"[\s\S]*?Maiores[\s\S]*?Menores[\s\S]*?Lista[\s\S]*?Lista compacta[\s\S]*?Linha única/);
+    expect(toolbarMenuSource).not.toContain('Pastas existentes');
     expect(toolbarMenuSource).not.toContain('Sem pasta');
     expect(toolbarMenuSource).not.toContain("onSelectHomeView('unfiled')");
     expect(toolbarMenuSource).toContain('<Stack.Toolbar.Menu icon="square.grid.2x2" title="Visualização">');
-    expect(toolbarMenuSource).toMatch(/<Stack\.Toolbar\.MenuAction[\s\S]*?icon="folder"[\s\S]*?isOn=\{!currentFolderId && view === 'all-items'\}[\s\S]*?onPress=\{withSelectionHaptic\(\(\) => onSelectHomeView\('all-items'\)\)\}[\s\S]*?>\s*Todos/);
+    expect(toolbarMenuSource).toMatch(/<Stack\.Toolbar\.MenuAction[\s\S]*?icon="folder"[\s\S]*?isOn=\{!currentFolderId && !selectedCategory && view === 'all-items'\}[\s\S]*?onPress=\{withSelectionHaptic\(\(\) => onSelectHomeView\('all-items'\)\)\}[\s\S]*?>\s*Todos/);
+    expect(toolbarMenuSource).toMatch(/isOn=\{!currentFolderId && selectedCategory === category\.id\}[\s\S]*?onPress=\{withSelectionHaptic\(\(\) => onSelectCategory\(category\.id\)\)\}/);
     expect(toolbarMenuSource).toMatch(/isOn=\{currentFolderId === folder\.id\}[\s\S]*?onPress=\{withSelectionHaptic\(\(\) => onOpenFolder\(folder\.id\)\)\}/);
     expect(toolbarMenuSource).toMatch(/isOn=\{viewMode === 'single-line'\}[\s\S]*?onPress=\{withSelectionHaptic\(\(\) => onSelectViewMode\('single-line'\)\)\}[\s\S]*?>\s*Linha única/);
     expect(toolbarMenuSource).not.toMatch(/folder\.fill/);
@@ -79,7 +81,7 @@ describe('home folder regression contract', () => {
 
     expect(menuOpening).not.toMatch(/onPress|onOpenChange|triggerSelectionHaptic/);
     expect(toolbarMenuSource).toMatch(/function withSelectionHaptic\(action: \(\) => void\): \(\) => void \{\s*return \(\) => \{\s*triggerSelectionHaptic\(\);\s*action\(\);/);
-    expect((toolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).length).toBe(8);
+    expect((toolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).length).toBe(9);
     expect(toolbarMenuSource).not.toMatch(/onPress=\{\(\) => \{\s*triggerSelectionHaptic/);
   });
 
@@ -167,19 +169,27 @@ describe('home folder regression contract', () => {
   });
 
   test('restores a selected folder and resets gallery scroll on filter change', () => {
+    expect(selectionStorageSource).toMatch(/candidate\.kind === 'category' && isHomeCategory\(candidate\.category\)/);
     expect(selectionStorageSource).toMatch(/candidate\.kind === 'folder'[\s\S]*?isExistingFolder\(candidate\.folderId, folders\)/);
     expect(selectionStorageSource).toMatch(/persistHomeFolderSelection\(storage, selection\)/);
     expect(folderProviderSource).toMatch(/currentSelection\.kind === 'folder'[\s\S]*?updateSelection\(\{ kind: 'view', view: 'all-items' \}\)/);
     expect(gallerySource).toMatch(/currentFolderFilterKey = favoritesOnly\s*\? 'favorites'[\s\S]*?folderFilter\.kind === 'folder'[\s\S]*?folder:\$\{folderFilter\.folderId\}/);
+    expect(gallerySource).toMatch(/folderFilter\.kind === 'category'[\s\S]*?category:\$\{folderFilter\.category\}/);
     expect(gallerySource).toMatch(/if \(previousFolderFilterKeyRef\.current === currentFolderFilterKey\) return;[\s\S]*?scrollToOffset\(\{ offset: 0, animated: false \}\)/);
     expect(gallerySource).toMatch(/if \(favoritesOnly\)[\s\S]*?filterHomeFavoriteItems\([\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
     expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
     expect(gallerySource).toMatch(/buildHomeGalleryEntriesWhenReady\(filteredItems/);
+    expect(gallerySource).toMatch(/shouldShowHomeCategoryEmptyState\([\s\S]*?catalogsLoadedSuccessfully: homeCatalogsLoadedSuccessfully[\s\S]*?categoryItemCount: categoryCatalogItemCount/);
+    expect(gallerySource).toContain('getHomeCategoryEmptyMessage(folderFilter.category)');
   });
 
   test('keeps outline folder symbols for Todos, Pastas, and individual folders without a Sem pasta action', () => {
-    expect(toolbarMenuSource).toMatch(/<Stack\.Toolbar\.MenuAction[\s\S]*?icon="folder"[\s\S]*?isOn=\{!currentFolderId && view === 'all-items'\}[\s\S]*?>\s*Todos/);
-    expect(toolbarMenuSource).toMatch(/icon="folder"[\s\S]*?isOn=\{!currentFolderId && view === 'folders'\}[\s\S]*?>\s*Pastas/);
+    expect(toolbarMenuSource).toMatch(/<Stack\.Toolbar\.MenuAction[\s\S]*?icon="folder"[\s\S]*?isOn=\{!currentFolderId && !selectedCategory && view === 'all-items'\}[\s\S]*?>\s*Todos/);
+    expect(toolbarMenuSource).toMatch(/icon="folder"[\s\S]*?isOn=\{!currentFolderId && !selectedCategory && view === 'folders'\}[\s\S]*?>\s*Pastas/);
+    expect(toolbarMenuSource).toMatch(/inline title="CATEGORIAS"[\s\S]*?icon=\{category\.icon\}[\s\S]*?isOn=\{!currentFolderId && selectedCategory === category\.id\}/);
+    expect(toolbarMenuSource).toMatch(/inline title="MINHAS PASTAS"[\s\S]*?folder\.name/);
+    expect(folderFilterNativeSource).toMatch(/id: 'section-title:categories',[\s\S]*?titleColor: theme\.colors\.textSecondary/);
+    expect(folderFilterNativeSource).toMatch(/id: 'section-title:folders',[\s\S]*?titleColor: theme\.colors\.textSecondary/);
     expect(toolbarMenuSource).toMatch(/icon="folder"[\s\S]*?isOn=\{currentFolderId === folder\.id\}[\s\S]*?>\s*\{folder\.name\}/);
     expect(toolbarMenuSource).not.toContain('Sem pasta');
     expect(toolbarMenuSource).not.toMatch(/checkmark/);
@@ -188,7 +198,7 @@ describe('home folder regression contract', () => {
 
   test('keeps the same gallery capabilities and five modes inside folder detail', () => {
     expect(folderScreenSource).toMatch(/PhotoMasonryGallery[\s\S]*?folderFilter=\{folderFilter\}/);
-    expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?allItems,[\s\S]*?folderFilter,[\s\S]*?folderIdByItemKey,[\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
+    expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?catalogItems,[\s\S]*?folderFilter,[\s\S]*?folderIdByItemKey,[\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
     expect(gallerySource).toMatch(/<Link\.Preview style=\{previewSize\}>/);
     expect(gallerySource).toMatch(/<Link\.AppleZoom>\{mediaImage\}<\/Link\.AppleZoom>/);
     for (const action of ['Apagar imagem', 'Apagar vídeo', 'Apagar link', 'Apagar texto', 'Apagar arquivo']) {
@@ -227,7 +237,7 @@ describe('home folder regression contract', () => {
     expect(folderFilterSource).toMatch(/getHomeFolderAccentColor\(folder\.color, accentColor, resolvedMode\)/);
     expect(folderFilterSource).toMatch(/color=\{selectedFolderColor\} name="folder-outline"/);
     expect(folderFilterNativeSource).toMatch(/imageColor: getHomeFolderAccentColor\(folder\.color, accentColor, resolvedMode\)/);
-    expect(folderFilterNativeSource).toMatch(/color=\{selectedFolderColor\} name="folder-outline"/);
+    expect(folderFilterNativeSource).toMatch(/color=\{selectedCategory \? theme\.colors\.primary : selectedFolderColor\} name="folder-outline"/);
     expect(tabsLayoutSource).toMatch(/const folderToolbarTint = currentFolder[\s\S]*?getHomeFolderAccentColor\(currentFolder\.color, accentColor, resolvedMode\)/);
     expect(tabsLayoutSource).toMatch(/tintColor: folderToolbarTint/);
     expect(contextMenuFallbackSource).toMatch(/action\.destructive \? theme\.colors\.danger : theme\.colors\.primary/);

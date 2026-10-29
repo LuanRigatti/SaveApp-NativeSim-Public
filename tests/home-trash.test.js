@@ -168,7 +168,7 @@ describe('recently deleted local content', () => {
       /void Promise\.resolve\(\)\.then\(\(\) => refresh\(\)\);\s*\}, \[isActive, refresh, setProtectedTrashContentVisible, setRevealedFolders\]\);/,
     );
     expect(hook).toMatch(/if \(!isActive \|\| !isAppActive \|\| AppState\.currentState !== 'active'\) \{\s*return redactProtectedItems\(items\);/);
-    expect(hook).toMatch(/return \{ items: visibleItems,/);
+    expect(hook).toMatch(/return \{\s*items: visibleItems,/);
   });
 
   test('moves every content type without removing files, tasks, folder links, or tags', async () => {

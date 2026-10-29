@@ -161,6 +161,7 @@ export async function saveLinkWithPreview(
 export type TextSaveAdapter = {
   insertText: (text: string, createdAt: number) => Promise<SavedText>;
   deleteInsertedText: (id: number) => Promise<void>;
+  isTextValid?: (text: string) => boolean;
   now?: () => number;
 };
 
@@ -169,7 +170,7 @@ export async function saveTextContent(
   adapter: TextSaveAdapter,
   signal?: AbortSignal,
 ): Promise<SavedText> {
-  if (!text.trim()) {
+  if (!(adapter.isTextValid?.(text) ?? text.trim().length > 0)) {
     throw new EmptySavedTextError();
   }
   if (signal?.aborted) throw makeAbortError();

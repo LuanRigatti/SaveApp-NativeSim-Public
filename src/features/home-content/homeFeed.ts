@@ -94,6 +94,40 @@ export function areHomeFeedSourcesReady(startupState: HomeFeedStartupState): boo
   );
 }
 
+export function shouldShowGlobalHomeEmptyState(input: {
+  catalogsLoadedSuccessfully: boolean;
+  mediaCount: number;
+  savedContentCount: number;
+  documentCount: number;
+  checklistCount: number;
+  searchQuery: string;
+  favoritesOnly: boolean;
+  folderFilterKind: 'all-items' | 'category' | 'folder' | 'unfiled';
+}): boolean {
+  return input.catalogsLoadedSuccessfully &&
+    input.mediaCount === 0 &&
+    input.savedContentCount === 0 &&
+    input.documentCount === 0 &&
+    input.checklistCount === 0 &&
+    (input.folderFilterKind === 'all-items' || input.folderFilterKind === 'category') &&
+    !input.favoritesOnly &&
+    input.searchQuery.trim().length === 0;
+}
+
+export function shouldShowHomeCategoryEmptyState(input: {
+  catalogsLoadedSuccessfully: boolean;
+  totalItemCount: number;
+  categoryItemCount: number;
+  searchQuery: string;
+  favoritesOnly: boolean;
+}): boolean {
+  return input.catalogsLoadedSuccessfully &&
+    input.totalItemCount > 0 &&
+    input.categoryItemCount === 0 &&
+    !input.favoritesOnly &&
+    input.searchQuery.trim().length === 0;
+}
+
 export function buildHomeGalleryEntriesWhenReady(
   items: readonly SavedHomeItem[],
   now: Date,

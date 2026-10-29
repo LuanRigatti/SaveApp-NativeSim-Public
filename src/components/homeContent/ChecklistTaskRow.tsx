@@ -10,13 +10,17 @@ import {
 import { useAppTheme } from '@/theme';
 
 type ChecklistTaskRowProps = {
-  task: SavedChecklistTask;
+  task: Pick<SavedChecklistTask, 'id' | 'text' | 'isCompleted'>;
   index: number;
   text: string;
   disabled: boolean;
   onTextChange: (value: string) => void;
   onTextBlur: () => void;
   onToggle: () => void;
+  onSubmitEditing?: () => void;
+  rowMinimumHeight?: number;
+  verticalHitSlop?: number;
+  checkboxHitTargetWidth?: number;
 };
 
 type ChecklistCheckboxIndicatorProps = {
@@ -95,6 +99,10 @@ export function ChecklistTaskRow({
   onTextChange,
   onTextBlur,
   onToggle,
+  onSubmitEditing,
+  rowMinimumHeight,
+  verticalHitSlop = 4,
+  checkboxHitTargetWidth = 32,
 }: ChecklistTaskRowProps) {
   const { theme } = useAppTheme();
   const textInputRef = useRef<TextInputInstance | null>(null);
@@ -102,6 +110,7 @@ export function ChecklistTaskRow({
   const bodyLineHeight = typeof theme.typography.body.lineHeight === 'number'
     ? theme.typography.body.lineHeight
     : Math.ceil(bodyFontSize * 1.3);
+  const rowHeight = Math.max(theme.sizes.touchTargetMinimum, rowMinimumHeight ?? theme.sizes.touchTargetMinimum);
   const fontScale = PixelRatio.getFontScale();
   const [textHeight, setTextHeight] = useState(bodyLineHeight);
   const [displayTextHeight, setDisplayTextHeight] = useState(bodyLineHeight);
@@ -124,7 +133,7 @@ export function ChecklistTaskRow({
     checkboxSize: 22,
     contentHeight: isEditing ? textHeight : displayTextHeight,
     firstLineHeight,
-    rowHeight: theme.sizes.touchTargetMinimum,
+    rowHeight,
   });
   const beginEditing = useCallback(() => {
     if (disabled) return;
@@ -158,7 +167,7 @@ export function ChecklistTaskRow({
         flexDirection: 'row',
         flexShrink: 0,
         gap: 0,
-        minHeight: theme.sizes.touchTargetMinimum,
+        minHeight: rowHeight,
         minWidth: 0,
         paddingLeft: 0,
         paddingRight: theme.spacing.xxs,
@@ -171,19 +180,24 @@ export function ChecklistTaskRow({
         accessibilityState={{ checked: task.isCompleted, disabled }}
         disabled={disabled}
         onPress={onToggle}
-        hitSlop={{ bottom: 4, left: 12, right: 0, top: 4 }}
+        hitSlop={{
+          bottom: verticalHitSlop,
+          left: checkboxHitTargetWidth >= theme.sizes.touchTargetMinimum ? 0 : 12,
+          right: 0,
+          top: verticalHitSlop,
+        }}
         style={{
           alignItems: 'flex-start',
           height: theme.sizes.touchTargetMinimum,
           justifyContent: 'flex-start',
           paddingTop: checkboxTopOffset,
-          width: 32,
+          width: checkboxHitTargetWidth,
         }}
       >
         <ChecklistCheckboxIndicator isCompleted={task.isCompleted} />
       </Pressable>
       {isEditing ? (
-        <View style={{ flex: 1, justifyContent: 'center', minHeight: 44, minWidth: 0 }}>
+        <View style={{ flex: 1, justifyContent: 'center', minHeight: rowHeight, minWidth: 0 }}>
           <TextInput
             accessibilityLabel={`Editar tarefa ${index + 1}`}
             editable={!disabled}
@@ -196,8 +210,11 @@ export function ChecklistTaskRow({
             onChangeText={onTextChange}
             onContentSizeChange={(event) => onContentSizeChange(event.nativeEvent.contentSize.height)}
             onLayout={(event) => onTextLayout(event.nativeEvent.layout.width)}
+            onSubmitEditing={onSubmitEditing}
             ref={textInputRef}
+            returnKeyType={onSubmitEditing ? 'next' : undefined}
             scrollEnabled={false}
+            submitBehavior={onSubmitEditing ? 'submit' : undefined}
             style={[
               theme.typography.body,
               {
@@ -225,7 +242,7 @@ export function ChecklistTaskRow({
           disabled={disabled}
           onLayout={(event) => onTextLayout(event.nativeEvent.layout.width)}
           onPress={beginEditing}
-          style={{ flex: 1, justifyContent: 'center', minHeight: 44, minWidth: 0 }}
+          style={{ flex: 1, justifyContent: 'center', minHeight: rowHeight, minWidth: 0 }}
         >
           <Text
             onTextLayout={(event) => onFirstLineLayout(event.nativeEvent.lines[0]?.height ?? bodyLineHeight)}

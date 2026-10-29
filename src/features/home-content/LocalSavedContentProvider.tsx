@@ -13,14 +13,16 @@ import {
 import {
   getSavedText,
   listSavedHomeContent,
+  cleanupUnreferencedSavedNoteAssets,
   saveSavedLink,
   saveSavedText,
+  updateSavedText,
 } from './savedContentLibrary';
 import { prependSavedHomeContent } from './homeContentState';
 import { requestConfirmedSavedContentDeletion } from './contentDeletionPipeline';
 import { consumePendingTextReveal } from './textComposerNavigation';
 import { importPendingQuickSaveLinks } from '@/features/dynamic-island/quickSaveQueue';
-import type { SavedHomeContent } from './homeContentTypes';
+import type { SavedHomeContent, SavedText } from './homeContentTypes';
 import { moveSavedItemToRecentlyDeleted } from '@/features/home-trash/trashLibrary';
 import { recordSaveAppDiagnosticEvent } from '../../../modules/clipboard-url-detection/src';
 
@@ -29,9 +31,11 @@ type HomeContentRefreshReason = 'home_focus' | 'app_foreground';
 type SavedContentContextValue = {
   contents: SavedHomeContent[];
   isReady: boolean;
+  hasCatalogLoadSucceeded: boolean;
   refresh: (reason?: HomeContentRefreshReason) => Promise<void>;
   saveLink: (url: string, signal?: AbortSignal) => Promise<void>;
   saveText: (text: string, signal?: AbortSignal) => Promise<void>;
+  updateText: (id: number, text: string) => Promise<SavedText>;
   consumePendingTextReveal: () => number | null;
   getText: (id: number) => Promise<Extract<SavedHomeContent, { contentType: 'text' }> | null>;
   requestDeleteContent: (
@@ -47,6 +51,7 @@ const SavedContentContext = createContext<SavedContentContextValue | null>(null)
 export function LocalSavedContentProvider({ children }: { children: ReactNode }) {
   const [contents, setContents] = useState<SavedHomeContent[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [hasCatalogLoadSucceeded, setHasCatalogLoadSucceeded] = useState(false);
   const initializationRef = useRef<Promise<void> | null>(null);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const pendingTextRevealIdRef = useRef<number | null>(null);
@@ -55,15 +60,24 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
     if (!initializationRef.current) {
       recordSaveAppDiagnosticEvent('home.catalog.initialize_started');
       initializationRef.current = importPendingQuickSaveLinks()
-        .then(() => listSavedHomeContent())
+        .then(async () => {
+          try {
+            await cleanupUnreferencedSavedNoteAssets();
+          } catch {
+            // Asset cleanup is best effort and never blocks reading the existing catalog.
+          }
+          return listSavedHomeContent();
+        })
         .then((nextContents) => {
           setContents(nextContents);
+          setHasCatalogLoadSucceeded(true);
           recordSaveAppDiagnosticEvent('home.catalog.initialize_completed');
           recordSaveAppDiagnosticEvent(nextContents.some((item) => item.contentType === 'link')
             ? 'home.catalog.state_updated_links_present'
             : 'home.catalog.state_updated_links_absent');
         })
         .catch((error: unknown) => {
+          setHasCatalogLoadSucceeded(false);
           initializationRef.current = null;
           recordSaveAppDiagnosticEvent('home.catalog.initialize_failed');
           throw error;
@@ -90,10 +104,16 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
       .then(async () => {
         initializedBeforeRefresh = true;
         await importPendingQuickSaveLinks();
+        try {
+          await cleanupUnreferencedSavedNoteAssets();
+        } catch {
+          // Asset cleanup is best effort and never blocks Home refresh.
+        }
         return listSavedHomeContent();
       })
       .then((nextContents) => {
         setContents(nextContents);
+        setHasCatalogLoadSucceeded(true);
         setIsReady(true);
         recordSaveAppDiagnosticEvent('home.catalog.refresh_completed');
         recordSaveAppDiagnosticEvent(nextContents.some((item) => item.contentType === 'link')
@@ -101,6 +121,7 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
           : 'home.catalog.state_updated_links_absent');
       })
       .catch(() => {
+        setHasCatalogLoadSucceeded(false);
         // Keep the last successfully rendered catalog, but expose a fixed native diagnostic.
         if (initializedBeforeRefresh) recordSaveAppDiagnosticEvent('home.catalog.refresh_failed');
       })
@@ -139,6 +160,18 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
       const saved = await saveSavedText(text, signal);
       setContents((current) => prependSavedHomeContent(current, saved));
       pendingTextRevealIdRef.current = saved.id;
+    },
+    [initialize],
+  );
+
+  const updateText = useCallback(
+    async (id: number, text: string) => {
+      await initialize();
+      const updated = await updateSavedText(id, text);
+      setContents((current) => current.map((item) =>
+        item.contentType === 'text' && item.id === id ? updated : item,
+      ));
+      return updated;
     },
     [initialize],
   );
@@ -220,14 +253,16 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
     () => ({
       contents,
       isReady,
+      hasCatalogLoadSucceeded,
       refresh,
       saveLink,
       saveText,
+      updateText,
       consumePendingTextReveal: consumeTextReveal,
       getText,
       requestDeleteContent,
     }),
-    [contents, consumeTextReveal, getText, isReady, refresh, requestDeleteContent, saveLink, saveText],
+    [contents, consumeTextReveal, getText, hasCatalogLoadSucceeded, isReady, refresh, requestDeleteContent, saveLink, saveText, updateText],
   );
 
   return <SavedContentContext.Provider value={value}>{children}</SavedContentContext.Provider>;

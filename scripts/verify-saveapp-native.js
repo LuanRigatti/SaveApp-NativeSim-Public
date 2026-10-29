@@ -32,7 +32,7 @@ const expectedVersions = {
   'expo-video': '~58.0.13',
   'expo-widgets': '~58.0.25',
   'react-native-screens': '4.30.0',
-  'react-native': '0.88.0',
+  'react-native': '0.88.1',
   'jest-expo': '~58.0.13',
 };
 
@@ -73,6 +73,47 @@ for (const [relativePath, marker] of checks) {
   if (!fs.existsSync(filePath) || !fs.readFileSync(filePath, 'utf8').includes(marker)) {
     fail('missing expected native contract: ' + relativePath);
   }
+}
+
+const richNoteToolbarNativePath = path.join(
+  root,
+  'modules',
+  'rich-note-keyboard-toolbar',
+  'ios',
+  'SaveAppRichNoteKeyboardToolbarModule.swift',
+);
+const richNoteToolbarNativeSource = fs.existsSync(richNoteToolbarNativePath)
+  ? fs.readFileSync(richNoteToolbarNativePath, 'utf8')
+  : '';
+const richNoteToolbarComponentPath = path.join(root, 'src/components/homeContent/RichNoteKeyboardToolbar.ios.tsx');
+const richNoteToolbarComponentSource = fs.existsSync(richNoteToolbarComponentPath)
+  ? fs.readFileSync(richNoteToolbarComponentPath, 'utf8')
+  : '';
+const richNoteEditorPath = path.join(root, 'src/components/homeContent/RichNoteEditor.tsx');
+const richNoteEditorSource = fs.existsSync(richNoteEditorPath)
+  ? fs.readFileSync(richNoteEditorPath, 'utf8')
+  : '';
+const richNoteToolbarMarkers = [
+  'parentView.keyboardLayoutGuide',
+  'usesBottomSafeArea = true',
+  'followsUndockedKeyboard = true',
+  'keyboardLayoutGuide.topAnchor',
+  'UIHostingController<RichNoteKeyboardToolbarContent>',
+  'Events("onAction")',
+  'Menu {',
+  'glassEffect(.regular.interactive(), in: Capsule())',
+  '.fill(.regularMaterial)',
+];
+if (
+  !richNoteToolbarNativeSource ||
+  richNoteToolbarMarkers.some((marker) => !richNoteToolbarNativeSource.includes(marker)) ||
+  /keyboardDidShow|keyboardDidHide|keyboardWillShow|keyboardWillHide/.test(richNoteToolbarNativeSource) ||
+  !richNoteToolbarComponentSource.includes('requireOptionalNativeModule') ||
+  !richNoteToolbarComponentSource.includes('ViewPrototypes?.[`${moduleName}_Dock`]') ||
+  !richNoteToolbarComponentSource.includes("requireNativeViewManager<NativeToolbarProps>(moduleName, 'Dock')") ||
+  /InputAccessoryView|inputAccessoryViewID|ACCESSORY_ID|KeyboardAvoidingView/.test(richNoteEditorSource)
+) {
+  fail('rich-note toolbar must use the stable UIKit keyboard guide, a persistent native SwiftUI host, optional Expo module availability, and native menu controls without accessory/KAV or JS keyboard-event positioning');
 }
 
 const nativeSimWorkflowPath = path.join(root, '.github/workflows/native-sim.yml');
@@ -181,6 +222,8 @@ if (!fs.existsSync(mirrorSecurityPath) || !fs.existsSync(mirrorScriptPath) || !f
     "'scripts/SaveAppMirrorSecurity.psm1'",
     "'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec'",
     "'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec'",
+    "'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbar.podspec'",
+    "'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift'",
     "'plugins/withSaveLinkQuickSave.js'",
     "'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb'",
     "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift'",
@@ -295,6 +338,24 @@ if (!fs.existsSync(autolinkingCli)) {
         )
       ) {
         fail('Expo SDK 58 did not resolve the local privacy-preserving clipboard URL detector');
+      }
+
+      const richNoteToolbarModule = resolution.modules?.find(
+        (module) => module.packageName === 'saveapp-rich-note-keyboard-toolbar',
+      );
+      const richNoteToolbarPod = richNoteToolbarModule?.pods?.find(
+        (pod) => pod.podName === 'SaveAppRichNoteKeyboardToolbar',
+      );
+      const expectedRichNoteToolbarPodspecDirectory = path.resolve(root, 'modules/rich-note-keyboard-toolbar/ios');
+      if (
+        !richNoteToolbarPod ||
+        path.resolve(richNoteToolbarPod.podspecDir) !== expectedRichNoteToolbarPodspecDirectory ||
+        !richNoteToolbarModule.swiftModuleNames?.includes('SaveAppRichNoteKeyboardToolbar') ||
+        !richNoteToolbarModule.modules?.some(
+          (module) => module.class === 'SaveAppRichNoteKeyboardToolbarModule',
+        )
+      ) {
+        fail('Expo SDK 58 did not resolve the native rich-note keyboard toolbar module');
       }
 
       const widgetsModule = resolution.modules?.find(
@@ -463,6 +524,6 @@ if (/firebase|google-signin/i.test(appConfigSource)) {
 }
 
 if (!process.exitCode) {
-  console.log('Expo SDK 58 autolinks SaveApp native modules, including ExpoWidgets.');
+  console.log('Expo SDK 58 autolinks SaveApp native modules, including the rich-note keyboard toolbar and ExpoWidgets.');
   console.log('SaveApp identity and native contracts are present.');
 }

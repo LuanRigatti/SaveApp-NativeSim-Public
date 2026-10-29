@@ -24,6 +24,10 @@ const {
   validateHomeFolderName,
 } = require('../src/features/home-folders/homeFolderTypes');
 const {
+  HOME_CATEGORIES,
+  getHomeCategoryForItemType,
+} = require('../src/features/home-content/homeCategories');
+const {
   HOME_FOLDER_SELECTION_STORAGE_KEY,
   HOME_FOLDER_VIEW_STORAGE_KEY,
   LEGACY_HOME_FOLDER_FILTER_STORAGE_KEY,
@@ -375,6 +379,59 @@ describe('home folder names, filters, and persistence', () => {
     expect(filterHomeFolderItems(items, { kind: 'all-items' }, assignments)).toEqual(items);
   });
 
+  test('classifies existing and newly imported records by content type without duplicating them', () => {
+    const items = [
+      { id: 1, mediaType: 'photo', createdAt: 1 },
+      { id: 2, mediaType: 'video', createdAt: 2 },
+      { id: 3, contentType: 'document', createdAt: 3 },
+      { id: 4, contentType: 'link', createdAt: 4, source: 'quick-save' },
+      { id: 5, contentType: 'checklist', createdAt: 5 },
+      { id: 6, contentType: 'text', createdAt: 6 },
+    ];
+    const legacyAssignments = new Map([
+      [getHomeFolderItemKey('photo', 1), 'legacy-fotos'],
+      [getHomeFolderItemKey('video', 2), 'legacy-fotos'],
+      [getHomeFolderItemKey('document', 3), 'legacy-pdf'],
+      [getHomeFolderItemKey('link', 4), 'legacy-links'],
+      [getHomeFolderItemKey('checklist', 5), 'legacy-listas'],
+      [getHomeFolderItemKey('text', 6), 'legacy-texto'],
+    ]);
+
+    expect(HOME_CATEGORIES.map(({ id, label }) => [id, label])).toEqual([
+      ['media', 'Mídia'],
+      ['documents', 'Documentos'],
+      ['links', 'Links'],
+      ['lists', 'Listas'],
+      ['texts', 'Textos'],
+    ]);
+    expect(items.map((item) => getHomeCategoryForItemType(item.mediaType ?? item.contentType))).toEqual([
+      'media', 'media', 'documents', 'links', 'lists', 'texts',
+    ]);
+
+    const media = filterHomeFolderItems(items, { kind: 'category', category: 'media' }, legacyAssignments);
+    expect(media).toEqual([items[0], items[1]]);
+    expect(filterHomeFolderItems(items, { kind: 'category', category: 'documents' }, legacyAssignments)).toEqual([items[2]]);
+    expect(filterHomeFolderItems(items, { kind: 'category', category: 'links' }, legacyAssignments)).toEqual([items[3]]);
+    expect(filterHomeFolderItems(items, { kind: 'category', category: 'lists' }, legacyAssignments)).toEqual([items[4]]);
+    expect(filterHomeFolderItems(items, { kind: 'category', category: 'texts' }, legacyAssignments)).toEqual([items[5]]);
+    expect(new Set([...media, ...filterHomeFolderItems(items, { kind: 'category', category: 'links' }, legacyAssignments)]).size).toBe(3);
+  });
+
+  test('keeps automatic categories independent from a custom folder with the same name', () => {
+    const link = { id: 44, contentType: 'link', createdAt: 1 };
+    const assignments = new Map([[getHomeFolderItemKey('link', link.id), 'links']]);
+    const categorySelection = { kind: 'category', category: 'links' };
+    const customFolderSelection = { kind: 'folder', folderId: 'links' };
+
+    expect(getHomeFolderItemFilterForSelection(categorySelection)).toEqual({ kind: 'category', category: 'links' });
+    expect(getHomeFolderItemFilterForSelection(customFolderSelection)).toEqual({ kind: 'folder', folderId: 'links' });
+    expect(getHomeFolderHomeTitle(categorySelection, [{ id: 'links', name: 'Links' }])).toBe('Links');
+    expect(getHomeFolderHomeTitle(customFolderSelection, [{ id: 'links', name: 'Links' }])).toBe('Links');
+    expect(getHomeFolderViewForSelection(categorySelection)).toBe('all-items');
+    expect(filterHomeFolderItems([link], { kind: 'category', category: 'links' }, assignments)).toEqual([link]);
+    expect(filterHomeFolderItems([link], { kind: 'folder', folderId: 'links' }, assignments)).toEqual([link]);
+  });
+
   test('keeps protected-folder items out of Todos even while their folder is unlocked', () => {
     const items = [
       { id: 1, mediaType: 'photo', createdAt: 1 },
@@ -390,6 +447,10 @@ describe('home folder names, filters, and persistence', () => {
 
     expect(filterHomeFolderItems(items, { kind: 'all-items' }, assignments, protectedFolders, unlockedFolders))
       .toEqual([items[1], items[2]]);
+    expect(filterHomeFolderItems(items, { kind: 'category', category: 'media' }, assignments, protectedFolders, unlockedFolders))
+      .toEqual([]);
+    expect(filterHomeFolderItems(items, { kind: 'category', category: 'links' }, assignments, protectedFolders, unlockedFolders))
+      .toEqual([items[1]]);
     expect(filterHomeFolderItems(items, { kind: 'folder', folderId: 'private' }, assignments, protectedFolders))
       .toEqual([]);
     expect(filterHomeFolderItems(items, { kind: 'folder', folderId: 'private' }, assignments, protectedFolders, unlockedFolders))
@@ -429,6 +490,25 @@ describe('home folder names, filters, and persistence', () => {
       kind: 'view',
       view: 'all-items',
     });
+  });
+
+  test('persists a virtual category separately from custom-folder identities', async () => {
+    const values = new Map();
+    const storage = {
+      async getItem(key) { return values.get(key) ?? null; },
+      async setItem(key, value) { values.set(key, value); },
+    };
+    const categorySelection = { kind: 'category', category: 'links' };
+    const sameNamedFolder = { id: 'links', name: 'Links', isProtected: false };
+
+    await persistHomeFolderSelection(storage, categorySelection);
+    expect(JSON.parse(values.get(HOME_FOLDER_SELECTION_STORAGE_KEY))).toEqual(categorySelection);
+    await expect(restoreHomeFolderSelection(storage, [sameNamedFolder])).resolves.toEqual(categorySelection);
+
+    const folderSelection = { kind: 'folder', folderId: sameNamedFolder.id };
+    await persistHomeFolderSelection(storage, folderSelection);
+    expect(JSON.parse(values.get(HOME_FOLDER_SELECTION_STORAGE_KEY))).toEqual(folderSelection);
+    await expect(restoreHomeFolderSelection(storage, [sameNamedFolder])).resolves.toEqual(folderSelection);
   });
 
   test('migrates prior Home selections to the typed preference without changing their meaning', async () => {

@@ -1,6 +1,7 @@
 import type { SavedMedia } from '@/features/photos/photoTypes';
 import type { SavedDocument } from '@/features/documents/documentTypes';
 import type { SavedChecklistSummary } from './checklistTypes';
+import type { RichNoteDocument } from './richNoteDocument';
 
 export type SavedLink = {
   id: number;
@@ -22,7 +23,12 @@ export type SavedText = {
   id: number;
   contentType: 'text';
   createdAt: number;
+  /** Plain-text projection used by Home search and previews. */
   text: string;
+  /** Exact value stored in saved_content.text_content, for lossless editing/restoration. */
+  storageText: string;
+  /** Versioned editor model; legacy notes are projected to a single paragraph. */
+  richDocument: RichNoteDocument;
 };
 
 export type SavedHomeContent = SavedLink | SavedText;

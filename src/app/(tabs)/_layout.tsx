@@ -9,6 +9,7 @@ import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider'
 import { HomeSearchProvider, useHomeSearch } from '@/features/home-content/HomeSearchProvider';
 import { useHomeSettingsSheet } from '@/features/home-content/HomeSettingsSheetProvider';
 import { createHomeFolderToolbarMenu } from '@/features/home-folders/homeFolderToolbarMenu';
+import { getHomeCategoryDefinition, type HomeCategory } from '@/features/home-content/homeCategories';
 import { getHomeFolderIdFromPathname, getHomeFolderRoute } from '@/features/home-folders/homeFolderNavigation';
 import { getFolderAuthenticationFailureMessage } from '@/features/home-folders/folderFaceIdAuthentication';
 import { getHomeFolderAccentColor } from '@/features/home-folders/homeFolderColor';
@@ -33,19 +34,22 @@ function TabsLayoutContent() {
   const router = useRouter();
   const { setViewMode, viewMode } = useHomeViewMode();
   const { favoritesOnly, isReady: favoritesReady, setFavoritesOnly } = useHomeFavorites();
-  const { authorizeFolder, folders, isFolderAuthorized, selectFolder, selectView, selection, view } = useLocalHomeFolders();
+  const { authorizeFolder, folders, isFolderAuthorized, selectCategory, selectFolder, selectView, selection, view } = useLocalHomeFolders();
   const { openSettingsSheet } = useHomeSettingsSheet();
   const { setSearchQuery } = useHomeSearch();
   const supportsSearchBar = supportsNativeHomeSearch(Platform.OS, Platform.Version);
   const routeFolderId = getHomeFolderIdFromPathname(pathname);
   const selectedHomeFolderId = selection.kind === 'folder' ? selection.folderId : null;
+  const selectedCategory = selection.kind === 'category' ? selection.category : null;
   const currentFolderId = routeFolderId ?? selectedHomeFolderId;
   const currentFolder = folders.find((folder) => folder.id === currentFolderId);
   const folderToolbarTint = currentFolder
     ? getHomeFolderAccentColor(currentFolder.color, accentColor, resolvedMode)
     : theme.colors.primary;
   const currentLabel = currentFolder?.name ?? (
-    view === 'folders' ? 'Pastas' : 'Todos'
+    selectedCategory
+      ? getHomeCategoryDefinition(selectedCategory).label
+      : view === 'folders' ? 'Pastas' : 'Todos'
   );
   const handleSettingsPress = useCallback(() => {
     triggerLightImpactHaptic();
@@ -61,6 +65,11 @@ function TabsLayoutContent() {
     selectView(nextView);
     if (routeFolderId) router.dismissTo('/');
   }, [routeFolderId, router, selectView, setFavoritesOnly]);
+  const handleCategoryPress = useCallback((category: HomeCategory) => {
+    setFavoritesOnly(false);
+    selectCategory(category);
+    if (routeFolderId) router.dismissTo('/');
+  }, [routeFolderId, router, selectCategory, setFavoritesOnly]);
   const handleFolderPress = useCallback((folderId: string) => {
     void (async () => {
       const outcome = await authorizeFolder(folderId);
@@ -123,11 +132,13 @@ function TabsLayoutContent() {
             />
             {createHomeFolderToolbarMenu({
               currentFolderId,
+              selectedCategory,
               currentLabel,
               folders,
               hidden: !shouldShowHomeToolbarItems,
               tintColor: folderToolbarTint,
               onOpenFolder: handleFolderPress,
+              onSelectCategory: handleCategoryPress,
               onSelectHomeView: handleHomeViewPress,
               onSelectViewMode: setViewMode,
               view,

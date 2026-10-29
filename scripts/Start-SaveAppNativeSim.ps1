@@ -44,25 +44,70 @@ function Invoke-GhText {
 function Get-SaveAppOSLogCaptureConfiguration {
   param([bool]$CaptureRequested)
 
-  $variableNames = @(& gh api --paginate --jq '.variables[].name' "repos/$repo/actions/variables?per_page=100" 2>$null)
-  if ($LASTEXITCODE -ne 0) { throw 'Could not safely inspect SaveApp NativeSim capture opt-in; no mirror, Preflight, or NativeSim session was started.' }
-  $variableNames = @($variableNames | ForEach-Object { [string]$_ })
   $variables = [Collections.Generic.List[object]]::new()
-
-  if ($variableNames -ccontains 'SAVEAPP_OSLOG_CAPTURE_ENABLED') {
-    $value = & gh api --jq '.value' "repos/$repo/actions/variables/SAVEAPP_OSLOG_CAPTURE_ENABLED" 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not safely read the SaveApp OSLog capture opt-in; no session was started.' }
-    $variables.Add([pscustomobject]@{ name = 'SAVEAPP_OSLOG_CAPTURE_ENABLED'; value = [string]$value })
-  }
-
-  $enabled = @($variables | Where-Object { $_.value -ceq 'true' }).Count -eq 1
-  if ($enabled -and $variableNames -ccontains 'SAVEAPP_LOG_AGE_RECIPIENT') {
+  if ($CaptureRequested) {
+    $variableNames = @(& gh api --paginate --jq '.variables[].name' "repos/$repo/actions/variables?per_page=100" 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not validate the SaveApp OSLog age recipient; no mirror, Preflight, or NativeSim session was started.' }
+    $variableNames = @($variableNames | ForEach-Object { [string]$_ })
+    if (@($variableNames | Where-Object { $_ -ceq 'SAVEAPP_LOG_AGE_RECIPIENT' }).Count -ne 1) {
+      throw 'Explicit SaveApp OSLog capture requires exactly one public age recipient variable.'
+    }
     $recipient = & gh api --jq '.value' "repos/$repo/actions/variables/SAVEAPP_LOG_AGE_RECIPIENT" 2>$null
     if ($LASTEXITCODE -ne 0) { throw 'Could not safely read the SaveApp OSLog encryption configuration; no session was started.' }
     $variables.Add([pscustomobject]@{ name = 'SAVEAPP_LOG_AGE_RECIPIENT'; value = [string]$recipient })
   }
 
   return (Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureRequested -Variables @($variables.ToArray()))
+}
+
+function Publish-SaveAppOSLogCaptureDecision {
+  param(
+    [Parameter(Mandatory)][string]$RunId,
+    [Parameter(Mandatory)][string]$ExpectedSha,
+    [Parameter(Mandatory)][bool]$CaptureRequested
+  )
+
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds(45)
+  $run = $null
+  while ([DateTimeOffset]::UtcNow -lt $deadline) {
+    try {
+      $run = (Invoke-GhText @('api',"repos/$repo/actions/runs/$RunId") | ConvertFrom-Json -ErrorAction Stop)
+      break
+    } catch {
+      Start-Sleep -Milliseconds 500
+    }
+  }
+  if ($null -eq $run) { throw 'The dispatched NativeSim run did not become verifiable; its session choice was not published.' }
+
+  $titleMatch = [regex]::Match([string]$run.display_title,'^native-sim (?<session>[a-f0-9]{8}) · release · (?<minutes>[0-9]{1,3})m$')
+  $attempt = 0
+  if ([string]$run.id -cne $RunId -or [string]$run.path -cne '.github/workflows/native-sim.yml' -or
+      [string]$run.event -cne 'workflow_dispatch' -or [string]$run.head_branch -cne 'main' -or
+      [string]$run.head_sha -cne $ExpectedSha -or [string]$run.html_url -cne "https://github.com/$repo/actions/runs/$RunId" -or
+      [string]$run.status -notin @('queued','in_progress') -or $null -ne $run.conclusion -or
+      -not [int]::TryParse([string]$run.run_attempt,[ref]$attempt) -or $attempt -ne 1 -or
+      -not $titleMatch.Success -or [int]$titleMatch.Groups['minutes'].Value -ne $Minutes -or
+      [string]$run.actor.login -eq '') {
+    throw 'The dispatched NativeSim run does not match this launcher, public SHA, initial attempt, and session; no links will be delivered.'
+  }
+
+  $decision = New-SaveAppOSLogCaptureDecisionContract `
+    -ExpectedRunId $RunId -ExpectedAttempt $attempt `
+    -ExpectedSession $titleMatch.Groups['session'].Value `
+    -ExpectedSha $ExpectedSha -CaptureRequested $CaptureRequested
+  $responseJson = Invoke-GhText @(
+    'api','--method','POST',"repos/$repo/statuses/$ExpectedSha",
+    '-f','state=success','-f',"context=$($decision.Context)",'-f',"description=$($decision.Description)"
+  )
+  $response = $responseJson | ConvertFrom-Json -ErrorAction Stop
+  $validated = Test-SaveAppOSLogCaptureDecision `
+    -ExpectedRunId $RunId -ExpectedAttempt $attempt `
+    -ExpectedSession $decision.Session -ExpectedSha $ExpectedSha `
+    -CaptureRequested $CaptureRequested -Run $run -Statuses @($response)
+  if ($validated.State -ne 'ready') {
+    throw "The per-run SaveApp OSLog choice was not accepted for this exact NativeSim run ($($validated.Reason)); links will be withheld."
+  }
+  return $validated
 }
 
 function Assert-Repository {
@@ -180,7 +225,7 @@ try {
   Write-Output "Private SaveApp is clean and synchronized at $sourceSha."
   $captureConfiguration = Get-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureOSLog.IsPresent
   if ($captureConfiguration.CaptureEnabled) {
-    Write-Output 'SaveApp OSLog capture opt-in verified; the public age recipient remains undisplayed.'
+    Write-Output 'SaveApp OSLog capture was explicitly requested; the public age recipient remains undisplayed.'
   } else {
     Write-Output 'SaveApp OSLog capture is disabled for this NativeSim session.'
   }
@@ -265,7 +310,14 @@ try {
   }
   $nativeSimUpText = Get-Content -LiteralPath $nativeSimUpSource -Raw
   $workflowText = Get-Content -LiteralPath $workflowPath -Raw
+  $captureHelperPath = Join-Path $publicRoot '.github\native-sim\oslog-capture.sh'
+  if (-not (Test-Path -LiteralPath $captureHelperPath -PathType Leaf)) {
+    throw 'The exact allowlisted per-run OSLog handshake helper is missing; refusing the NativeSim dispatch.'
+  }
+  $captureHelperText = Get-Content -LiteralPath $captureHelperPath -Raw
   $null = Assert-SaveAppNativeSimExportBehavior -NativeSimUpText $nativeSimUpText -WorkflowText $workflowText
+  $null = Assert-SaveAppNativeSimCaptureChoiceCompatibility `
+    -NativeSimUpText $nativeSimUpText -WorkflowText $workflowText -CaptureHelperText $captureHelperText
   $pwshCommand = Get-Command pwsh.exe -ErrorAction Stop
   $temporaryRoot = Join-Path $sourceRoot ('.saveapp-nativesim-' + [guid]::NewGuid().ToString('N'))
   $cloneRoot = Join-Path $temporaryRoot 'mirror'
@@ -333,6 +385,7 @@ try {
 
   $linkDeadline = [DateTimeOffset]::UtcNow.AddMinutes(50)
   $runId = $null
+  $captureDecisionPublished = $false
   while ([DateTimeOffset]::UtcNow -lt $linkDeadline) {
     $null = Wait-Event -Timeout 0.5
     $line = $null
@@ -353,6 +406,13 @@ try {
     }
     $line = $null
     while ($global:SaveAppNativeSimStderrQueue.TryDequeue([ref]$line)) { $stderrLines.Add($line) }
+    if ($actionsUrl -and $runId -and -not $captureDecisionPublished) {
+      $captureDecision = Publish-SaveAppOSLogCaptureDecision `
+        -RunId $runId -ExpectedSha $mirrorSha `
+        -CaptureRequested $captureConfiguration.CaptureEnabled
+      $captureDecisionPublished = $true
+      Write-Output "SaveApp OSLog capture choice validated for run $runId attempt $($captureDecision.Attempt) session $($captureDecision.Session): $($captureDecision.CaptureEnabled)."
+    }
     if ($actionsUrl -and $simulatorUrl) { break }
     if ($nativeProcess.HasExited) { break }
   }
@@ -371,6 +431,9 @@ try {
     $diagnostics = Get-SafeCliDiagnostics -Lines $allDiagnostics
     if (-not $diagnostics) { $diagnostics = 'The CLI exited or timed out before emitting both links.' }
     throw "NativeSim did not provide both verified links. $diagnostics"
+  }
+  if (-not $captureDecisionPublished) {
+    throw 'NativeSim links arrived without a validated per-run OSLog choice; session links were withheld.'
   }
   $cloneAfterSha = Invoke-GitText $cloneRoot @('rev-parse','HEAD')
   $sinkAfterSha = Invoke-GitText $pushSink @('rev-parse','refs/heads/main')
@@ -415,7 +478,7 @@ try {
   $handoffState = if ($captureConfiguration.CaptureEnabled) {
     'TRANSPORTE PRONTO — BUILD/OSLOG PENDENTES'
   } else {
-    'SESSÃO PRONTA — OSLOG NÃO SOLICITADO'
+    'TRANSPORTE PRONTO — OSLOG NÃO SOLICITADO'
   }
   if (-not $preflight.Skipped) {
     $preflightKind = if ($preflight.Reused) { 'reused exact-SHA success' } else { 'new exact-SHA success' }

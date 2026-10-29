@@ -69,8 +69,9 @@ describe('checklist task interactions', () => {
     expect(rowSource).toContain('borderColor: isCompleted ? theme.colors.primary : theme.colors.textPrimary');
     expect(rowSource).toContain("textDecorationLine: task.isCompleted ? 'line-through' : 'none'");
     expect(rowSource).toContain('height: theme.sizes.touchTargetMinimum');
-    expect(rowSource).toContain('width: 32');
-    expect(rowSource).toContain('hitSlop={{ bottom: 4, left: 12, right: 0, top: 4 }}');
+    expect(rowSource).toContain('checkboxHitTargetWidth = 32');
+    expect(rowSource).toContain('verticalHitSlop = 4');
+    expect(rowSource).toContain('left: checkboxHitTargetWidth >= theme.sizes.touchTargetMinimum ? 0 : 12');
     expect(detailSource).toContain('triggerChecklistHaptic(() => Haptics.selectionAsync())');
     expect(detailSource).toContain('withChecklistTaskCompletionState(current, task.id, nextCompleted)');
     expect(detailSource).toContain('await setTaskCompleted(checklist.id, task.id, nextCompleted)');
@@ -108,10 +109,14 @@ describe('checklist task interactions', () => {
 
   test('keeps task rows compact while allowing their content to grow for multiline text', () => {
     for (const source of [rowSource, addTaskRowSource]) {
-      expect(source).toContain('minHeight: theme.sizes.touchTargetMinimum,');
+      expect(source).toContain('minHeight: rowHeight,');
       expect(source).toContain('paddingVertical: 0,');
       expect(source).toContain('multiline');
     }
+    expect(rowSource).toContain('verticalHitSlop = 4');
+    expect(rowSource).toContain('rowMinimumHeight ?? theme.sizes.touchTargetMinimum');
+    expect(addTaskRowSource).toContain('rowMinimumHeight === undefined');
+    expect(addTaskRowSource).toContain('? Math.ceil(bodyLineHeight)');
     expect(rowSource).toContain('height: textHeight');
     expect(addTaskRowSource).toContain('height: textHeight');
     expect(rowSource).not.toMatch(/numberOfLines/);
@@ -126,7 +131,8 @@ describe('checklist task interactions', () => {
     expect(rowSource).toContain('onTextLayout={(event) => onFirstLineLayout(event.nativeEvent.lines[0]?.height ?? bodyLineHeight)}');
     expect(rowSource).toContain('paddingTop: checkboxTopOffset');
     expect(rowSource).toContain("justifyContent: 'flex-start'");
-    expect(detailSource).toContain('gap: theme.spacing.xxs / 2');
+    expect(detailSource).toContain('gap: CHECKLIST_TASK_ROW_GAP');
+    expect(detailSource).toContain('verticalHitSlop={0}');
     expect(detailSource).toContain('triggerContentWidth={taskListWidth}');
     expect(nativeMenuSource).toMatch(/<View style=\{\{ minWidth: 0, width: triggerContentWidth \}\}>\{children\}<\/View>/);
   });

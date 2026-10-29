@@ -22,6 +22,7 @@ import { getHomeFolderItemAssignment } from '@/features/home-folders/homeFolderL
 import { useHomeFolderItemAuthorization, useHomeFolderAuthorization } from '@/features/home-folders/useHomeFolderAuthorization';
 import { useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
+import { CHECKLIST_TASK_ROW_GAP } from '@/features/home-content/checklistComposeLayout';
 import { triggerChecklistHaptic } from '@/features/home-content/checklistHaptics';
 import {
   CHECKLIST_TASK_MAX_LENGTH,
@@ -385,7 +386,7 @@ function ChecklistDetailContent({ id }: { id: number | null }) {
           ) : !checklist ? (
             <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>Esta lista não está disponível.</Text>
           ) : (
-            <View onLayout={handleTaskListLayout} style={{ alignSelf: 'stretch', flexShrink: 1, gap: theme.spacing.xxs / 2, minWidth: 0 }}>
+            <View onLayout={handleTaskListLayout} style={{ alignSelf: 'stretch', flexShrink: 1, gap: CHECKLIST_TASK_ROW_GAP, minWidth: 0 }}>
               {checklist.tasks.map((task, index) => {
                 const row = (
                   <ChecklistTaskRow
@@ -396,6 +397,7 @@ function ChecklistDetailContent({ id }: { id: number | null }) {
                     onToggle={() => void toggleTask(task)}
                     task={task}
                     text={taskDrafts[task.id] ?? task.text}
+                    verticalHitSlop={0}
                   />
                 );
                 const deleteAction: NativeCardContextMenuAction = {

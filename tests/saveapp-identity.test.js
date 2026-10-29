@@ -50,7 +50,8 @@ describe('SaveApp identity and template boundary', () => {
     }
 
     expect(packageJson.dependencies.expo).toBe('~58.0.21');
-    expect(packageJson.dependencies['react-native']).toBe('0.88.0');
+    expect(packageJson.dependencies['react-native']).toBe('0.88.1');
+    expect(lockfile.packages['node_modules/react-native']?.version).toBe('0.88.1');
     expect(packageJson.dependencies['react-native-screens']).toBe('4.30.0');
     const bottomSheetPatch = fs.readFileSync(path.join(root, 'scripts/patch-expo-ui-bottom-sheet.js'), 'utf8');
     expect(bottomSheetPatch).toContain("EXPECTED_UI_VERSION = '58.0.25'");

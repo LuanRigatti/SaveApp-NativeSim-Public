@@ -94,8 +94,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
           modifiers={[
             resizable(),
             frame({ width: 44, height: 44 }),
-            clipShape('roundedRectangle', 10),
-            padding({ top: 8 }),
+            clipShape('circle'),
           ]}
         />
       </Link>

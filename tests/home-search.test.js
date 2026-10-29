@@ -126,16 +126,18 @@ describe('Home local search', () => {
     expect(searchSlot).not.toBeNull();
     expect(searchSlot[1]).not.toMatch(/separateBackground/);
     expect(homeSource).toMatch(/<Stack\.Toolbar placement="bottom">[\s\S]*?<Stack\.Toolbar\.SearchBarSlot[\s\S]*?<Stack\.Toolbar\.Spacer\s*\/>[\s\S]*?<Stack\.Toolbar\.Menu[\s\S]*?separateBackground/);
-    for (const action of ['Adicionar imagens', 'Adicionar vídeos', 'Adicionar link', 'Adicionar texto', 'Adicionar arquivos', 'Adicionar lista']) {
+    for (const action of ['Adicionar mídia', 'Adicionar link', 'Adicionar texto', 'Adicionar arquivos', 'Adicionar lista']) {
       expect(homeSource).toContain(action);
     }
+    expect(homeSource).not.toContain('Adicionar imagens');
+    expect(homeSource).not.toContain('Adicionar vídeos');
     expect(tabsLayoutSource).toContain("onCancelButtonPress={() => setSearchQuery('')}");
     expect(rootLayoutSource).toContain('<Stack.Screen name="(tabs)" />');
   });
 
   test('searches only active Home catalogs and reports an empty query result', () => {
     expect(gallerySource).toContain("'Nenhum resultado encontrado'");
-    expect(gallerySource).toMatch(/const allItems = \[\.\.\.media, \.\.\.contents, \.\.\.documents, \.\.\.checklists\]/);
+    expect(gallerySource).toMatch(/const catalogItems = useMemo\(\s*\(\) => \[\.\.\.media, \.\.\.contents, \.\.\.documents, \.\.\.checklists\]/);
     expect(gallerySource).not.toContain('useLocalTrash');
     expect(homeSource).toContain("hidden={view === 'folders' && !favoritesOnly}");
   });

@@ -164,7 +164,6 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
       .accessibilityLabel(props.label ?? "Salvar link")
       .disabled(quickSaveIsProcessing)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: diagnosticStatus)
-      .padding(.top, 8)
       .onAppear { logObservedStatusIfChanged() }
       .onChange(of: diagnosticStatus) { _, _ in logObservedStatusIfChanged() }
     } else {

@@ -1,4 +1,5 @@
 import type { HomeFolder, HomeFolderHomeView, HomeFolderSelection } from './homeFolderTypes';
+import { isHomeCategory } from '@/features/home-content/homeCategories';
 
 export const HOME_FOLDER_SELECTION_STORAGE_KEY = '@saveapp/home-folder-selection-v4';
 export const HOME_FOLDER_VIEW_STORAGE_KEY = '@saveapp/home-folder-view-v3';
@@ -35,9 +36,13 @@ function parseCurrentSelection(
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
 
-  const candidate = parsed as { kind?: unknown; view?: unknown; folderId?: unknown };
+  const candidate = parsed as { kind?: unknown; view?: unknown; folderId?: unknown; category?: unknown };
   if (candidate.kind === 'view' && isHomeFolderHomeView(candidate.view)) {
     return getViewSelection(candidate.view);
+  }
+
+  if (candidate.kind === 'category' && isHomeCategory(candidate.category)) {
+    return { kind: 'category', category: candidate.category };
   }
 
   if (

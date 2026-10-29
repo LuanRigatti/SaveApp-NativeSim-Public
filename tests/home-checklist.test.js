@@ -334,7 +334,7 @@ describe('checklist Home integration', () => {
     const composerSource = readFileSync('src/app/checklists/compose.tsx', 'utf8');
     expect(composerSource).toMatch(/onPress=\{\(\) => void save\(\)\}/);
     expect(composerSource.match(/createChecklist\(/g)).toHaveLength(1);
-    expect(composerSource).toMatch(/const save = useCallback\(async \(\) =>[\s\S]*?createChecklist\(title, tasks\.map/);
+    expect(composerSource).toMatch(/const save = useCallback\(async \(\) =>[\s\S]*?createChecklist\(\s*title,\s*checklistTasksForCreation\(tasks, pendingTaskTextRef\.current\),?\s*\)/);
   });
 
   test('keeps checklist deletion in the protected Home context menu, not the detail page', () => {

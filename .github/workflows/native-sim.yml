@@ -69,12 +69,13 @@ on:
         default: macos-26
 
 permissions:
+  actions: read
   contents: read
   statuses: write
 
 concurrency:
   group: native-sim-${{ inputs.session }}
-  cancel-in-progress: ${{ vars.SAVEAPP_OSLOG_CAPTURE_ENABLED != 'true' }}
+  cancel-in-progress: false
 
 jobs:
   simulator:
@@ -85,9 +86,9 @@ jobs:
       PREVIEW_PORT: "3200"
       GATE_PORT: "3199"
       STATUS_CONTEXT: native-sim/${{ inputs.session }}
+      SESSION_STATUS_CONTEXT: native-sim-session/${{ inputs.session }}
       CAPTURE_STATUS_CONTEXT: native-sim-capture/${{ inputs.session }}
       GH_TOKEN: ${{ github.token }}
-      SAVEAPP_OSLOG_CAPTURE_ENABLED: ${{ vars.SAVEAPP_OSLOG_CAPTURE_ENABLED == 'true' && 'true' || 'false' }}
     steps:
       - name: Check out the exact public mirror commit
         uses: actions/checkout@v4
@@ -117,8 +118,6 @@ jobs:
           test "$SESSION_MINUTES" -le 350
 
       - name: Publish SaveApp session pending status
-        env:
-          SESSION_ID: ${{ inputs.session }}
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
@@ -126,13 +125,28 @@ jobs:
             -f "context=$STATUS_CONTEXT" \
             -f "description=SaveApp session pending run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" \
             >/dev/null
-          if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = 'true' ]; then
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-              -f state=pending \
-              -f "context=$CAPTURE_STATUS_CONTEXT" \
-              -f "description=SaveApp OSLog capture pending session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" \
-              >/dev/null
-          fi
+
+      - name: Resolve exact-run OSLog choice
+        id: capture_decision
+        env:
+          SESSION_ID: ${{ inputs.session }}
+          SESSION_MINUTES: ${{ inputs.minutes }}
+        run: |
+          set -euo pipefail
+          source .github/native-sim/oslog-capture.sh
+          saveapp_capture_resolve_session_choice
+
+      - name: Publish SaveApp capture pending status
+        if: steps.capture_decision.outputs.enabled == 'true'
+        env:
+          SESSION_ID: ${{ inputs.session }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=pending \
+            -f "context=$CAPTURE_STATUS_CONTEXT" \
+            -f "description=SaveApp OSLog capture pending session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" \
+            >/dev/null
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -160,9 +174,10 @@ jobs:
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
 
       - name: Prepare encrypted SaveApp OSLog capture
-        if: env.SAVEAPP_OSLOG_CAPTURE_ENABLED == 'true'
+        if: steps.capture_decision.outputs.enabled == 'true'
         env:
           SAVEAPP_LOG_AGE_RECIPIENT: ${{ vars.SAVEAPP_LOG_AGE_RECIPIENT }}
+          SAVEAPP_CAPTURE_ENABLED: ${{ steps.capture_decision.outputs.enabled }}
         run: |
           set -euo pipefail
           if ! command -v age >/dev/null 2>&1; then
@@ -219,6 +234,7 @@ jobs:
         id: tunnel
         env:
           SESSION_ID: ${{ inputs.session }}
+          CAPTURE_ENABLED: ${{ steps.capture_decision.outputs.enabled }}
         run: |
           set -euo pipefail
           curl -fsSL -o cloudflared.tgz \
@@ -237,24 +253,15 @@ jobs:
           [ -n "$TUNNEL" ] || { tail -50 cloudflared.log; exit 1; }
           echo "bare_url=$TUNNEL" >> "$GITHUB_OUTPUT"
           echo "NATIVE_SIM_BARE_URL=$TUNNEL" >> "$GITHUB_ENV"
-          if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = 'true' ]; then
-            # The installed NativeSim CLI has a fixed 45-minute wait for this
-            # transport signal. The launcher validates this exact run and
-            # returns the authenticated URL; capture readiness is independent.
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-              -f state=success \
-              -f "context=$STATUS_CONTEXT" \
-              -f "target_url=$TUNNEL" \
-              -f "description=SaveApp transport ready session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" \
-              >/dev/null
-          else
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-              -f state=pending \
-              -f "context=$STATUS_CONTEXT" \
-              -f "target_url=$TUNNEL" \
-              -f "description=SaveApp tunnel pending run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" \
-              >/dev/null
-          fi
+          # The installed NativeSim CLI has a fixed 45-minute wait for this
+          # transport signal. Publish it for both capture modes; OSLog readiness
+          # remains an independent status and never delays the early link.
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success \
+            -f "context=$STATUS_CONTEXT" \
+            -f "target_url=$TUNNEL" \
+            -f "description=SaveApp transport ready capture=$CAPTURE_ENABLED session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" \
+            >/dev/null
           {
             echo "## SaveApp Simulator"
             echo
@@ -430,10 +437,11 @@ jobs:
 
       - name: Start SaveApp OSLog capture
         id: saveapp_capture_start
-        if: env.SAVEAPP_OSLOG_CAPTURE_ENABLED == 'true'
+        if: steps.capture_decision.outputs.enabled == 'true'
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
           SAVEAPP_LOG_AGE_RECIPIENT: ${{ vars.SAVEAPP_LOG_AGE_RECIPIENT }}
+          SAVEAPP_CAPTURE_ENABLED: ${{ steps.capture_decision.outputs.enabled }}
         run: |
           set -euo pipefail
           source .github/native-sim/oslog-capture.sh
@@ -447,7 +455,7 @@ jobs:
           xcrun simctl launch "$UDID" com.luanrigatti.saveapp
 
       - name: Verify SaveApp OSLog capture probe
-        if: env.SAVEAPP_OSLOG_CAPTURE_ENABLED == 'true'
+        if: steps.capture_decision.outputs.enabled == 'true'
         env:
           SAVEAPP_LOG_STREAM_PID: ${{ steps.saveapp_capture_start.outputs.pid }}
           SAVEAPP_CAPTURE_RAW: ${{ steps.saveapp_capture_start.outputs.raw }}
@@ -459,13 +467,14 @@ jobs:
       - name: Publish SaveApp capture ready status
         env:
           SESSION_ID: ${{ inputs.session }}
+          CAPTURE_ENABLED: ${{ steps.capture_decision.outputs.enabled }}
         run: |
           set -euo pipefail
-          if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = 'true' ]; then
+          if [ "$CAPTURE_ENABLED" = 'true' ]; then
             READY_CONTEXT="$CAPTURE_STATUS_CONTEXT"
             READY_DESCRIPTION="SaveApp OSLog capture ready session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA"
           else
-            READY_CONTEXT="$STATUS_CONTEXT"
+            READY_CONTEXT="$SESSION_STATUS_CONTEXT"
             READY_DESCRIPTION="SaveApp session ready session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA"
           fi
           gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
@@ -481,6 +490,7 @@ jobs:
           SESSION_MINUTES: ${{ inputs.minutes }}
           SESSION_ID: ${{ inputs.session }}
           SAVEAPP_LOG_STREAM_PID: ${{ steps.saveapp_capture_start.outputs.pid }}
+          SAVEAPP_CAPTURE_ENABLED: ${{ steps.capture_decision.outputs.enabled }}
         run: |
           set -euo pipefail
           END=$(( $(date +%s) + SESSION_MINUTES * 60 ))
@@ -489,7 +499,7 @@ jobs:
           STOP_CONTEXT="native-sim-stop/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           while [ "$(date +%s)" -lt "$END" ]; do
             curl -fsS -o /dev/null "http://127.0.0.1:$PREVIEW_PORT/healthz"
-            if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = "true" ]; then
+            if [ "$SAVEAPP_CAPTURE_ENABLED" = "true" ]; then
               if ! kill -0 "$SAVEAPP_LOG_STREAM_PID" 2>/dev/null; then
                 echo '::error::SaveApp OSLog stream ended before the NativeSim session; capture is incomplete'
                 exit 1
@@ -513,13 +523,13 @@ jobs:
           echo "graceful_stop=$GRACEFUL_STOP_REQUESTED" >> "$GITHUB_OUTPUT"
           gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -f state=success \
-            -f "context=$STATUS_CONTEXT" \
+            -f "context=$SESSION_STATUS_CONTEXT" \
             -f "target_url=$NATIVE_SIM_BARE_URL" \
-            -f "description=Simulator session finished"
+            -f "description=SaveApp session finished session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA"
 
       - name: Finalize SaveApp OSLog capture
         id: saveapp_capture_finish
-        if: always() && env.SAVEAPP_OSLOG_CAPTURE_ENABLED == 'true' && steps.saveapp_capture_start.outcome == 'success'
+        if: always() && steps.capture_decision.outputs.enabled == 'true' && steps.saveapp_capture_start.outcome == 'success'
         env:
           SAVEAPP_LOG_AGE_RECIPIENT: ${{ vars.SAVEAPP_LOG_AGE_RECIPIENT }}
           SAVEAPP_LOG_STREAM_PID: ${{ steps.saveapp_capture_start.outputs.pid }}
@@ -548,7 +558,7 @@ jobs:
           saveapp_capture_finish "$CAPTURE_OUTCOME"
 
       - name: Upload encrypted SaveApp OSLog capture
-        if: always() && env.SAVEAPP_OSLOG_CAPTURE_ENABLED == 'true' && steps.saveapp_capture_finish.outputs.artifact_ready == 'true'
+        if: always() && steps.capture_decision.outputs.enabled == 'true' && steps.saveapp_capture_finish.outputs.artifact_ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: saveapp-native-sim-oslog-${{ github.run_id }}-${{ github.run_attempt }}
@@ -562,12 +572,17 @@ jobs:
         if: failure()
         env:
           SESSION_ID: ${{ inputs.session }}
+          CAPTURE_ENABLED: ${{ steps.capture_decision.outputs.enabled }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -f state=failure \
             -f "context=$STATUS_CONTEXT" \
             -f "description=SaveApp NativeSim session failed run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" >/dev/null || true
-          if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = 'true' ]; then
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=failure \
+            -f "context=$SESSION_STATUS_CONTEXT" \
+            -f "description=SaveApp session failed session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA" >/dev/null || true
+          if [ "$CAPTURE_ENABLED" = 'true' ]; then
             gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
               -f state=failure \
               -f "context=$CAPTURE_STATUS_CONTEXT" \

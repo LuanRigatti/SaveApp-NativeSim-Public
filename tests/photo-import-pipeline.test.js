@@ -40,6 +40,7 @@ describe('photo import pipeline', () => {
     expect(result.photos).toMatchObject([
       {
         id: 1,
+        mediaType: 'photo',
         relativePath: 'photos/photo-import-1.jpg',
         width: 1200,
         height: 800,
@@ -48,6 +49,7 @@ describe('photo import pipeline', () => {
       },
       {
         id: 2,
+        mediaType: 'photo',
         relativePath: 'photos/photo-import-2.jpg',
         width: 1200,
         height: 800,

@@ -31,13 +31,14 @@ function New-SaveAppCaptureReadinessFixture {
     conclusion = $null
     html_url = 'https://github.com/LuanRigatti/SaveApp-NativeSim-Public/actions/runs/987654321'
     display_title = 'native-sim a1b2c3d4 · release · 120m'
+    actor = [pscustomobject]@{ login='saveapp-owner' }
     created_at = '2026-10-27T12:00:00Z'
     run_started_at = '2026-10-27T12:00:30Z'
   }
   $transportStatus = [pscustomobject]@{
     context = 'native-sim/a1b2c3d4'
     state = 'success'
-    description = "SaveApp transport ready session=a1b2c3d4 run=$($run.id) attempt=1 sha=$sha"
+    description = "SaveApp transport ready capture=true session=a1b2c3d4 run=$($run.id) attempt=1 sha=$sha"
     target_url = 'https://capture-probe.trycloudflare.com'
     created_at = '2026-10-27T12:01:00Z'
   }
@@ -222,6 +223,13 @@ try {
     'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift',
     'modules/clipboard-url-detection/src/index.ts'
   )
+  $richNoteKeyboardToolbarModuleFiles = @(
+    'modules/rich-note-keyboard-toolbar/package.json',
+    'modules/rich-note-keyboard-toolbar/expo-module.config.json',
+    'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbar.podspec',
+    'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift',
+    'modules/rich-note-keyboard-toolbar/src/index.ts'
+  )
   $quickSaveIntegrationFiles = @(
     'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb',
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift',
@@ -232,7 +240,7 @@ try {
     'scripts/verify-saveapp-quick-save-app-intents.js',
     'plugins/withSaveLinkQuickSave.js'
   )
-  $allAllowedLocalModuleFiles = @($documentThumbnailModuleFiles + $clipboardDetectionModuleFiles + $quickSaveIntegrationFiles)
+  $allAllowedLocalModuleFiles = @($documentThumbnailModuleFiles + $clipboardDetectionModuleFiles + $richNoteKeyboardToolbarModuleFiles + $quickSaveIntegrationFiles)
   Assert-True ($productionAllowedDirectories -notcontains 'modules' -and
     $productionAllowedDirectories -notcontains 'modules/document-thumbnailing' -and
     $productionAllowedDirectories -notcontains 'modules/clipboard-url-detection') 'the mirror does not recursively allow modules or either local module directory'
@@ -379,20 +387,25 @@ try {
   $moduleSnapshot = Get-SaveAppMirrorStagedPathResult -GitOutput $allAllowedLocalModuleFiles `
     -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories
   Assert-True ($moduleSnapshot.HasChanges -and $moduleSnapshot.Paths.Length -eq $allAllowedLocalModuleFiles.Length -and
-    ($moduleSnapshot.Paths -join '|') -eq ($allAllowedLocalModuleFiles -join '|')) 'the simulated mirror snapshot contains every exact file from the local modules and quick-save config plugin'
+    ($moduleSnapshot.Paths -join '|') -eq ($allAllowedLocalModuleFiles -join '|')) 'the simulated mirror snapshot contains every exact file from local modules and the quick-save config plugin'
   Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailing.podspec') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/SaveAppDocumentThumbnailingModule.swift') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetection.podspec') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift') -eq $false -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbar.podspec') -eq $false -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/expo_widgets_quick_save.rb') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift') -eq $false -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveSQLite.swift') -eq $false -and
-    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift') -eq $false) 'only the nine exact local module iOS sources bypass the generated ios-directory name block'
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift') -eq $false) 'only the eleven exact local module iOS sources bypass the generated ios-directory name block'
   Assert-True ((Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/Unapproved.swift') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/ios/private-key.pem') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/document-thumbnailing/.env.local') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/Unapproved.swift') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/rich-note-keyboard-toolbar/ios/Unapproved.swift') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/rich-note-keyboard-toolbar/ios/private-key.pem') -and
+    (Test-SaveAppMirrorBlockedName -RelativePath 'modules/rich-note-keyboard-toolbar/.env.local') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/ios/private-key.pem') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/clipboard-url-detection/.env.local') -and
     (Test-SaveAppMirrorBlockedName -RelativePath 'modules/dynamic-island-quick-save/ios/Unapproved.swift') -and
@@ -404,6 +417,9 @@ try {
       'modules/document-thumbnailing/private/credentials.pem',
       'modules/document-thumbnailing/.env.local',
       'modules/clipboard-url-detection/ios/Unapproved.swift',
+      'modules/rich-note-keyboard-toolbar/ios/Unapproved.swift',
+      'modules/rich-note-keyboard-toolbar/private/credentials.pem',
+      'modules/rich-note-keyboard-toolbar/.env.local',
       'modules/clipboard-url-detection/private/credentials.pem',
       'modules/clipboard-url-detection/.env.local',
       'modules/dynamic-island-quick-save/ios/Unapproved.swift',
@@ -422,6 +438,10 @@ try {
     Assert-SaveAppSafeContent -RelativePath 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift' `
       -Content ('token=' + ('x' * 32))
   } 'the existing credential scanner still blocks secrets inside the clipboard Swift source path'
+  Assert-Refused {
+    Assert-SaveAppSafeContent -RelativePath 'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift' `
+      -Content ('token=' + ('x' * 32))
+  } 'the existing credential scanner still blocks secrets inside the rich-note toolbar Swift source path'
   Assert-Refused {
     Assert-SaveAppSafeContent -RelativePath 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift' `
       -Content ('token=' + ('x' * 32))
@@ -625,21 +645,74 @@ try {
     Assert-SaveAppSafeContent -RelativePath $oslogCapturePath -Content ($oslogCaptureHelper + "`nAGE-SECRET-KEY-1" + ('A' * 58))
   } 'the existing credential scanner still blocks age private identities inside the allowlisted OSLog helper'
 
-  $disabledCaptureConfig = Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables @()
-  Assert-True (-not $disabledCaptureConfig.CaptureEnabled) 'OSLog capture remains disabled when no explicit repository opt-in exists'
-  $validCaptureVariables = @(
+  $validAgeRecipient = 'age1' + ('a' * 40)
+  $legacyGlobalFlagAndRecipient = @(
     [pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' },
-    [pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value=('age1' + ('a' * 40)) }
+    [pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value=$validAgeRecipient }
   )
+  $disabledCaptureConfig = Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables $legacyGlobalFlagAndRecipient
+  Assert-True (-not $disabledCaptureConfig.CaptureEnabled -and $disabledCaptureConfig.RecipientConfigured) 'capture remains OFF when not requested even if the legacy global variable and a public recipient still exist'
+  $validCaptureVariables = @([pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value=$validAgeRecipient })
   $enabledCaptureConfig = Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables $validCaptureVariables
   Assert-True ($enabledCaptureConfig.CaptureEnabled -and $enabledCaptureConfig.RecipientConfigured -and
     -not ($enabledCaptureConfig | ConvertTo-Json -Compress).Contains(('age1' + ('a' * 40))) -and
-    -not ($enabledCaptureConfig.PSObject.Properties.Name -contains 'Recipient')) 'explicit capture opt-in validates a public recipient without returning or printing its value'
-  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables $validCaptureVariables } 'enabled repository capture cannot be launched without -CaptureOSLog'
-  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @() } 'the launcher cannot request capture when repository opt-in is absent'
-  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @([pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' }) } 'enabled capture requires the public age recipient variable'
-  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @([pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' },[pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value='private-or-invalid' }) } 'capture rejects a malformed or private-key value without exposing it'
-  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $false -Variables @([pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' },[pscustomobject]@{ name='SAVEAPP_OSLOG_CAPTURE_ENABLED'; value='true' }) } 'capture configuration rejects duplicate control variables'
+    -not ($enabledCaptureConfig.PSObject.Properties.Name -contains 'Recipient')) 'explicit per-session capture validates the public recipient without returning or printing its value'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @() } 'explicit capture requires a public age recipient'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @([pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value='private-or-invalid' }) } 'capture rejects a malformed or private-key value without exposing it'
+  Assert-Refused { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @([pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value=$validAgeRecipient },[pscustomobject]@{ name='SAVEAPP_LOG_AGE_RECIPIENT'; value=$validAgeRecipient }) } 'capture configuration rejects duplicate recipient variables'
+
+  $choiceFixture = New-SaveAppCaptureReadinessFixture
+  $choiceContract = New-SaveAppOSLogCaptureDecisionContract -ExpectedRunId $choiceFixture.Run.id `
+    -ExpectedAttempt 1 -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true
+  $choiceStatus = [pscustomobject]@{
+    context=$choiceContract.Context; state='success'; description=$choiceContract.Description
+    sha=$choiceFixture.Sha; creator=[pscustomobject]@{ login='saveapp-owner' }; target_url=$null
+    created_at='2026-10-27T12:00:01Z'
+  }
+  $choiceResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($choiceStatus)
+  Assert-True ($choiceResult.State -eq 'ready' -and $choiceResult.CaptureEnabled) 'explicit capture=true is accepted only for the exact run, attempt, session, SHA, actor, and status'
+
+  $offChoice = New-SaveAppOSLogCaptureDecisionContract -ExpectedRunId $choiceFixture.Run.id `
+    -ExpectedAttempt 1 -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $false
+  $offStatus = $choiceStatus.PSObject.Copy()
+  $offStatus.context = $offChoice.Context; $offStatus.description = $offChoice.Description
+  $offResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $false `
+    -Run $choiceFixture.Run -Statuses @($offStatus)
+  Assert-True ($offResult.State -eq 'ready' -and -not $offResult.CaptureEnabled) 'explicit capture=false is a valid isolated per-run choice'
+
+  $oldChoice = $choiceStatus.PSObject.Copy(); $oldChoice.context = 'saveapp/oslog-choice/987654320/1/a1b2c3d4'
+  $oldChoiceResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($oldChoice)
+  Assert-True ($oldChoiceResult.State -eq 'waiting' -and $oldChoiceResult.Reason -eq 'choice_status_not_visible') 'a status from an older run on the same commit cannot select this run'
+
+  $wrongAttemptChoice = $choiceStatus.PSObject.Copy(); $wrongAttemptChoice.context = 'saveapp/oslog-choice/987654321/2/a1b2c3d4'
+  $wrongAttemptResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($wrongAttemptChoice)
+  Assert-True ($wrongAttemptResult.State -eq 'waiting') 'a status for a different workflow attempt is ignored'
+
+  $wrongSessionChoice = $choiceStatus.PSObject.Copy()
+  $wrongSessionChoice.context = 'saveapp/oslog-choice/987654321/1/0a1b2c3d'
+  $wrongSessionResult = Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($wrongSessionChoice)
+  Assert-True ($wrongSessionResult.State -eq 'waiting' -and $wrongSessionResult.Reason -eq 'choice_status_not_visible') 'a choice for another session on the same run, attempt, and SHA cannot enable capture'
+
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($choiceStatus,$choiceStatus)).Reason -eq 'choice_status_ambiguous') 'duplicate per-run choices fail closed'
+  $wrongActorChoice = $choiceStatus.PSObject.Copy(); $wrongActorChoice.creator = [pscustomobject]@{ login='other-user' }
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($wrongActorChoice)).Reason -eq 'choice_status_identity_mismatch') 'a status written by a different actor is rejected'
+  $staleChoice = $choiceStatus.PSObject.Copy(); $staleChoice.created_at = '2026-10-26T12:00:00Z'
+  Assert-True ((Test-SaveAppOSLogCaptureDecision -ExpectedRunId $choiceFixture.Run.id -ExpectedAttempt 1 `
+    -ExpectedSession 'a1b2c3d4' -ExpectedSha $choiceFixture.Sha -CaptureRequested $true `
+    -Run $choiceFixture.Run -Statuses @($staleChoice)).Reason -eq 'choice_status_identity_mismatch') 'a choice timestamp older than its run is rejected'
 
   $captureFixture = New-SaveAppCaptureReadinessFixture
   $originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture
@@ -977,13 +1050,13 @@ try {
 
   $normalSessionFixture = New-SaveAppCaptureReadinessFixture
   $normalSessionFixture.Statuses = @($normalSessionFixture.Statuses[0])
-  $normalSessionFixture.Statuses[0].description = "SaveApp session ready session=a1b2c3d4 run=$($normalSessionFixture.Run.id) attempt=1 sha=$($normalSessionFixture.Sha)"
+  $normalSessionFixture.Statuses[0].description = "SaveApp transport ready capture=false session=a1b2c3d4 run=$($normalSessionFixture.Run.id) attempt=1 sha=$($normalSessionFixture.Sha)"
   $normalHandoff = Assert-SaveAppNativeSimTransportHandoff `
     -ExpectedRepository 'LuanRigatti/SaveApp-NativeSim-Public' -ExpectedRunId '987654321' `
     -ExpectedAttempt 1 -ExpectedSha $normalSessionFixture.Sha -CaptureRequested $false `
     -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl -Run $normalSessionFixture.Run `
     -Statuses $normalSessionFixture.Statuses
-  Assert-True ($normalHandoff.State -eq 'session_ready' -and -not $normalHandoff.CaptureRequested) 'normal no-capture sessions retain the workflow session-ready signal without requiring OSLog statuses'
+  Assert-True ($normalHandoff.State -eq 'transport_ready' -and -not $normalHandoff.CaptureRequested) 'normal no-capture sessions use the same early exact-run transport handoff without requiring OSLog statuses'
   $normalPendingFixture = New-SaveAppCaptureReadinessFixture
   $normalPendingFixture.Statuses = @($normalPendingFixture.Statuses[0])
   Assert-Refused {
@@ -991,7 +1064,7 @@ try {
       -ExpectedRunId '987654321' -ExpectedAttempt 1 -ExpectedSha $normalPendingFixture.Sha `
       -CaptureRequested $false -ActionsUrl $actionsUrl -SimulatorUrl $simulatorUrl `
       -Run $normalPendingFixture.Run -Statuses $normalPendingFixture.Statuses
-  } 'normal sessions cannot hand off before the regular workflow session-ready status'
+  } 'normal sessions cannot hand off before the exact early transport status'
 
   $originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture
   $originalUICulture = [Threading.Thread]::CurrentThread.CurrentUICulture
@@ -1017,11 +1090,11 @@ try {
   $missingConfigurationFailsClosed = $false
   try { Assert-SaveAppOSLogCaptureConfiguration -CaptureRequested $true -Variables @() | Out-Null }
   catch { $missingConfigurationFailsClosed = $true }
-  Assert-True $missingConfigurationFailsClosed 'capture requested without valid repository opt-in/recipient fails before session readiness'
+  Assert-True $missingConfigurationFailsClosed 'capture requested without a valid public age recipient fails before session readiness'
 
   Assert-True ($launcher.Contains('[switch]$CaptureOSLog') -and
     $launcher.Contains('Get-SaveAppOSLogCaptureConfiguration -CaptureRequested $CaptureOSLog.IsPresent') -and
-    $launcher.Contains('no mirror, Preflight, or NativeSim session was started.')) 'official launcher validates capture opt-in before mirror publication or remote gates'
+    $launcher.Contains('no mirror, Preflight, or NativeSim session was started.')) 'official launcher validates the explicit capture request and age recipient before mirror publication or remote gates'
   $simulatorHandoffIndex = $launcher.IndexOf('Authenticated Simulator: $simulatorUrl',[StringComparison]::Ordinal)
   $launcherCleanupIndex = if ($simulatorHandoffIndex -ge 0) { $launcher.IndexOf('} finally {',$simulatorHandoffIndex,[StringComparison]::Ordinal) } else { -1 }
   $launcherCleanup = if ($launcherCleanupIndex -ge 0) { $launcher.Substring($launcherCleanupIndex) } else { '' }
@@ -1085,11 +1158,17 @@ try {
   $transportStep = if ($transportStepMatch.Success) { $transportStepMatch.Groups['step'].Value } else { '' }
   $captureReadyStepMatch = [regex]::Match($workflow,'(?ms)^\s*- name: Publish SaveApp capture ready status\s+(?<step>.*?)(?=^\s*- name:|\z)')
   $captureReadyStep = if ($captureReadyStepMatch.Success) { $captureReadyStepMatch.Groups['step'].Value } else { '' }
+  $choiceStepMatch = [regex]::Match($workflow,'(?ms)^\s*- name: Resolve exact-run OSLog choice\s+(?<step>.*?)(?=^\s*- name:|\z)')
+  $choiceStep = if ($choiceStepMatch.Success) { $choiceStepMatch.Groups['step'].Value } else { '' }
   Assert-True ($workflow.Contains('CAPTURE_STATUS_CONTEXT: native-sim-capture/${{ inputs.session }}') -and
-    $transportStep.Contains('if [ "$SAVEAPP_OSLOG_CAPTURE_ENABLED" = ''true'' ]') -and
-    $transportStep.Contains('SaveApp transport ready session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA') -and
+    $workflow.Contains('cancel-in-progress: false') -and
+    -not $workflow.Contains('SAVEAPP_OSLOG_CAPTURE_ENABLED') -and
+    $choiceStep.Contains('saveapp_capture_resolve_session_choice') -and
+    $transportStep.Contains('capture=$CAPTURE_ENABLED') -and
+    $transportStep.Contains('-f state=success') -and
     $captureReadyStep.Contains('SaveApp OSLog capture ready session=$SESSION_ID run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA') -and
-    $workflow.IndexOf('Publish SaveApp capture ready status',[StringComparison]::Ordinal) -gt $workflow.IndexOf('Verify SaveApp OSLog capture probe',[StringComparison]::Ordinal)) 'capture sessions publish a separate exact-run readiness status only after the live capture probe; normal sessions retain post-launch readiness'
+    $workflow.IndexOf('Open tunnel and publish protected status',[StringComparison]::Ordinal) -gt $workflow.IndexOf('Resolve exact-run OSLog choice',[StringComparison]::Ordinal) -and
+    $workflow.IndexOf('Publish SaveApp capture ready status',[StringComparison]::Ordinal) -gt $workflow.IndexOf('Verify SaveApp OSLog capture probe',[StringComparison]::Ordinal)) 'per-run choice is resolved before the build, early transport is independent from capture, and only instrumented sessions publish capture readiness'
   $maskStepStart = $workflow.IndexOf('- name: Mask stream access key',[StringComparison]::Ordinal)
   $maskStepEnd = $workflow.IndexOf('- name:', $maskStepStart + 1,[StringComparison]::Ordinal)
   $maskStep = if ($maskStepStart -ge 0 -and $maskStepEnd -gt $maskStepStart) { $workflow.Substring($maskStepStart,$maskStepEnd - $maskStepStart) } else { '' }
@@ -1100,6 +1179,9 @@ try {
   $archiveSkill = Get-Content -LiteralPath (Join-Path $repositoryRoot '.agents\skills\saveapp-simulator-archive\SKILL.md') -Raw
   $archiveScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\Download-SaveAppSimulatorArchive.ps1') -Raw
   $nativeSimUpText = Get-Content -LiteralPath (Join-Path $package 'src\commands\up.js') -Raw
+  $captureChoiceCompatibility = Assert-SaveAppNativeSimCaptureChoiceCompatibility `
+    -NativeSimUpText $nativeSimUpText -WorkflowText $workflow -CaptureHelperText $oslogCaptureHelper
+  Assert-True $captureChoiceCompatibility 'the installed NativeSim CLI fixed-input dispatch is compatible with the per-run GitHub status handshake and requires no CLI modification'
   Assert-True ($launcher.Contains('SaveAppNativeSimLaunch') -and $launcher.Contains('Get-ActiveNativeSimRuns') -and $launcher.Contains('No duplicate was started')) 'duplicate-session mutex and active-run guard remain present'
   $mirrorPublishIndex = $launcher.IndexOf('& pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $mirrorScript -Publish',[StringComparison]::Ordinal)
   $preflightGateIndex = $launcher.IndexOf('Invoke-SaveAppSwiftPreflightGate',[StringComparison]::Ordinal)

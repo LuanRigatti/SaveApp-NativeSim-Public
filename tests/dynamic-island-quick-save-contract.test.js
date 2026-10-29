@@ -231,7 +231,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).toContain('.symbolEffect(.bounce, value: quickSaveIsSuccess)');
     expect(quickSaveBranch).toContain('.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: diagnosticStatus)');
     expect(quickSaveButton).toContain('@Environment(\\.accessibilityReduceMotion) private var reduceMotion');
-    expect(quickSaveBranch).toContain('.padding(.top, 8)');
+    expect(quickSaveBranch).not.toContain('.padding(.top, 8)');
     expect(quickSaveBranch).not.toMatch(/\b(?:Text|Label)\(/);
     expect(quickSaveIntent).toContain('terminalStatusDisplayNanoseconds: UInt64 = 5_000_000_000');
     expect(quickSaveIntent).toContain('guard didSubmitResultStatus else {');
@@ -438,6 +438,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(homeScreen).toContain('navigation.home.expanded_deep_link_received');
     expect(homeScreen).toContain('home.filter.favorites');
     expect(homeScreen).toContain('home.filter.folder');
+    expect(homeGallery).toContain('home.filter.category');
     expect(homeScreen).toContain('home.filter.all');
     expect(homeGallery).toContain('home.gallery.links_visible');
     expect(homeGallery).toContain('home.gallery.links_filtered_out');

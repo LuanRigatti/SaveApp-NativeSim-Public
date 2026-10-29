@@ -91,7 +91,7 @@ describe('Face ID folder authorization', () => {
     for (const [file, itemType] of protectedRoutes) {
       const source = readSource(file);
       expect(source).toContain(`useHomeFolderItemAuthorization('${itemType}'`);
-      expect(source).toMatch(/(?:if \(!authorization\.isAuthorized\)[\s\S]*?HomeFolderAuthorizationPrompt|authorization\.isAuthorized \? \([\s\S]*?HomeFolderAuthorizationPrompt)/);
+      expect(source).toMatch(/(?:if \(!authorization\.isAuthorized\)[\s\S]*?HomeFolderAuthorizationPrompt|authorization\.isAuthorized\s*\?[\s\S]*?HomeFolderAuthorizationPrompt)/);
     }
   });
 

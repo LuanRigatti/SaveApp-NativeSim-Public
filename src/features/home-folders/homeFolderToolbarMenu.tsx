@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import type { ReactElement } from 'react';
 
 import type { HomeViewMode } from '@/features/home-content/homeViewMode';
+import { HOME_CATEGORIES, type HomeCategory } from '@/features/home-content/homeCategories';
 import { triggerSelectionHaptic } from '@/utils/haptics';
 
 import type { HomeFolder, HomeFolderHomeView } from './homeFolderTypes';
@@ -15,11 +16,13 @@ function withSelectionHaptic(action: () => void): () => void {
 
 export type HomeFolderToolbarMenuProps = {
   currentFolderId: string | null;
+  selectedCategory: HomeCategory | null;
   currentLabel: string;
   folders: readonly HomeFolder[];
   hidden: boolean;
   tintColor: string;
   onOpenFolder: (folderId: string) => void;
+  onSelectCategory: (category: HomeCategory) => void;
   onSelectHomeView: (view: HomeFolderHomeView) => void;
   onSelectViewMode: (viewMode: HomeViewMode) => void;
   view: HomeFolderHomeView;
@@ -33,11 +36,13 @@ export type HomeFolderToolbarMenuProps = {
  */
 export function createHomeFolderToolbarMenu({
   currentFolderId,
+  selectedCategory,
   currentLabel,
   folders,
   hidden,
   tintColor,
   onOpenFolder,
+  onSelectCategory,
   onSelectHomeView,
   onSelectViewMode,
   view,
@@ -54,32 +59,46 @@ export function createHomeFolderToolbarMenu({
     >
       <Stack.Toolbar.MenuAction
         icon="folder"
-        isOn={!currentFolderId && view === 'all-items'}
+        isOn={!currentFolderId && !selectedCategory && view === 'all-items'}
         onPress={withSelectionHaptic(() => onSelectHomeView('all-items'))}
       >
         Todos
       </Stack.Toolbar.MenuAction>
       <Stack.Toolbar.MenuAction
         icon="folder"
-        isOn={!currentFolderId && view === 'folders'}
+        isOn={!currentFolderId && !selectedCategory && view === 'folders'}
         onPress={withSelectionHaptic(() => onSelectHomeView('folders'))}
       >
         Pastas
       </Stack.Toolbar.MenuAction>
-      {folders.length > 0 ? (
-        <Stack.Toolbar.Menu inline title="Pastas existentes">
-          {folders.map((folder) => (
-            <Stack.Toolbar.MenuAction
-              icon="folder"
-              isOn={currentFolderId === folder.id}
-              key={folder.id}
-              onPress={withSelectionHaptic(() => onOpenFolder(folder.id))}
-            >
-              {folder.name}
-            </Stack.Toolbar.MenuAction>
-          ))}
-        </Stack.Toolbar.Menu>
-      ) : null}
+      <Stack.Toolbar.Menu inline title="CATEGORIAS">
+        {HOME_CATEGORIES.map((category) => (
+          <Stack.Toolbar.MenuAction
+            icon={category.icon}
+            isOn={!currentFolderId && selectedCategory === category.id}
+            key={category.id}
+            onPress={withSelectionHaptic(() => onSelectCategory(category.id))}
+          >
+            {category.label}
+          </Stack.Toolbar.MenuAction>
+        ))}
+      </Stack.Toolbar.Menu>
+      <Stack.Toolbar.Menu inline title="MINHAS PASTAS">
+        {folders.length > 0 ? folders.map((folder) => (
+          <Stack.Toolbar.MenuAction
+            icon="folder"
+            isOn={currentFolderId === folder.id}
+            key={folder.id}
+            onPress={withSelectionHaptic(() => onOpenFolder(folder.id))}
+          >
+            {folder.name}
+          </Stack.Toolbar.MenuAction>
+        )) : (
+          <Stack.Toolbar.MenuAction disabled icon="folder">
+            Nenhuma pasta criada
+          </Stack.Toolbar.MenuAction>
+        )}
+      </Stack.Toolbar.Menu>
       <Stack.Toolbar.Menu icon="square.grid.2x2" title="Visualização">
         <Stack.Toolbar.MenuAction
           icon="square.grid.2x2"

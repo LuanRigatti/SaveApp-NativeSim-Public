@@ -18,6 +18,7 @@ import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentP
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
 import { useLocalPhotoLibrary } from '@/features/photos/LocalPhotoLibraryProvider';
 import type { AccentColorName } from '@/theme/colors';
+import type { HomeCategory } from '@/features/home-content/homeCategories';
 
 import {
   createHomeFolder,
@@ -61,6 +62,7 @@ type HomeFolderLibraryContextValue = {
     isProtected: boolean,
   ) => Promise<FolderAuthenticationOutcome>;
   selectView: (view: HomeFolderHomeView) => void;
+  selectCategory: (category: HomeCategory) => void;
   selectFolder: (folderId: string) => void;
   createFolder: (name: string) => Promise<HomeFolder>;
   renameFolder: (folderId: string, name: string) => Promise<HomeFolder>;
@@ -346,6 +348,10 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
     updateSelection({ kind: 'view', view: nextView });
   }, [updateSelection]);
 
+  const selectCategory = useCallback((category: HomeCategory) => {
+    updateSelection({ kind: 'category', category });
+  }, [updateSelection]);
+
   const selectFolder = useCallback((folderId: string) => {
     const folder = foldersRef.current.find((item) => item.id === folderId);
     if (!folder || (folder.isProtected && !isFolderAuthorized(folderId))) return;
@@ -493,6 +499,7 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
       authorizeFolder,
       setFolderProtection: changeFolderProtection,
       selectView,
+      selectCategory,
       selectFolder,
       createFolder: addFolder,
       renameFolder: updateFolder,
@@ -519,6 +526,7 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
       updateFolder,
       updateFolderColor,
       selectView,
+      selectCategory,
       selectFolder,
       setItemFolder,
     ],

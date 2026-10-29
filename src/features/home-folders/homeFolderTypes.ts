@@ -1,4 +1,5 @@
 import type { SavedHomeItem } from '@/features/home-content/homeContentTypes';
+import { getHomeCategoryDefinition, getHomeCategoryForItemType, type HomeCategory } from '@/features/home-content/homeCategories';
 import type { AccentColorName } from '@/theme/colors';
 
 export const MAX_HOME_FOLDER_NAME_LENGTH = 40;
@@ -19,12 +20,17 @@ export type HomeFolderHomeView = 'all-items' | 'unfiled' | 'folders';
 
 export type HomeFolderSelection =
   | { kind: 'view'; view: HomeFolderHomeView }
+  | { kind: 'category'; category: HomeCategory }
   | { kind: 'folder'; folderId: string };
 
 export function getHomeFolderHomeTitle(
   selection: HomeFolderSelection,
   folders: readonly HomeFolder[],
 ): string {
+  if (selection.kind === 'category') {
+    return getHomeCategoryDefinition(selection.category).label;
+  }
+
   if (selection.kind === 'folder') {
     return folders.find((folder) => folder.id === selection.folderId)?.name ?? 'Todos';
   }
@@ -35,6 +41,7 @@ export function getHomeFolderHomeTitle(
 
 export type HomeFolderItemFilter =
   | { kind: 'all-items' }
+  | { kind: 'category'; category: HomeCategory }
   | { kind: 'unfiled' }
   | { kind: 'folder'; folderId: string };
 
@@ -49,6 +56,10 @@ export function getHomeFolderItemFilterForSelection(
 ): HomeFolderItemFilter {
   if (selection.kind === 'folder') {
     return { kind: 'folder', folderId: selection.folderId };
+  }
+
+  if (selection.kind === 'category') {
+    return { kind: 'category', category: selection.category };
   }
 
   return selection.view === 'unfiled'
@@ -97,11 +108,14 @@ export function filterHomeFolderItems<T extends SavedHomeItem>(
   protectedFolderIds: ReadonlySet<string> = new Set(),
   unlockedFolderIds: ReadonlySet<string> = new Set(),
 ): T[] {
-  if (filter.kind === 'all-items') {
+  if (filter.kind === 'all-items' || filter.kind === 'category') {
     return items.filter((item) => {
-      const folderId = folderIdByItemKey.get(
-        getHomeFolderItemKey(getHomeFolderItemType(item), item.id),
-      );
+      const itemType = getHomeFolderItemType(item);
+      if (filter.kind === 'category' && getHomeCategoryForItemType(itemType) !== filter.category) {
+        return false;
+      }
+
+      const folderId = folderIdByItemKey.get(getHomeFolderItemKey(itemType, item.id));
       return folderId == null || !protectedFolderIds.has(folderId);
     });
   }

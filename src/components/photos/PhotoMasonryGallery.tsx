@@ -50,7 +50,12 @@ import { useLocalPhotoLibrary } from '@/features/photos/LocalPhotoLibraryProvide
 import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentProvider';
 import { useLocalDocumentLibrary } from '@/features/documents/LocalDocumentLibraryProvider';
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
-import { buildHomeGalleryEntriesWhenReady } from '@/features/home-content/homeFeed';
+import {
+  buildHomeGalleryEntriesWhenReady,
+  shouldShowGlobalHomeEmptyState,
+  shouldShowHomeCategoryEmptyState,
+} from '@/features/home-content/homeFeed';
+import { getHomeCategoryEmptyMessage, getHomeCategoryForItemType } from '@/features/home-content/homeCategories';
 import { filterHomeFavoriteItems } from '@/features/home-content/homeFavorites';
 import { createHomeSearchIndex, filterHomeSearchIndex } from '@/features/home-content/homeSearch';
 import { useHomeFavorites } from '@/features/home-content/HomeFavoritesProvider';
@@ -113,6 +118,15 @@ function getListRowLayoutStyle(theme: AppTheme, rowHeight: number, isCompact: bo
   };
 }
 
+function getListRowContentPaddingStyle(theme: AppTheme, isCompact: boolean): ViewStyle {
+  const padding = isCompact ? theme.spacing.xxs : theme.spacing.xs;
+
+  return {
+    paddingHorizontal: padding,
+    paddingVertical: padding,
+  };
+}
+
 function getSingleLineRowLayoutStyle(theme: AppTheme, rowHeight: number): ViewStyle {
   return {
     alignItems: 'center',
@@ -127,11 +141,12 @@ function getSingleLineRowLayoutStyle(theme: AppTheme, rowHeight: number): ViewSt
   };
 }
 
-function getSingleLineTitleTextStyle(theme: AppTheme, hasFolder: boolean): TextStyle {
+function getSingleLineTitleTextStyle(theme: AppTheme): TextStyle {
   return {
     ...theme.typography.subheadline,
     color: theme.colors.textPrimary,
-    flexGrow: hasFolder ? 0 : 1,
+    flexBasis: 0,
+    flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
   };
@@ -241,6 +256,7 @@ type PhotoMasonryGalleryProps = Pick<
   searchQuery?: string;
   hidden?: boolean;
   isInitialFeedReady: boolean;
+  homeCatalogsLoadedSuccessfully?: boolean;
   revealNewestSignal?: number;
   revealSavedTextId: number | null;
 };
@@ -259,6 +275,7 @@ export function PhotoMasonryGallery({
   searchQuery = '',
   hidden = false,
   isInitialFeedReady,
+  homeCatalogsLoadedSuccessfully = false,
   revealNewestSignal = 0,
   revealSavedTextId,
   onScroll,
@@ -303,18 +320,30 @@ export function PhotoMasonryGallery({
     ? 'favorites'
     : folderFilter.kind === 'folder'
       ? `folder:${folderFilter.folderId}`
-      : folderFilter.kind;
+      : folderFilter.kind === 'category'
+        ? `category:${folderFilter.category}`
+        : folderFilter.kind;
   const previousFolderFilterKeyRef = useRef(currentFolderFilterKey);
   const { fontScale, height: screenHeight, width: screenWidth } = useWindowDimensions();
+  const showGlobalEmptyState = isInitialFeedReady && homeFoldersReady && shouldShowGlobalHomeEmptyState({
+    catalogsLoadedSuccessfully: homeCatalogsLoadedSuccessfully,
+    mediaCount: media.length,
+    savedContentCount: contents.length,
+    documentCount: documents.length,
+    checklistCount: checklists.length,
+    searchQuery,
+    favoritesOnly,
+    folderFilterKind: folderFilter.kind,
+  });
   const listMetrics = getHomeListMetrics(viewMode, fontScale);
   const listRowHeight = listMetrics.rowHeight;
   const listThumbnailSize = listMetrics.thumbnailSize;
-  const galleryContentContainerStyle = useMemo<StyleProp<ViewStyle>>(
-    () => viewMode === 'small'
+  const galleryContentContainerStyle = useMemo<StyleProp<ViewStyle>>(() => {
+    const baseStyle = viewMode === 'small'
       ? [contentContainerStyle, { paddingHorizontal: theme.spacing.xs }]
-      : contentContainerStyle,
-    [contentContainerStyle, theme.spacing.xs, viewMode],
-  );
+      : contentContainerStyle;
+    return showGlobalEmptyState ? [baseStyle, { flexGrow: 1 }] : baseStyle;
+  }, [contentContainerStyle, showGlobalEmptyState, theme.spacing.xs, viewMode]);
   const flattenedContentStyle = StyleSheet.flatten(galleryContentContainerStyle);
   const fallbackHorizontalPadding = theme.layout.screenHorizontalPadding;
   const contentLeftPadding = typeof flattenedContentStyle?.paddingLeft === 'number'
@@ -555,11 +584,17 @@ export function PhotoMasonryGallery({
     () => isAppActive ? unlockedFolderIds : new Set<string>(),
     [isAppActive, unlockedFolderIds],
   );
+  const catalogItems = useMemo(
+    () => [...media, ...contents, ...documents, ...checklists],
+    [checklists, contents, documents, media],
+  );
+  const categoryCatalogItemCount = folderFilter.kind === 'category'
+    ? catalogItems.filter((item) => getHomeCategoryForItemType(getHomeFolderItemType(item)) === folderFilter.category).length
+    : 0;
   const folderAndFavoriteFilteredItems = useMemo(() => {
-    const allItems = [...media, ...contents, ...documents, ...checklists];
     if (favoritesOnly) {
       return filterHomeFavoriteItems(
-        allItems,
+        catalogItems,
         favoriteKeys,
         folderIdByItemKey,
         protectedFolderIds,
@@ -567,15 +602,15 @@ export function PhotoMasonryGallery({
         homeFoldersReady,
       );
     }
-    if (!homeFoldersReady) return allItems;
+    if (!homeFoldersReady) return catalogItems;
     return filterHomeFolderItems(
-      allItems,
+      catalogItems,
       folderFilter,
       folderIdByItemKey,
       protectedFolderIds,
       accessibleUnlockedFolderIds,
     );
-  }, [accessibleUnlockedFolderIds, checklists, contents, documents, favoriteKeys, favoritesOnly, folderFilter, folderIdByItemKey, homeFoldersReady, media, protectedFolderIds]);
+  }, [accessibleUnlockedFolderIds, catalogItems, favoriteKeys, favoritesOnly, folderFilter, folderIdByItemKey, homeFoldersReady, protectedFolderIds]);
   const homeSearchIndex = useMemo(
     () => createHomeSearchIndex(folderAndFavoriteFilteredItems),
     [folderAndFavoriteFilteredItems],
@@ -584,6 +619,14 @@ export function PhotoMasonryGallery({
     () => filterHomeSearchIndex(homeSearchIndex, searchQuery),
     [homeSearchIndex, searchQuery],
   );
+  const showHomeCategoryEmptyState = isInitialFeedReady && homeFoldersReady &&
+    folderFilter.kind === 'category' && shouldShowHomeCategoryEmptyState({
+      catalogsLoadedSuccessfully: homeCatalogsLoadedSuccessfully,
+      totalItemCount: catalogItems.length,
+      categoryItemCount: categoryCatalogItemCount,
+      searchQuery,
+      favoritesOnly,
+    });
   const tagQueryReferences = useMemo<SavedTagItemReference[]>(
     () => filteredItems.map((item) => ({ itemType: getHomeFolderItemType(item), itemId: item.id })),
     [filteredItems],
@@ -593,7 +636,12 @@ export function PhotoMasonryGallery({
     const itemKeys = tagQueryReferences
       .map(({ itemType, itemId }) => getHomeFolderItemKey(itemType, itemId))
       .join(',');
-    return `${folderFilter.kind}:${folderFilter.kind === 'folder' ? folderFilter.folderId : ''}:${itemKeys}:${savedTagsChangeSignal}`;
+    const filterValue = folderFilter.kind === 'folder'
+      ? folderFilter.folderId
+      : folderFilter.kind === 'category'
+        ? folderFilter.category
+        : '';
+    return `${folderFilter.kind}:${filterValue}:${itemKeys}:${savedTagsChangeSignal}`;
   }, [folderFilter, hidden, homeFoldersReady, isAppActive, isTagAppActive, savedTagsChangeSignal, tagQueryReferences]);
   const entries = useMemo(
     () => buildHomeGalleryEntriesWhenReady(filteredItems, now, isInitialFeedReady && homeFoldersReady),
@@ -609,13 +657,16 @@ export function PhotoMasonryGallery({
       ? 'home.filter.favorites'
       : folderFilter.kind === 'folder'
         ? 'home.filter.folder'
-        : 'home.filter.all';
+        : folderFilter.kind === 'category'
+          ? 'home.filter.category'
+          : 'home.filter.all';
     const visibilityKey = [
       isInitialFeedReady && homeFoldersReady,
       hidden,
       hasCatalogLink,
       favoritesOnly,
       folderFilter.kind,
+      folderFilter.kind === 'category' ? folderFilter.category : '',
       Boolean(searchQuery.trim()),
       hasVisibleLinkAfterFilters,
     ].join(':');
@@ -634,7 +685,7 @@ export function PhotoMasonryGallery({
         ? 'home.gallery.links_visible'
         : 'home.gallery.links_filtered_out');
     }
-  }, [favoritesOnly, folderFilter.kind, hasCatalogLink, hasVisibleLinkAfterFilters, hidden, homeFoldersReady, isInitialFeedReady, searchQuery]);
+  }, [favoritesOnly, folderFilter, hasCatalogLink, hasVisibleLinkAfterFilters, hidden, homeFoldersReady, isInitialFeedReady, searchQuery]);
 
   useLayoutEffect(() => {
     tagQueryScopeKeyRef.current = tagQueryScopeKey;
@@ -1015,7 +1066,7 @@ export function PhotoMasonryGallery({
                   alignItems: 'center',
                   flexDirection: 'row',
                   gap: isCompactListView ? theme.spacing.xs : theme.spacing.sm,
-                  padding: isCompactListView ? theme.spacing.xxs : theme.spacing.xs,
+                  ...getListRowContentPaddingStyle(theme, isCompactListView),
                 },
               ])}
         >
@@ -1078,11 +1129,11 @@ export function PhotoMasonryGallery({
               <Text
                 ellipsizeMode="tail"
                 numberOfLines={1}
-                style={getSingleLineTitleTextStyle(theme, Boolean(folderName))}
+                style={getSingleLineTitleTextStyle(theme)}
               >
                 {getHomeSingleLineTitle(item)}
               </Text>
-              {folderName ? <HomeFolderIndicator maxWidth="28%" folderColor={folder?.color ?? null} name={folderName} /> : null}
+              {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
               <HomeTagDots tags={visibleTagDotsForItem(item.mediaType, item.id)} />
             </>
           ) : (
@@ -1335,11 +1386,11 @@ export function PhotoMasonryGallery({
               <Text
                 ellipsizeMode="tail"
                 numberOfLines={1}
-                style={getSingleLineTitleTextStyle(theme, Boolean(folderName))}
+                style={getSingleLineTitleTextStyle(theme)}
               >
                 {getHomeSingleLineTitle(item)}
               </Text>
-              {folderName ? <HomeFolderIndicator maxWidth="28%" folderColor={folder?.color ?? null} name={folderName} /> : null}
+              {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
               <HomeTagDots tags={visibleTagDotsForItem('link', item.id)} />
             </LinkCardPressable>
           ) : isListView ? (
@@ -1352,7 +1403,7 @@ export function PhotoMasonryGallery({
                   alignItems: 'center',
                   flexDirection: 'row',
                   gap: isCompactListView ? theme.spacing.xs : theme.spacing.sm,
-                  padding: isCompactListView ? theme.spacing.xxs : theme.spacing.xs,
+                  ...getListRowContentPaddingStyle(theme, isCompactListView),
                 },
               ])}
             >
@@ -1467,11 +1518,11 @@ export function PhotoMasonryGallery({
             <Text
               ellipsizeMode="tail"
               numberOfLines={1}
-              style={getSingleLineTitleTextStyle(theme, Boolean(folderName))}
+              style={getSingleLineTitleTextStyle(theme)}
             >
               {getHomeSingleLineTitle(item)}
             </Text>
-            {folderName ? <HomeFolderIndicator maxWidth="28%" folderColor={folder?.color ?? null} name={folderName} /> : null}
+            {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
             <HomeTagDots tags={visibleTagDotsForItem('text', item.id)} />
           </Pressable>
         ) : isListView ? (
@@ -1484,8 +1535,7 @@ export function PhotoMasonryGallery({
                 alignItems: 'center',
                 flexDirection: 'row',
                 gap: isCompactListView ? theme.spacing.xs : theme.spacing.sm,
-                paddingHorizontal: isCompactListView ? theme.spacing.xs : theme.spacing.md,
-                paddingVertical: isCompactListView ? theme.spacing.xxs : theme.spacing.xs,
+                ...getListRowContentPaddingStyle(theme, isCompactListView),
               },
             ])}
           >
@@ -1728,8 +1778,7 @@ export function PhotoMasonryGallery({
                     alignItems: 'center',
                     flexDirection: 'row',
                     gap: isCompactListView ? theme.spacing.xs : theme.spacing.sm,
-                    paddingHorizontal: isCompactListView ? theme.spacing.xs : theme.spacing.md,
-                    paddingVertical: isCompactListView ? theme.spacing.xxs : theme.spacing.xs,
+                    ...getListRowContentPaddingStyle(theme, isCompactListView),
                   },
                 ])
           }
@@ -1745,11 +1794,11 @@ export function PhotoMasonryGallery({
               <Text
                 ellipsizeMode="tail"
                 numberOfLines={1}
-                style={getSingleLineTitleTextStyle(theme, Boolean(folderName))}
+                style={getSingleLineTitleTextStyle(theme)}
               >
                 {getHomeSingleLineTitle(document)}
               </Text>
-              {folderName ? <HomeFolderIndicator maxWidth="28%" folderColor={folder?.color ?? null} name={folderName} /> : null}
+              {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
               <HomeTagDots tags={visibleTagDotsForItem('document', document.id)} />
             </>
           ) : (
@@ -1962,13 +2011,17 @@ export function PhotoMasonryGallery({
           <Text
             ellipsizeMode="tail"
             numberOfLines={1}
-            style={getSingleLineTitleTextStyle(theme, Boolean(folderName))}
+            style={getSingleLineTitleTextStyle(theme)}
           >
             {checklist.title}
           </Text>
-          {folderName ? <HomeFolderIndicator maxWidth="24%" folderColor={folder?.color ?? null} name={folderName} /> : null}
+          {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
           <HomeTagDots tags={visibleTagDotsForItem('checklist', checklist.id)} />
-          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, flexShrink: 0 }]}>
+          <Text
+            ellipsizeMode="tail"
+            numberOfLines={1}
+            style={[theme.typography.caption, { color: theme.colors.textSecondary, flexShrink: 1, minWidth: 0 }]}
+          >
             {compactProgress}
           </Text>
         </Pressable>
@@ -1983,8 +2036,7 @@ export function PhotoMasonryGallery({
               alignItems: 'center',
               flexDirection: 'row',
               gap: isCompactListView ? theme.spacing.xs : theme.spacing.sm,
-              paddingHorizontal: isCompactListView ? theme.spacing.xs : theme.spacing.md,
-              paddingVertical: isCompactListView ? theme.spacing.xxs : theme.spacing.xs,
+              ...getListRowContentPaddingStyle(theme, isCompactListView),
             },
           ])}
         >
@@ -2162,11 +2214,17 @@ export function PhotoMasonryGallery({
     ? 'Nenhum resultado encontrado'
     : favoritesOnly
     ? 'Nenhum favorito ainda'
-    : folderFilter.kind === 'folder'
+    : folderFilter.kind === 'category'
+      ? getHomeCategoryEmptyMessage(folderFilter.category)
+      : folderFilter.kind === 'folder'
       ? 'Nenhum item nesta pasta'
       : folderFilter.kind === 'unfiled'
         ? 'Nenhum item sem pasta'
         : 'Nenhum item salvo';
+  const hasSpecificEmptyState = searchQuery.trim().length > 0 || favoritesOnly ||
+    folderFilter.kind === 'folder' || folderFilter.kind === 'unfiled';
+  const canShowEmptyState = isInitialFeedReady && homeFoldersReady &&
+    (homeCatalogsLoadedSuccessfully || hasSpecificEmptyState);
 
   return (
     <>
@@ -2181,10 +2239,45 @@ export function PhotoMasonryGallery({
         ListHeaderComponent={listHeader}
         ListHeaderComponentStyle={listHeaderStyle}
         ListEmptyComponent={
-          isInitialFeedReady && homeFoldersReady ? (
-            <View style={{ alignItems: 'center', paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.xxl }}>
-              <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>{emptyMessage}</Text>
-            </View>
+          canShowEmptyState ? (
+            showGlobalEmptyState ? (
+              <View style={{ alignItems: 'center', flexGrow: 1, justifyContent: 'center', paddingBottom: theme.spacing.xxxl * 2, paddingHorizontal: theme.spacing.xl }}>
+                <View style={{ alignItems: 'center', maxWidth: 420, width: '100%' }}>
+                  <View
+                    accessible={false}
+                    style={{
+                      alignItems: 'center',
+                      backgroundColor: theme.colors.surfaceMuted,
+                      borderRadius: 40,
+                      height: 80,
+                      justifyContent: 'center',
+                      width: 80,
+                    }}
+                  >
+                    <Ionicons color={theme.colors.textPrimary} name="document-outline" size={34} />
+                  </View>
+                  <Text
+                    accessibilityRole="text"
+                    style={[
+                      theme.typography.subheadline,
+                      {
+                        alignSelf: 'stretch',
+                        color: theme.colors.textSecondary,
+                        flexShrink: 1,
+                        marginTop: theme.spacing.sm,
+                        textAlign: 'center',
+                      },
+                    ]}
+                  >
+                    Adicione seu primeiro conteúdo
+                  </Text>
+                </View>
+              </View>
+            ) : showHomeCategoryEmptyState || hasSpecificEmptyState ? (
+              <View style={{ alignItems: 'center', paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.xxl }}>
+                <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>{emptyMessage}</Text>
+              </View>
+            ) : null
           ) : null
         }
         masonry={viewLayout.masonry}

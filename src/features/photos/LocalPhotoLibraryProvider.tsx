@@ -20,10 +20,8 @@ import {
   listSavedMedia,
   updateSavedPhotoTitle,
 } from './photoLibrary';
-import { isStillImageAsset } from './photoImportPipeline';
 import { removeSavedMediaById } from './photoGalleryState';
 import { requestConfirmedPhotoDeletion } from './photoDeletionPipeline';
-import { isVideoAsset } from './videoImportPipeline';
 import {
   createPhotoRenamePromptButtons,
   renamePhotoWithPersistence,
@@ -33,15 +31,16 @@ import {
   createExistingPermissionPhotoSubtypeReader,
   resolvePhotoScreenshotClassification,
 } from './photoScreenshotDetection';
-import type { PhotoImportAsset, SavedMedia, SavedPhoto, SavedVideo, VideoImportAsset } from './photoTypes';
+import type { SavedMedia, SavedPhoto, SavedVideo, VideoImportAsset } from './photoTypes';
+import { countUnsupportedPickedVideos, groupPickedMediaAssets } from './photoPickerSelection';
 import { moveSavedItemToRecentlyDeleted } from '@/features/home-trash/trashLibrary';
 
 type PhotoLibraryContextValue = {
   media: SavedMedia[];
   isReady: boolean;
+  hasCatalogLoadSucceeded: boolean;
   refresh: () => Promise<void>;
-  importFromPhotoLibrary: () => Promise<void>;
-  importVideosFromPhotoLibrary: () => Promise<void>;
+  importMediaFromPhotoLibrary: () => Promise<void>;
   requestDeleteMedia: (
     id: number,
     mediaType: 'photo' | 'video',
@@ -58,14 +57,19 @@ const PhotoLibraryContext = createContext<PhotoLibraryContextValue | null>(null)
 export function LocalPhotoLibraryProvider({ children }: { children: ReactNode }) {
   const [media, setMedia] = useState<SavedMedia[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [hasCatalogLoadSucceeded, setHasCatalogLoadSucceeded] = useState(false);
   const initializationRef = useRef<Promise<void> | null>(null);
   const isImportingRef = useRef(false);
 
   const initialize = useCallback((): Promise<void> => {
     if (!initializationRef.current) {
       initializationRef.current = listSavedMedia()
-        .then(setMedia)
+        .then((nextMedia) => {
+          setMedia(nextMedia);
+          setHasCatalogLoadSucceeded(true);
+        })
         .catch((error: unknown) => {
+          setHasCatalogLoadSucceeded(false);
           initializationRef.current = null;
           throw error;
         })
@@ -76,8 +80,15 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
   }, []);
 
   const refresh = useCallback(async () => {
-    setMedia(await listSavedMedia());
-    setIsReady(true);
+    try {
+      const nextMedia = await listSavedMedia();
+      setMedia(nextMedia);
+      setHasCatalogLoadSucceeded(true);
+      setIsReady(true);
+    } catch (error) {
+      setHasCatalogLoadSucceeded(false);
+      throw error;
+    }
   }, []);
 
   useEffect(() => {
@@ -108,63 +119,7 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
     [initialize],
   );
 
-  const importFromPhotoLibrary = useCallback(async () => {
-    if (isImportingRef.current) {
-      return;
-    }
-
-    isImportingRef.current = true;
-
-    try {
-      await initialize();
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        selectionLimit: 0,
-        orderedSelection: true,
-        allowsEditing: false,
-        quality: 1,
-        exif: false,
-        base64: false,
-      });
-
-      if (result.canceled || !result.assets?.length) {
-        return;
-      }
-
-      const selectedImages = result.assets.filter((asset) =>
-        isStillImageAsset(asset as PhotoImportAsset),
-      );
-      if (selectedImages.length === 0) {
-        return;
-      }
-
-      const screenshotReader = await createExistingPermissionPhotoSubtypeReader(
-        Platform.OS,
-        async () => (await getPermissionsAsync(false)).granted,
-        async (assetReference) => new Asset(assetReference).getMediaSubtypes(),
-      );
-      const photosWithClassification = await Promise.all(
-        (selectedImages as PhotoImportAsset[]).map(async (asset) => ({
-          ...asset,
-          isScreenshot: await resolvePhotoScreenshotClassification(
-            asset,
-            screenshotReader,
-            MediaSubtype.SCREENSHOT,
-          ),
-        })),
-      );
-
-      await importSelectedPhotos(photosWithClassification);
-      setMedia(await listSavedMedia());
-    } catch {
-      // Picker and per-photo errors leave the existing local library available.
-    } finally {
-      isImportingRef.current = false;
-    }
-  }, [initialize]);
-
-  const importVideosFromPhotoLibrary = useCallback(async () => {
+  const importMediaFromPhotoLibrary = useCallback(async () => {
     if (isImportingRef.current) {
       return;
     }
@@ -177,19 +132,20 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync(false);
         if (!permission.granted) {
           Alert.alert(
-            'Acesso aos vídeos necessário',
-            'Permita o acesso à fototeca para que o SaveApp possa copiar os vídeos selecionados para a galeria local.',
+            'Acesso à fototeca necessário',
+            'Permita o acesso à fototeca para que o SaveApp possa copiar as mídias selecionadas para a galeria local.',
           );
           return;
         }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['videos'],
+        mediaTypes: ['images', 'videos'],
         allowsMultipleSelection: true,
         selectionLimit: 0,
         orderedSelection: true,
         allowsEditing: false,
+        quality: 1,
         videoExportPreset: ImagePicker.VideoExportPreset.Passthrough,
         exif: false,
         base64: false,
@@ -199,29 +155,70 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
         return;
       }
 
-      const selectedVideos = result.assets.filter((asset) =>
-        isVideoAsset(asset as VideoImportAsset),
-      ) as VideoImportAsset[];
-      if (selectedVideos.length === 0) {
-        Alert.alert('Nenhum vídeo compatível', 'Selecione vídeos em um formato compatível.');
+      const selectedAssets = result.assets as VideoImportAsset[];
+      const batches = groupPickedMediaAssets(selectedAssets);
+      const unsupportedVideoCount = countUnsupportedPickedVideos(selectedAssets);
+      if (batches.length === 0) {
+        if (unsupportedVideoCount > 0) {
+          Alert.alert('Nenhum vídeo compatível', 'Selecione vídeos em um formato compatível.');
+        }
         return;
       }
 
-      const importResult = await importSelectedVideos(selectedVideos);
+      let importedVideoCount = 0;
+      let failedVideoCount = unsupportedVideoCount;
+      let photoImportFailed = false;
+
+      for (const batch of batches) {
+        try {
+          if (batch.kind === 'photo') {
+            const screenshotReader = await createExistingPermissionPhotoSubtypeReader(
+              Platform.OS,
+              async () => (await getPermissionsAsync(false)).granted,
+              async (assetReference) => new Asset(assetReference).getMediaSubtypes(),
+            );
+            const photosWithClassification = await Promise.all(
+              batch.assets.map(async (asset) => ({
+                ...asset,
+                isScreenshot: await resolvePhotoScreenshotClassification(
+                  asset,
+                  screenshotReader,
+                  MediaSubtype.SCREENSHOT,
+                ),
+              })),
+            );
+
+            await importSelectedPhotos(photosWithClassification);
+          } else {
+            const importResult = await importSelectedVideos(batch.assets);
+            importedVideoCount += importResult.videos.length;
+            failedVideoCount += importResult.failedCount;
+          }
+        } catch {
+          if (batch.kind === 'video') {
+            failedVideoCount += batch.assets.length;
+          } else {
+            photoImportFailed = true;
+          }
+        }
+      }
+
       setMedia(await listSavedMedia());
 
-      if (importResult.failedCount > 0) {
+      if (failedVideoCount > 0) {
         Alert.alert(
-          importResult.videos.length > 0 ? 'Importação parcial' : 'Não foi possível importar os vídeos',
-          importResult.videos.length > 0
-            ? `${importResult.videos.length} vídeo(s) foram salvos. ${importResult.failedCount} não puderam ser adicionados. Verifique o formato e o espaço disponível no iPhone.`
+          importedVideoCount > 0 ? 'Importação parcial' : 'Não foi possível importar os vídeos',
+          importedVideoCount > 0
+            ? `${importedVideoCount} vídeo(s) foram salvos. ${failedVideoCount} não puderam ser adicionados. Verifique o formato e o espaço disponível no iPhone.`
             : 'Os vídeos selecionados não puderam ser adicionados. Verifique o formato e o espaço disponível no iPhone.',
         );
+      } else if (photoImportFailed) {
+        Alert.alert('Não foi possível adicionar mídia', 'Algumas mídias não puderam ser copiadas. Tente novamente.');
       }
     } catch {
       Alert.alert(
-        'Não foi possível adicionar vídeos',
-        'O SaveApp não conseguiu ler ou salvar os vídeos selecionados. Tente novamente.',
+        'Não foi possível adicionar mídia',
+        'O SaveApp não conseguiu ler ou salvar as mídias selecionadas. Tente novamente.',
       );
     } finally {
       isImportingRef.current = false;
@@ -317,9 +314,9 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
     () => ({
       media,
       isReady,
+      hasCatalogLoadSucceeded,
       refresh,
-      importFromPhotoLibrary,
-      importVideosFromPhotoLibrary,
+      importMediaFromPhotoLibrary,
       requestDeleteMedia,
       requestRenamePhoto,
       getPhoto,
@@ -328,9 +325,9 @@ export function LocalPhotoLibraryProvider({ children }: { children: ReactNode })
     [
       getPhoto,
       getVideo,
-      importFromPhotoLibrary,
-      importVideosFromPhotoLibrary,
+      importMediaFromPhotoLibrary,
       isReady,
+      hasCatalogLoadSucceeded,
       media,
       requestDeleteMedia,
       requestRenamePhoto,

@@ -52,10 +52,44 @@ describe('mixed-media masonry regression contract', () => {
     expect(homeViewModeProviderSource).toMatch(/const \[isReady, setIsReady\] = useState\(false\)/);
     expect(homeViewModeProviderSource).toMatch(/restoreHomeViewMode\(AsyncStorage\)\.then/);
     expect(homeViewModeProviderSource).toMatch(/setIsReady\(true\)/);
-    expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?allItems,[\s\S]*?folderFilter,[\s\S]*?folderIdByItemKey,[\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
+    expect(gallerySource).toMatch(/filterHomeFolderItems\([\s\S]*?catalogItems,[\s\S]*?folderFilter,[\s\S]*?folderIdByItemKey,[\s\S]*?protectedFolderIds,[\s\S]*?accessibleUnlockedFolderIds/);
     expect(gallerySource).toMatch(/buildHomeGalleryEntriesWhenReady\(filteredItems, now, isInitialFeedReady && homeFoldersReady\)/);
     expect(gallerySource).toMatch(/ListHeaderComponent=\{listHeader\}/);
     expect(gallerySource).toMatch(/if \(offset != null && offset > 0\)/);
+  });
+
+  test('shows the minimal first-content empty state only after successful unfiltered catalog reads', () => {
+    const emptyStateStart = gallerySource.indexOf('ListEmptyComponent=');
+    const emptyStateEnd = gallerySource.indexOf('masonry={viewLayout.masonry}', emptyStateStart);
+    const emptyStateSource = gallerySource.slice(emptyStateStart, emptyStateEnd);
+
+    expect(homeSource).toContain('homeCatalogsLoadedSuccessfully={homeCatalogsLoadedSuccessfully}');
+    expect(homeSource).toContain('photoCatalogLoadSucceeded &&');
+    expect(homeSource).toContain('savedContentLoadSucceeded &&');
+    expect(homeSource).toContain('documentCatalogLoadSucceeded &&');
+    expect(homeSource).toContain('checklistCatalogLoadSucceeded');
+    expect(gallerySource).toContain('shouldShowGlobalHomeEmptyState({');
+    expect(gallerySource).toContain('mediaCount: media.length');
+    expect(gallerySource).toContain('savedContentCount: contents.length');
+    expect(gallerySource).toContain('documentCount: documents.length');
+    expect(gallerySource).toContain('checklistCount: checklists.length');
+    expect(gallerySource).toMatch(/const hasSpecificEmptyState = searchQuery\.trim\(\)\.length > 0 \|\| favoritesOnly \|\|\s*folderFilter\.kind === 'folder' \|\| folderFilter\.kind === 'unfiled'/);
+    expect(gallerySource).toContain("folderFilter.kind === 'category'");
+    expect(emptyStateSource).toContain('canShowEmptyState ?');
+    expect(emptyStateSource).toContain('Adicione seu primeiro conteúdo');
+    expect(emptyStateSource).toContain('name="document-outline"');
+    expect(emptyStateSource).toContain('backgroundColor: theme.colors.surfaceMuted');
+    expect(emptyStateSource).toContain('color={theme.colors.textPrimary}');
+    expect(emptyStateSource).toContain('color: theme.colors.textSecondary');
+    expect(emptyStateSource).toContain('flexGrow: 1, justifyContent: \'center\'');
+    expect(emptyStateSource).toContain('paddingBottom: theme.spacing.xxxl * 2');
+    expect(emptyStateSource).not.toContain('numberOfLines=');
+    expect(emptyStateSource).toContain('flexShrink: 1');
+    expect(emptyStateSource).toContain('alignSelf: \'stretch\'');
+    expect(gallerySource).toContain('Nenhum resultado encontrado');
+    expect(gallerySource).toContain('Nenhum favorito ainda');
+    expect(gallerySource).toContain('Nenhum item nesta pasta');
+    expect(gallerySource).toContain('Nenhum item sem pasta');
   });
 
   test('presents links with a small source label and concise text only in the list modes', () => {
@@ -364,11 +398,23 @@ describe('mixed-media masonry regression contract', () => {
     expect(layoutOptionsOrder).toEqual([...layoutOptionsOrder].sort((left, right) => left - right));
     expect(bottomToolbar).toMatch(/<Stack\.Toolbar placement="bottom">[\s\S]*?<Stack\.Toolbar\.Spacer\s*\/>[\s\S]*?<Stack\.Toolbar\.Menu/);
     expect(bottomToolbar).toMatch(/accessibilityLabel="Adicionar"[\s\S]*?icon="plus"[\s\S]*?separateBackground/);
-    expect(bottomToolbar).toMatch(/Adicionar imagens/);
-    expect(bottomToolbar).toMatch(/Adicionar vídeos/);
+    expect(bottomToolbar).toMatch(/Adicionar mídia/);
     expect(bottomToolbar).toMatch(/Adicionar link/);
     expect(bottomToolbar).toMatch(/Adicionar texto/);
     expect(bottomToolbar).toMatch(/Adicionar arquivos/);
+    expect(bottomToolbar).toMatch(/Adicionar lista/);
+    expect(bottomToolbar.match(/<Stack\.Toolbar\.MenuAction/g)).toHaveLength(5);
+    expect(bottomToolbar).toMatch(/icon="photo\.on\.rectangle\.angled"[\s\S]*?Adicionar mídia/);
+    const addActionLabels = [
+      'Adicionar mídia',
+      'Adicionar link',
+      'Adicionar texto',
+      'Adicionar arquivos',
+      'Adicionar lista',
+    ];
+    const addActionPositions = addActionLabels.map((label) => bottomToolbar.indexOf(label));
+    expect(addActionPositions.every((position) => position >= 0)).toBe(true);
+    expect(addActionPositions).toEqual([...addActionPositions].sort((left, right) => left - right));
   });
 
   test('remounts only the FlashList per layout, restores its approximate offset, and retains stable item keys', () => {
@@ -443,6 +489,30 @@ describe('mixed-media masonry regression contract', () => {
     expect(gallerySource).toMatch(/contentFit="cover"/);
   });
 
+  test('uses identical horizontal thumbnail padding for every content type in both list modes', () => {
+    expect(gallerySource).toMatch(
+      /function getListRowContentPaddingStyle\(theme: AppTheme, isCompact: boolean\): ViewStyle \{\s*const padding = isCompact \? theme\.spacing\.xxs : theme\.spacing\.xs;[\s\S]*?paddingHorizontal: padding,[\s\S]*?paddingVertical: padding/,
+    );
+    expect(gallerySource.match(/\.\.\.getListRowContentPaddingStyle\(theme, isCompactListView\)/g)).toHaveLength(5);
+    expect(gallerySource).not.toMatch(
+      /paddingHorizontal: isCompactListView \? theme\.spacing\.xs : theme\.spacing\.md/,
+    );
+
+    const mediaRenderer = gallerySource.slice(
+      gallerySource.indexOf('const renderMediaItem'),
+      gallerySource.indexOf('const renderSavedContentItem'),
+    );
+    const savedContentRenderer = gallerySource.slice(
+      gallerySource.indexOf('const renderSavedContentItem'),
+      gallerySource.indexOf('const renderItem =', gallerySource.indexOf('const renderSavedContentItem')),
+    );
+
+    expect(mediaRenderer).toMatch(/getListRowContentPaddingStyle\(theme, isCompactListView\)/);
+    expect(savedContentRenderer.match(/getListRowContentPaddingStyle\(theme, isCompactListView\)/g)).toHaveLength(4);
+    expect(gallerySource).toMatch(/height: listThumbnailSize,[\s\S]*?width: listThumbnailSize/);
+    expect(gallerySource).toMatch(/gap: isCompactListView \? theme\.spacing\.xs : theme\.spacing\.sm/);
+  });
+
   test('uses one 14pt radius for image thumbnails in both list modes', () => {
     const mediaRenderer = gallerySource.slice(
       gallerySource.indexOf('const renderMediaItem'),
@@ -507,16 +577,25 @@ describe('mixed-media masonry regression contract', () => {
     });
   });
 
-  test('keeps the image picker independent and configures the video-only passthrough flow', () => {
-    expect(providerSource).toMatch(/mediaTypes: \['images'\]/);
-    expect(providerSource).toMatch(/mediaTypes: \['videos'\]/);
-    expect(providerSource).toMatch(/videoExportPreset: ImagePicker\.VideoExportPreset\.Passthrough/);
-    expect(providerSource).toMatch(/Platform\.OS === 'ios'[\s\S]*?requestMediaLibraryPermissionsAsync\(false\)/);
-    expect(providerSource).toMatch(/resolvePhotoScreenshotClassification\([\s\S]*?MediaSubtype\.SCREENSHOT/);
-    expect(providerSource).toMatch(/await importSelectedPhotos\(photosWithClassification\)/);
-    expect(providerSource).toMatch(/getPermissionsAsync\(false\)/);
-    expect(providerSource).not.toMatch(/requestPermissionsAsync\(/);
-    expect(providerSource).toMatch(/setMedia\(await listSavedMedia\(\)\)/);
+  test('opens one mixed multi-select picker and routes each media type through its existing import pipeline', () => {
+    const importFlowSource = providerSource.slice(
+      providerSource.indexOf('const importMediaFromPhotoLibrary'),
+      providerSource.indexOf('const requestDeleteMedia'),
+    );
+    expect(importFlowSource).toMatch(/mediaTypes: \['images', 'videos'\]/);
+    expect(importFlowSource).toMatch(/allowsMultipleSelection: true/);
+    expect(importFlowSource).toMatch(/selectionLimit: 0/);
+    expect(importFlowSource).toMatch(/orderedSelection: true/);
+    expect(importFlowSource).toMatch(/videoExportPreset: ImagePicker\.VideoExportPreset\.Passthrough/);
+    expect(importFlowSource).toMatch(/Platform\.OS === 'ios'[\s\S]*?requestMediaLibraryPermissionsAsync\(false\)/);
+    expect(importFlowSource).toMatch(/if \(!permission\.granted\) \{[\s\S]*?return;[\s\S]*?launchImageLibraryAsync/);
+    expect(importFlowSource).toMatch(/if \(result\.canceled \|\| !result\.assets\?\.length\) \{\s*return;\s*\}/);
+    expect(importFlowSource).toMatch(/resolvePhotoScreenshotClassification\([\s\S]*?MediaSubtype\.SCREENSHOT/);
+    expect(importFlowSource).toMatch(/await importSelectedPhotos\(photosWithClassification\)/);
+    expect(importFlowSource).toMatch(/await importSelectedVideos\(batch\.assets\)/);
+    expect(importFlowSource).toMatch(/setMedia\(await listSavedMedia\(\)\)/);
+    expect(importFlowSource).toMatch(/getPermissionsAsync\(false\)/);
+    expect(importFlowSource).not.toMatch(/requestPermissionsAsync\(/);
     expect(providerSource).toMatch(/listSavedMedia\(\)\s*\.then\(setMedia\)/);
   });
 

@@ -1,42 +1,57 @@
+import * as Haptics from 'expo-haptics';
 import { Stack, usePreventRemove, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  type TextInputInstance,
   View,
+  type ScrollViewInstance,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { NativeButton } from '@/components/native';
-import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
+import { ChecklistAddTaskRow } from '@/components/homeContent/ChecklistAddTaskRow';
+import { ChecklistTaskRow } from '@/components/homeContent/ChecklistTaskRow';
+import { NativeButton, NativeCardContextMenu, type NativeCardContextMenuAction } from '@/components/native';
 import {
-  MAX_CHECKLIST_TASK_LENGTH,
-  MAX_CHECKLIST_TITLE_LENGTH,
-} from '@/features/home-content/checklistTypes';
+  appendChecklistDraftTask,
+  checklistTasksForCreation,
+  removeChecklistDraftTask,
+  toggleChecklistDraftTask,
+  updateChecklistDraftTaskText,
+  type ChecklistDraftTask,
+} from '@/features/home-content/checklistDraftTasks';
+import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
+import { triggerChecklistHaptic } from '@/features/home-content/checklistHaptics';
+import {
+  CHECKLIST_COMPOSE_ROW_GAP,
+  CHECKLIST_COMPOSE_ROW_MIN_HEIGHT,
+  CHECKLIST_COMPOSE_TOUCH_TARGET,
+} from '@/features/home-content/checklistComposeLayout';
+import { MAX_CHECKLIST_TITLE_LENGTH } from '@/features/home-content/checklistTypes';
 import { useAppTheme } from '@/theme';
-
-type DraftTask = { id: string; text: string };
 
 export default function ChecklistComposeScreen() {
   const router = useRouter();
   const { theme } = useAppTheme();
   const { createChecklist } = useLocalChecklists();
   const [title, setTitle] = useState('');
-  const [tasks, setTasks] = useState<DraftTask[]>([]);
+  const [tasks, setTasks] = useState<ChecklistDraftTask[]>([]);
+  const [pendingTaskText, setPendingTaskText] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [allowRouteRemoval, setAllowRouteRemoval] = useState(false);
-  const taskInputRefs = useRef(new Map<string, TextInputInstance | null>());
+  const scrollViewRef = useRef<ScrollViewInstance | null>(null);
   const taskIdCounter = useRef(0);
-  const focusTaskId = useRef<string | null>(null);
-  const hasDraft = title.trim().length > 0 || tasks.some((task) => task.text.trim().length > 0);
+  const pendingTaskTextRef = useRef('');
+  const [addTaskFocusRequest, setAddTaskFocusRequest] = useState(0);
+  const hasDraft = title.trim().length > 0
+    || pendingTaskText.trim().length > 0
+    || tasks.some((task) => task.text.trim().length > 0);
 
   const onPreventedRemoval = useCallback(({ repeat }: { repeat: () => void }) => {
     if (isSaving) {
@@ -57,28 +72,61 @@ export default function ChecklistComposeScreen() {
   }, [isSaving]);
   usePreventRemove(hasDraft && !allowRouteRemoval, onPreventedRemoval);
 
-  useEffect(() => {
-    const id = focusTaskId.current;
-    if (!id) return;
-    focusTaskId.current = null;
-    requestAnimationFrame(() => taskInputRefs.current.get(id)?.focus());
-  }, [tasks]);
+  const addDraftTask = useCallback(async (text: string) => {
+    const task: ChecklistDraftTask = {
+      id: taskIdCounter.current++,
+      text,
+      isCompleted: false,
+    };
+    setTasks((current) => appendChecklistDraftTask(current, task));
+    pendingTaskTextRef.current = '';
+    setPendingTaskText('');
+    setErrorMessage(null);
+    return true;
+  }, []);
 
-  const addDraftTask = useCallback((shouldFocus = false) => {
-    const id = `draft-${taskIdCounter.current++}`;
-    if (shouldFocus) focusTaskId.current = id;
-    setTasks((current) => [...current, { id, text: '' }]);
+  const handleAddTaskDraftChange = useCallback((text: string) => {
+    pendingTaskTextRef.current = text;
+    setPendingTaskText(text);
+  }, []);
+
+  const updateDraftTask = useCallback((taskId: number, text: string) => {
+    setTasks((current) => updateChecklistDraftTaskText(current, taskId, text));
     setErrorMessage(null);
   }, []);
 
-  const updateDraftTask = useCallback((id: string, text: string) => {
-    setTasks((current) => current.map((task) => task.id === id ? { ...task, text } : task));
-    setErrorMessage(null);
+  const removeDraftTask = useCallback((taskId: number) => {
+    setTasks((current) => removeChecklistDraftTask(current, taskId));
   }, []);
 
-  const removeDraftTask = useCallback((id: string) => {
-    setTasks((current) => current.filter((task) => task.id !== id));
+  const toggleDraftTask = useCallback((taskId: number) => {
+    setTasks((current) => toggleChecklistDraftTask(current, taskId));
+    triggerChecklistHaptic(() => Haptics.selectionAsync());
   }, []);
+
+  const focusAddTaskInput = useCallback(() => {
+    setAddTaskFocusRequest((current) => current + 1);
+  }, []);
+
+  const handleAddTaskInputFocus = useCallback(() => {
+    requestAnimationFrame(() => scrollViewRef.current?.scrollToEnd({ animated: true }));
+  }, []);
+
+  const handleDraftTaskBlur = useCallback(() => {
+    // The task remains in this route's draft until the user saves the checklist.
+  }, []);
+
+  const createDraftTaskDeleteAction = useCallback((taskId: number): NativeCardContextMenuAction => ({
+    id: `delete-draft-task-${taskId}`,
+    title: 'Excluir',
+    systemImage: 'trash',
+    destructive: true,
+    onPress: () => removeDraftTask(taskId),
+  }), [removeDraftTask]);
+
+  const handleDraftTaskSubmit = useCallback((task: ChecklistDraftTask) => {
+    if (task.text.trim()) focusAddTaskInput();
+  }, [focusAddTaskInput]);
 
   const save = useCallback(async () => {
     if (!title.trim()) {
@@ -88,7 +136,10 @@ export default function ChecklistComposeScreen() {
     setIsSaving(true);
     setErrorMessage(null);
     try {
-      const id = await createChecklist(title, tasks.map((task) => task.text));
+      const id = await createChecklist(
+        title,
+        checklistTasksForCreation(tasks, pendingTaskTextRef.current),
+      );
       setAllowRouteRemoval(true);
       router.replace({ pathname: '/checklists/[id]', params: { id: String(id) } });
     } catch (error) {
@@ -109,6 +160,7 @@ export default function ChecklistComposeScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <SafeAreaView edges={['bottom']} style={{ backgroundColor: theme.colors.background, flex: 1 }}>
           <ScrollView
+            ref={scrollViewRef}
             contentContainerStyle={{ gap: theme.spacing.lg, padding: theme.spacing.lg, paddingBottom: theme.spacing.xxl }}
             keyboardShouldPersistTaps="handled"
           >
@@ -119,13 +171,14 @@ export default function ChecklistComposeScreen() {
                 autoCapitalize="sentences"
                 maxLength={MAX_CHECKLIST_TITLE_LENGTH}
                 onChangeText={(value) => { setTitle(value); setErrorMessage(null); }}
-                placeholder="Por fazer"
+                onSubmitEditing={focusAddTaskInput}
+                placeholder="Digite o título"
                 placeholderTextColor={theme.colors.textTertiary}
                 returnKeyType="next"
                 style={{
                   backgroundColor: theme.colors.surface,
                   borderColor: theme.colors.separator,
-                  borderRadius: theme.radius.md,
+                  borderRadius: theme.radius.lg,
                   borderWidth: StyleSheet.hairlineWidth,
                   color: theme.colors.textPrimary,
                   minHeight: 50,
@@ -138,54 +191,39 @@ export default function ChecklistComposeScreen() {
 
             <View style={{ gap: theme.spacing.xs }}>
               <Text style={[theme.typography.subheadline, { color: theme.colors.textSecondary }]}>Tarefas</Text>
-              <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, overflow: 'hidden' }}>
+              <View style={{ gap: CHECKLIST_COMPOSE_ROW_GAP }}>
                 {tasks.map((task, index) => (
-                  <View
+                  <NativeCardContextMenu
                     key={task.id}
-                    style={{
-                      alignItems: 'center',
-                      borderBottomColor: theme.colors.separator,
-                      borderBottomWidth: index === tasks.length - 1 ? 0 : StyleSheet.hairlineWidth,
-                      flexDirection: 'row',
-                      gap: theme.spacing.xs,
-                      minHeight: theme.sizes.touchTargetMinimum,
-                      paddingHorizontal: theme.spacing.sm,
-                    }}
+                    actions={[createDraftTaskDeleteAction(task.id)]}
+                    matchContents={{ vertical: true }}
+                    style={{ alignSelf: 'stretch', flexShrink: 1, minHeight: CHECKLIST_COMPOSE_ROW_MIN_HEIGHT, minWidth: 0 }}
                   >
-                    <TextInput
-                      accessibilityLabel={`Tarefa ${index + 1}`}
-                      autoCapitalize="sentences"
-                      maxLength={MAX_CHECKLIST_TASK_LENGTH}
-                      onChangeText={(value) => updateDraftTask(task.id, value)}
-                      onSubmitEditing={() => {
-                        if (task.text.trim()) addDraftTask(true);
-                      }}
-                      placeholder="Nova tarefa"
-                      placeholderTextColor={theme.colors.textTertiary}
-                      ref={(instance) => { taskInputRefs.current.set(task.id, instance); }}
-                      returnKeyType="next"
-                      style={[theme.typography.body, { color: theme.colors.textPrimary, flex: 1, minHeight: theme.sizes.touchTargetMinimum, paddingVertical: theme.spacing.sm }]}
-                      value={task.text}
+                    <ChecklistTaskRow
+                      disabled={isSaving}
+                      index={index}
+                      onTextBlur={handleDraftTaskBlur}
+                      onTextChange={(value) => updateDraftTask(task.id, value)}
+                      onSubmitEditing={() => handleDraftTaskSubmit(task)}
+                      onToggle={() => toggleDraftTask(task.id)}
+                      checkboxHitTargetWidth={CHECKLIST_COMPOSE_TOUCH_TARGET}
+                      rowMinimumHeight={CHECKLIST_COMPOSE_ROW_MIN_HEIGHT}
+                      task={task}
+                      text={task.text}
+                      verticalHitSlop={0}
                     />
-                    <Pressable
-                      accessibilityLabel={`Remover tarefa ${index + 1}`}
-                      accessibilityRole="button"
-                      hitSlop={8}
-                      onPress={() => removeDraftTask(task.id)}
-                      style={{ alignItems: 'center', height: theme.sizes.touchTargetMinimum, justifyContent: 'center', width: 36 }}
-                    >
-                      <Text style={[theme.typography.title3, { color: theme.colors.textTertiary }]}>−</Text>
-                    </Pressable>
-                  </View>
+                  </NativeCardContextMenu>
                 ))}
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => addDraftTask(true)}
-                  style={{ alignItems: 'center', flexDirection: 'row', gap: theme.spacing.sm, minHeight: theme.sizes.touchTargetMinimum, paddingHorizontal: theme.spacing.md }}
-                >
-                  <Text style={[theme.typography.title3, { color: theme.colors.primary }]}>+</Text>
-                  <Text style={[theme.typography.body, { color: theme.colors.primary }]}>Adicionar tarefa</Text>
-                </Pressable>
+                <ChecklistAddTaskRow
+                  key="checklist-add-task-row"
+                  disabled={isSaving}
+                  focusRequest={addTaskFocusRequest}
+                  onDraftChange={handleAddTaskDraftChange}
+                  onInputFocus={handleAddTaskInputFocus}
+                  onSubmit={addDraftTask}
+                  checkboxColumnWidth={CHECKLIST_COMPOSE_TOUCH_TARGET}
+                  rowMinimumHeight={CHECKLIST_COMPOSE_ROW_MIN_HEIGHT}
+                />
               </View>
             </View>
 
@@ -194,9 +232,8 @@ export default function ChecklistComposeScreen() {
                 {errorMessage}
               </Text>
             ) : null}
-            <View style={{ flexDirection: 'row', gap: theme.spacing.sm, justifyContent: 'flex-end' }}>
-              <NativeButton disabled={isSaving} label="Cancelar" onPress={() => router.back()} variant="plain" />
-              <NativeButton disabled={isSaving || !title.trim()} label={isSaving ? 'Salvando…' : 'Salvar lista'} onPress={() => void save()} variant="primary" />
+            <View style={{ alignSelf: 'stretch', alignItems: 'flex-end' }}>
+              <NativeButton disabled={isSaving || !title.trim()} label={isSaving ? 'Salvando…' : 'Salvar'} onPress={() => void save()} variant="primary" />
             </View>
           </ScrollView>
         </SafeAreaView>

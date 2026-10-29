@@ -447,20 +447,56 @@ function StorageUsagePage({ isActive }: { isActive: boolean }) {
 
 function RecentlyDeletedPage({ isActive }: { isActive: boolean }) {
   const { theme } = useAppTheme();
-  const { items, isLoading, loadFailed, operationError, refresh, restore, permanentlyDelete } = useRecentlyDeletedItems(isActive);
+  const {
+    items,
+    isLoading,
+    loadFailed,
+    operationError,
+    operationMessage,
+    isBulkOperationPending,
+    refresh,
+    restore,
+    permanentlyDelete,
+    restoreAll,
+    permanentlyDeleteAll,
+  } = useRecentlyDeletedItems(isActive);
   const [pendingDeletion, setPendingDeletion] = useState<RecentlyDeletedItem | null>(null);
+  const [pendingDeleteAll, setPendingDeleteAll] = useState(false);
 
   return (
     <Toolbar>
       <SwiftUIAlert
-        isPresented={pendingDeletion !== null}
+        isPresented={pendingDeletion !== null || pendingDeleteAll}
         onIsPresentedChange={(isPresented) => {
-          if (!isPresented) setPendingDeletion(null);
+          if (!isPresented) {
+            setPendingDeletion(null);
+            setPendingDeleteAll(false);
+          }
         }}
-        title="Apagar item?"
+        title={pendingDeleteAll ? 'Apagar tudo?' : 'Apagar item?'}
       >
         <SwiftUIAlert.Trigger>
           <List modifiers={[navigationTitle('Apagados recentemente'), navigationBarTitleDisplayMode('inline')]}>
+            {items.length > 0 && !isLoading && !loadFailed ? (
+              <Section>
+                <Button
+                  label="Restaurar tudo"
+                  onPress={() => void restoreAll()}
+                  systemImage="arrow.uturn.backward"
+                  modifiers={[disabled(isBulkOperationPending)]}
+                />
+                <Button
+                  label="Apagar tudo"
+                  onPress={() => setPendingDeleteAll(true)}
+                  role="destructive"
+                  systemImage="trash"
+                  modifiers={[disabled(isBulkOperationPending)]}
+                />
+                {isBulkOperationPending ? (
+                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>Processando…</Text>
+                ) : null}
+              </Section>
+            ) : null}
             <Section
               footer={(
                 <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
@@ -473,6 +509,9 @@ function RecentlyDeletedPage({ isActive }: { isActive: boolean }) {
                   {operationError}
                 </Text>
               ) : null}
+              {operationMessage ? (
+                <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>{operationMessage}</Text>
+              ) : null}
               {isLoading && items.length === 0 ? (
                 <Text modifiers={[foregroundStyle(theme.colors.textSecondary)]}>Carregando…</Text>
               ) : loadFailed ? (
@@ -480,74 +519,90 @@ function RecentlyDeletedPage({ isActive }: { isActive: boolean }) {
               ) : items.length === 0 ? (
                 <Text modifiers={[foregroundStyle(theme.colors.textSecondary)]}>Nada apagado recentemente</Text>
               ) : items.map((item) => {
-                const days = getRecentlyDeletedDaysRemaining(item.deletedAt);
-                const title = item.requiresAuthorization
-                  ? 'Conteúdo protegido'
-                  : item.title ?? getRecentlyDeletedItemLabel(item.itemType);
-                const icon = item.requiresAuthorization
-                  ? 'lock.fill'
-                  : item.itemType === 'photo' ? 'photo'
-                    : item.itemType === 'video' ? 'video'
-                      : item.itemType === 'link' ? 'link'
-                        : item.itemType === 'text' ? 'text.alignleft'
-                          : item.itemType === 'document' ? 'doc'
-                            : 'checklist';
-                const expirationLabel = days === 0
-                  ? 'Expira hoje'
-                  : `${days} ${days === 1 ? 'dia restante' : 'dias restantes'}`;
+                    const days = getRecentlyDeletedDaysRemaining(item.deletedAt);
+                    const title = item.requiresAuthorization
+                      ? 'Conteúdo protegido'
+                      : item.title ?? getRecentlyDeletedItemLabel(item.itemType);
+                    const icon = item.requiresAuthorization
+                      ? 'lock.fill'
+                      : item.itemType === 'photo' ? 'photo'
+                        : item.itemType === 'video' ? 'video'
+                          : item.itemType === 'link' ? 'link'
+                            : item.itemType === 'text' ? 'text.alignleft'
+                              : item.itemType === 'document' ? 'doc'
+                                : 'checklist';
+                    const expirationLabel = days === 0
+                      ? 'Expira hoje'
+                      : `${days} ${days === 1 ? 'dia restante' : 'dias restantes'}`;
 
-                return (
-                  <ContextMenu key={`${item.itemType}:${item.itemId}`}>
-                    <ContextMenu.Items>
-                      <Button label="Restaurar" onPress={() => void restore(item)} systemImage="arrow.uturn.backward" />
-                      <Button
-                        label="Apagar definitivamente"
-                        onPress={() => setPendingDeletion(item)}
-                        role="destructive"
-                        systemImage="trash"
-                      />
-                    </ContextMenu.Items>
-                    <ContextMenu.Trigger>
-                      <HStack
-                        alignment="center"
-                        modifiers={[
-                          accessibilityElement('combine'),
-                          accessibilityLabel(`${title}, ${expirationLabel}`),
-                          accessibilityHint('Toque e segure para restaurar ou apagar definitivamente.'),
-                        ]}
-                        spacing={theme.spacing.sm}
-                      >
-                        <Image color={theme.colors.primary} size={20} systemName={icon} />
-                        <VStack alignment="leading" spacing={2}>
-                          <Text modifiers={[foregroundStyle(theme.colors.textPrimary), lineLimit(2)]}>{title}</Text>
-                          <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
-                            {expirationLabel}
-                          </Text>
-                        </VStack>
-                        <Spacer />
-                      </HStack>
-                    </ContextMenu.Trigger>
-                  </ContextMenu>
-                );
+                    return (
+                      <ContextMenu key={`${item.itemType}:${item.itemId}`}>
+                        <ContextMenu.Items>
+                          <Button
+                            label="Restaurar"
+                            onPress={() => void restore(item)}
+                            systemImage="arrow.uturn.backward"
+                            modifiers={[disabled(isLoading || isBulkOperationPending)]}
+                          />
+                          <Button
+                            label="Apagar definitivamente"
+                            onPress={() => setPendingDeletion(item)}
+                            role="destructive"
+                            systemImage="trash"
+                            modifiers={[disabled(isLoading || isBulkOperationPending)]}
+                          />
+                        </ContextMenu.Items>
+                        <ContextMenu.Trigger>
+                          <HStack
+                            alignment="center"
+                            modifiers={[
+                              accessibilityElement('combine'),
+                              accessibilityLabel(`${title}, ${expirationLabel}`),
+                              accessibilityHint('Toque e segure para restaurar ou apagar definitivamente.'),
+                            ]}
+                            spacing={theme.spacing.sm}
+                          >
+                            <Image color={theme.colors.primary} size={20} systemName={icon} />
+                            <VStack alignment="leading" spacing={2}>
+                              <Text modifiers={[foregroundStyle(theme.colors.textPrimary), lineLimit(2)]}>{title}</Text>
+                              <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+                                {expirationLabel}
+                              </Text>
+                            </VStack>
+                            <Spacer />
+                          </HStack>
+                        </ContextMenu.Trigger>
+                      </ContextMenu>
+                    );
               })}
             </Section>
           </List>
         </SwiftUIAlert.Trigger>
         <SwiftUIAlert.Message>
-          <Text>Este conteúdo será removido do SaveApp e não poderá ser restaurado.</Text>
+          <Text>
+            {pendingDeleteAll
+              ? `Os ${items.length} conteúdos serão removidos do SaveApp e não poderão ser restaurados.`
+              : 'Este conteúdo será removido do SaveApp e não poderá ser restaurado.'}
+          </Text>
         </SwiftUIAlert.Message>
         <SwiftUIAlert.Actions>
           <Button
             label="Cancelar"
-            onPress={() => setPendingDeletion(null)}
+            onPress={() => {
+              setPendingDeletion(null);
+              setPendingDeleteAll(false);
+            }}
             role="cancel"
           />
           <Button
-            label="Apagar"
+            label={pendingDeleteAll ? 'Apagar tudo' : 'Apagar'}
             onPress={() => {
               const item = pendingDeletion;
+              const deleteAll = pendingDeleteAll;
               setPendingDeletion(null);
-              if (item) void permanentlyDelete(item);
+              setPendingDeleteAll(false);
+              if (deleteAll) void permanentlyDeleteAll();
+              else if (item) void permanentlyDelete(item);
             }}
             role="destructive"
           />

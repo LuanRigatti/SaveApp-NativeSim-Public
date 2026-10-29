@@ -4,6 +4,8 @@ const {
   buildHomeGalleryEntriesWhenReady,
   formatLocalDayTitle,
   getLocalDayKey,
+  shouldShowHomeCategoryEmptyState,
+  shouldShowGlobalHomeEmptyState,
   sortHomeItemsChronologically,
 } = require('../src/features/home-content/homeFeed');
 
@@ -105,5 +107,72 @@ describe('Home mixed feed day grouping', () => {
     expect(entries[0].id).toBe('day:2026-10-23');
     expect(entries.map((entry) => entry.id)).toContain('content:document:9');
     expect(entries.find((entry) => entry.id === 'content:document:9').kind).toBe('content');
+  });
+});
+
+describe('global Home empty state eligibility', () => {
+  const emptyLibrary = {
+    catalogsLoadedSuccessfully: true,
+    mediaCount: 0,
+    savedContentCount: 0,
+    documentCount: 0,
+    checklistCount: 0,
+    searchQuery: '',
+    favoritesOnly: false,
+    folderFilterKind: 'all-items',
+  };
+
+  test('shows the first-content state only after every catalog confirms zero items', () => {
+    expect(shouldShowGlobalHomeEmptyState(emptyLibrary)).toBe(true);
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, catalogsLoadedSuccessfully: false })).toBe(false);
+  });
+
+  test.each([
+    ['photo or video', { mediaCount: 1 }],
+    ['link', { savedContentCount: 1 }],
+    ['text', { savedContentCount: 1 }],
+    ['document', { documentCount: 1 }],
+    ['checklist', { checklistCount: 1 }],
+  ])('hides the global empty state when the library contains a %s', (_label, count) => {
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, ...count })).toBe(false);
+  });
+
+  test.each([
+    ['search', { searchQuery: 'sem resultados' }],
+    ['favorites', { favoritesOnly: true }],
+    ['folder', { folderFilterKind: 'folder' }],
+    ['unfiled', { folderFilterKind: 'unfiled' }],
+  ])('preserves the specific empty state for an active %s filter', (_label, filter) => {
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, ...filter })).toBe(false);
+  });
+
+  test('automatically stops qualifying after the first saved item reaches its catalog', () => {
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, savedContentCount: 1 })).toBe(false);
+  });
+
+  test('keeps the global first-content state for an empty category only when the whole library is empty', () => {
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, folderFilterKind: 'category' })).toBe(true);
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, folderFilterKind: 'category', documentCount: 1 })).toBe(false);
+  });
+});
+
+describe('Home category empty state eligibility', () => {
+  const emptyCategory = {
+    catalogsLoadedSuccessfully: true,
+    totalItemCount: 1,
+    categoryItemCount: 0,
+    searchQuery: '',
+    favoritesOnly: false,
+  };
+
+  test('shows a category empty state only after catalogs load and another category has content', () => {
+    expect(shouldShowHomeCategoryEmptyState(emptyCategory)).toBe(true);
+    expect(shouldShowHomeCategoryEmptyState({ ...emptyCategory, catalogsLoadedSuccessfully: false })).toBe(false);
+    expect(shouldShowHomeCategoryEmptyState({ ...emptyCategory, totalItemCount: 0 })).toBe(false);
+  });
+
+  test('preserves search and favorites empty states over the category message', () => {
+    expect(shouldShowHomeCategoryEmptyState({ ...emptyCategory, searchQuery: 'sem resultado' })).toBe(false);
+    expect(shouldShowHomeCategoryEmptyState({ ...emptyCategory, favoritesOnly: true })).toBe(false);
   });
 });
