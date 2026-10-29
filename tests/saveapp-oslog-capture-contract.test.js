@@ -417,19 +417,23 @@ describe('SaveApp Bash exact-run OSLog choice behavior', () => {
       ['wrong optional SHA', { statuses: [makeChoiceStatus({ sha: 'b'.repeat(40) })] }, 'identity validation'],
       ['non-success state', { statuses: [makeChoiceStatus({ state: 'pending' })] }, 'identity validation'],
       ['malformed status object', { statuses: [makeChoiceStatus({ malformed: true })] }, 'invalid SaveApp status object'],
-      ['invalid status pages', { invalidPages: true }, 'invalid SaveApp status response'],
+      ['invalid status pages', { invalidPages: true }, 'invalid SaveApp status response', true],
       ['status API failure', { apiFailure: 'statuses' }, 'bounded timeout'],
       ['run API failure', { apiFailure: 'run' }, 'Could not verify the SaveApp NativeSim run'],
       ['missing status', { statuses: [] }, 'bounded timeout'],
     ];
 
-    for (const [, fixture, expectedMessage] of cases) {
+    for (const [, fixture, expectedMessage, jqMayReportMalformedJson = false] of cases) {
       const outcome = runBashChoice(fixture);
       expect(outcome.exitCode).toBe(0);
       expect(outcome.stdout).toContain('__CHOICE_EXIT__=1');
       expect(outcome.stdout).toContain(expectedMessage);
       expect(outcome.stdout).not.toContain('enabled=');
-      expect(outcome.stderr).toBe('');
+      if (jqMayReportMalformedJson) {
+        expect(`${outcome.stdout}\n${outcome.stderr}`).not.toMatch(/https?:\/\/|gh(?:o|p|u|s)_[A-Za-z0-9]+/i);
+      } else {
+        expect(outcome.stderr).toBe('');
+      }
     }
   }, 30000);
 });
