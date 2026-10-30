@@ -12,7 +12,6 @@ const managerSource = readSource('../src/features/dynamic-island/saveLinkActivit
 const quickSavePluginSource = readSource('../plugins/withSaveLinkQuickSave.js');
 const iconAssetsSource = readSource('../src/features/dynamic-island/saveLinkActivityIconAssets.ts');
 const nativeQuickSaveButtonSource = readSource('../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveLiveActivityButton.swift');
-const quickSavePlugin = require('../plugins/withSaveLinkQuickSave');
 const authorizationSource = readSource('../src/features/dynamic-island/activityLinkAuthorization.ts');
 const layoutSource = readSource('../src/features/dynamic-island/saveLinkLiveActivityWidget.ios.tsx');
 const {
@@ -159,14 +158,15 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(providerSource).not.toMatch(/setInterval|setTimeout|addPushToStartTokenListener/);
   });
 
-  test('starts the activity with bundled appearance-aware icons and preserves authorization setup', () => {
+  test('starts the activity with the fixed shared icon and preserves authorization setup', () => {
     const activityStartIndex = managerSource.indexOf(
-      "{ composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,",
+      "{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,",
     );
 
     expect(activityStartIndex).toBeGreaterThanOrEqual(0);
-    expect(managerSource).not.toContain('getSharedAppIconUri');
-    expect(managerSource).not.toContain('widgetsDirectory');
+    expect(managerSource).toContain('const iconUri = await getSharedAppIconUri()');
+    expect(managerSource).toContain('widgetsDirectory');
+    expect(managerSource).toContain('iconUri: string');
     expect(expoWidgetsModuleSource).toContain(
       'FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)',
     );
@@ -231,8 +231,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(managerSource).toContain("source: 'dynamic-island-expanded'");
     expect(managerSource).toContain('activityToken: token');
     expect(managerSource).toContain('randomUUID()');
-    expect(managerSource).not.toContain('widgetsDirectory');
-    expect(iconAssetsSource).toContain('live-activity-icon.png');
+    expect(managerSource).toContain('getSharedAppIconUri');
+    expect(iconAssetsSource).toContain("'saveapp-live-activity-icon.png'");
     expect(managerSource).toContain('isAuthorizedSaveLinkActivityURL');
     expect(authorizationSource).toContain('ACTIVITY_LINK_AUTHORIZATION_KEY');
   });
@@ -261,7 +261,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(managerSource).toContain('activity = getActivityFactory().start(');
     expect(managerSource).toContain('composeUrl');
     expect(managerSource).toContain('activityToken: token');
-    expect(managerSource).toContain("{ composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(managerSource).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(layoutSource).toContain('compactLeading: (');
     expect(layoutSource).toContain('minimal: (');
     expect(banner).not.toContain('<Link');
@@ -304,39 +304,30 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
 });
 
 describe('Dynamic Island SaveApp icon assets and expanded layout', () => {
-  test('uses validated light and dark PNG appearance variants in the extension asset catalog', () => {
-    for (const path of ['../assets/live-activity-icon.png', '../assets/live-activity-icon-dark.png']) {
-      const png = readFileSync(join(__dirname, path));
-      expect(hasPngSignature(png)).toBe(true);
-      expect(isExpectedSaveLinkActivityPng(png)).toBe(true);
-      expect(png.readUInt32BE(16)).toBe(SAVE_LINK_ACTIVITY_ICON_SIZE);
-      expect(png.readUInt32BE(20)).toBe(SAVE_LINK_ACTIVITY_ICON_SIZE);
-      expect(png.readUInt8(24)).toBe(8);
-      expect(png.readUInt8(25)).toBe(6);
-    }
+  test('uses the verified white Live Activity PNG for every appearance and widget region', () => {
+    const png = readFileSync(join(__dirname, '../assets/live-activity-icon.png'));
+    expect(hasPngSignature(png)).toBe(true);
+    expect(isExpectedSaveLinkActivityPng(png)).toBe(true);
+    expect(png.readUInt32BE(16)).toBe(SAVE_LINK_ACTIVITY_ICON_SIZE);
+    expect(png.readUInt32BE(20)).toBe(SAVE_LINK_ACTIVITY_ICON_SIZE);
+    expect(png.readUInt8(24)).toBe(8);
+    expect(png.readUInt8(25)).toBe(6);
     expect(areBytesEqual(Uint8Array.from([1, 2]), Uint8Array.from([1, 2]))).toBe(true);
     expect(areBytesEqual(Uint8Array.from([1, 2]), Uint8Array.from([1, 3]))).toBe(false);
     expect(isExpectedSaveLinkActivityPng(Uint8Array.from([137, 80, 78, 71]))).toBe(false);
-    const manifest = quickSavePlugin.liveActivityAssetCatalogManifest();
-    expect(manifest.images).toEqual([
-      {
-        filename: 'live-activity-icon.png',
-        idiom: 'universal',
-        appearances: [{ appearance: 'luminosity', value: 'light' }],
-      },
-      {
-        filename: 'live-activity-icon-dark.png',
-        idiom: 'universal',
-        appearances: [{ appearance: 'luminosity', value: 'dark' }],
-      },
-    ]);
-    expect(quickSavePluginSource).toContain('folder.assetcatalog');
-    expect(quickSavePluginSource).toContain('ExpoWidgetsTarget');
-    expect(quickSavePluginSource).toContain('isExpectedLiveActivityIcon');
-    expect(quickSavePluginSource).toContain('copiedBytes.equals(sourceBytes)');
-    expect(layoutSource.match(/assetName=\{SAVE_LINK_ACTIVITY_ASSET_NAME\}/g)).toHaveLength(4);
+    expect(iconAssetsSource).not.toContain('dark');
+    expect(managerSource).toContain("Asset.loadAsync([require('../../../assets/live-activity-icon.png')])");
+    expect(managerSource).toContain('new Directory(widgetsDirectory)');
+    expect(managerSource).toContain('new File(sharedDirectory, SAVE_LINK_ACTIVITY_ICON_FILE)');
+    expect(managerSource).toContain('source.copy(destination, { overwrite: true })');
+    expect(managerSource).toContain('areBytesEqual(sourceBytes, copiedBytes)');
+    expect(managerSource).toContain("destination.uri.startsWith('file://')");
+    expect(managerSource).toContain('iconUri: string');
+    expect(layoutSource.match(/uiImage=\{props\.iconUri\}/g)).toHaveLength(4);
+    expect(layoutSource).not.toContain('assetName=');
     expect(layoutSource).not.toContain('environment.colorScheme');
-    expect(layoutSource).not.toContain('uiImage=');
+    expect(quickSavePluginSource).not.toMatch(/SaveAppLiveActivityIcons|withSaveAppLiveActivityIconAssets|folder\.assetcatalog/);
+    expect(quickSavePluginSource).toContain('withSaveAppQuickSaveAppIntentsPackage(config)');
   });
 
   test('uses equal 48 point circles in expanded regions and keeps the check ring inside its frame', () => {

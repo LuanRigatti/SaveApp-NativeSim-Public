@@ -491,6 +491,10 @@ const quickSaveIconPluginPath = path.join(root, 'plugins/withSaveLinkQuickSave.j
 const quickSaveIconPluginSource = fs.existsSync(quickSaveIconPluginPath)
   ? fs.readFileSync(quickSaveIconPluginPath, 'utf8')
   : '';
+const liveActivityManagerPath = path.join(root, 'src/features/dynamic-island/saveLinkActivityManager.ios.ts');
+const liveActivityManagerSource = fs.existsSync(liveActivityManagerPath)
+  ? fs.readFileSync(liveActivityManagerPath, 'utf8')
+  : '';
 const liveActivityLayoutPath = path.join(root, 'src/features/dynamic-island/saveLinkLiveActivityWidget.ios.tsx');
 const liveActivityLayoutSource = fs.existsSync(liveActivityLayoutPath)
   ? fs.readFileSync(liveActivityLayoutPath, 'utf8')
@@ -543,10 +547,14 @@ if (
   !quickSaveQueuePipelineSource.includes('await adapter.acknowledge(entry)') ||
   !quickSaveQueuePipelineSource.includes("adapter.record('commit_confirmed')") ||
   !quickSaveQueuePipelineSource.includes("adapter.record('duplicate_confirmed')") ||
-  !quickSaveIconPluginSource.includes('withSaveAppLiveActivityIconAssets') ||
-  !quickSaveIconPluginSource.includes('ensureLiveActivityAssetCatalogTargetReference') ||
-  !quickSaveIconPluginSource.includes('folder.assetcatalog') ||
-  (liveActivityLayoutSource.match(/assetName=\{SAVE_LINK_ACTIVITY_ASSET_NAME\}/g) ?? []).length !== 4 ||
+  !liveActivityManagerSource.includes("Asset.loadAsync([require('../../../assets/live-activity-icon.png')])") ||
+  !liveActivityManagerSource.includes('new Directory(widgetsDirectory)') ||
+  !liveActivityManagerSource.includes('source.copy(destination, { overwrite: true })') ||
+  !liveActivityManagerSource.includes('areBytesEqual(sourceBytes, copiedBytes)') ||
+  !liveActivityManagerSource.includes("destination.uri.startsWith('file://')") ||
+  !liveActivityManagerSource.includes('{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: \'ready\' }') ||
+  (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 4 ||
+  liveActivityLayoutSource.includes('assetName=') ||
   liveActivityLayoutSource.includes('environment.colorScheme') ||
   !quickSavePreviewSource.includes('createQuickSaveLinkPreviewEnricher') ||
   !quickSavePreviewMigrationSource.includes('QUICK_SAVE_PREVIEW_ENRICHMENT_SCHEMA_VERSION = 11') ||

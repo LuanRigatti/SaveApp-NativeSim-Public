@@ -141,10 +141,9 @@ function NavigationRoot() {
             headerBackTitle: '',
             headerShadowVisible: false,
             headerShown: true,
-            headerStyle: { backgroundColor: theme.colors.background },
             headerTintColor: theme.colors.textPrimary,
             headerTitle: '',
-            headerTransparent: false,
+            headerTransparent: Platform.OS === 'ios',
             presentation: 'card',
           }}
         />

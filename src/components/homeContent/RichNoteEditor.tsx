@@ -14,6 +14,7 @@ import {
   View,
   type GestureResponderEvent,
   type LayoutChangeEvent,
+  type TextStyle,
   type TextInputInstance,
 } from 'react-native';
 
@@ -35,6 +36,7 @@ import { confirmSavedLinkOpen } from '@/features/home-content/savedLinkOpenConfi
 import { getRichNoteAssetUri } from '@/features/home-content/richNoteAssets';
 import { getBoundedChecklistTaskInputHeight } from '@/features/home-content/checklistTaskRowLayout';
 import { getRichNoteInputHeight } from '@/features/home-content/richNoteEditorLayout';
+import { isTouchWithinRichNoteTextLine } from '@/features/home-content/richNoteTextLineHitTest';
 import { useAppTheme } from '@/theme';
 
 const RICH_NOTE_CHECKLIST_CONTROL_WIDTH = 44;
@@ -135,6 +137,8 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   );
   const documentRef = useRef(document);
   const inputRefs = useRef(new Map<string, TextInputInstance>());
+  const inputAvailableWidthsRef = useRef(new Map<string, number>());
+  const inputTextLinesRef = useRef(new Map<string, readonly { width: number; height: number }[]>());
   const handledImageRetryRef = useRef<{ blockId: string } | null>(null);
   const linkURLInputRef = useRef<TextInputInstance>(null);
   const activeInputRef = useRef<EditorInput | null>(null);
@@ -260,6 +264,23 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   }, [focusAtEnd, initialFocus]);
 
   const markInteraction = useCallback(() => onInteractionStart?.(), [onInteractionStart]);
+  const markTextLineInteraction = useCallback((inputId: string, event: GestureResponderEvent, lineHeight: number, containerHeight: number, verticalPadding = 0) => {
+    const availableWidth = inputAvailableWidthsRef.current.get(inputId);
+    const lines = inputTextLinesRef.current.get(inputId);
+    if (availableWidth == null || lines == null) {
+      markInteraction();
+      return;
+    }
+    if (isTouchWithinRichNoteTextLine({
+      availableWidth,
+      containerHeight,
+      lineHeight,
+      lines,
+      verticalPadding,
+      x: event.nativeEvent.locationX,
+      y: event.nativeEvent.locationY,
+    })) markInteraction();
+  }, [markInteraction]);
   const requestImageRetry = useCallback((blockId: string) => setImageRetryRequest({ blockId }), []);
 
   const currentInsertionAnchor = useCallback((): InsertionAnchor => {
@@ -298,6 +319,15 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       verticalPadding,
     });
     setMeasuredInputHeights((current) => current[inputId] === nextHeight ? current : { ...current, [inputId]: nextHeight });
+  }, []);
+
+  const measureInputHitArea = useCallback((inputId: string, availableWidth: number) => {
+    if (!Number.isFinite(availableWidth) || availableWidth <= 0) return;
+    inputAvailableWidthsRef.current.set(inputId, availableWidth);
+  }, []);
+
+  const measureInputTextLines = useCallback((inputId: string, lines: readonly { width: number; height: number }[]) => {
+    inputTextLinesRef.current.set(inputId, lines);
   }, []);
 
   const measureChecklistInput = useCallback((inputId: string, contentHeight: number, text: string) => {
@@ -679,12 +709,16 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   }, [dismissKeyboard, focusAtEnd, focusInput, linkComposer]);
 
   const handleToolbarAction = useCallback((action: string) => {
-    if (linkComposer && action !== 'toggleKeyboard' && action !== 'undo') return;
+    if (linkComposer && action !== 'toggleKeyboard' && action !== 'focusAtEnd' && action !== 'undo') return;
     const active = activeInputRef.current;
     const paragraph = active?.kind === 'paragraph'
       ? documentRef.current.blocks.find((block): block is RichNoteParagraphBlock => block.type === 'paragraph' && block.id === active.blockId)
       : undefined;
     switch (action) {
+      case 'focusAtEnd':
+        if (linkComposer) linkURLInputRef.current?.focus();
+        else focusAtEnd();
+        break;
       case 'format.body': applyParagraphUpdate({ style: 'body', bold: false, italic: false, underline: false, listStyle: 'none' }); break;
       case 'format.title': applyParagraphUpdate({ style: 'title', bold: true, listStyle: 'none' }); break;
       case 'format.subtitle': applyParagraphUpdate({ style: 'subtitle', listStyle: 'none' }); break;
@@ -701,7 +735,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       case 'toggleKeyboard': toggleKeyboard(); break;
       default: break;
     }
-  }, [applyParagraphUpdate, insertChecklist, insertImage, insertLink, linkComposer, toggleKeyboard, undo]);
+  }, [applyParagraphUpdate, focusAtEnd, insertChecklist, insertImage, insertLink, linkComposer, toggleKeyboard, undo]);
 
   useImperativeHandle(forwardedRef, () => ({
     dismissKeyboard,
@@ -729,59 +763,78 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     const marker = block.listStyle === 'bullet' ? '•' : block.listStyle === 'numbered' ? `${listNumber(document.blocks, block.id)}.` : null;
     const fontSize = paragraphFontSize(block.style);
     const lineHeight = paragraphLineHeight(block.style, fontSize);
-    const fontWeight = block.bold ? block.style === 'title' ? theme.typography.largeTitle.fontWeight : '600' : '400';
+    const fontWeight: TextStyle['fontWeight'] = block.bold ? block.style === 'title' ? theme.typography.largeTitle.fontWeight : '600' : '400';
+    const placeholder = block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined;
+    const inputTextStyle: TextStyle = {
+      color: theme.colors.textPrimary,
+      fontSize,
+      fontStyle: block.italic ? 'italic' as const : 'normal' as const,
+      fontWeight,
+      lineHeight,
+      padding: 0,
+      textDecorationLine: block.underline ? 'underline' as const : 'none' as const,
+    };
     return (
       <View key={block.id} style={{ alignItems: 'flex-start', flexDirection: 'row', gap: marker ? theme.spacing.xs : 0, minWidth: 0, width: '100%' }}>
         {marker ? <Text style={{ color: theme.colors.textPrimary, fontSize, lineHeight: fontSize * 1.45, minWidth: 22 }}>{marker}</Text> : null}
-        <TextInput
-          accessibilityLabel={block.style === 'title' ? `Título do parágrafo ${index + 1}` : `Parágrafo ${index + 1}`}
-          autoCapitalize="sentences"
-          editable={!disabled}
-          multiline
-          onContentSizeChange={(event) => measureInput(block.id, event.nativeEvent.contentSize.height, lineHeight, lineHeight, 0, block.text)}
-          onBlur={handleInputBlur}
-          onChangeText={(text) => {
-            preserveExplicitLines(block.id, text, lineHeight);
-            updateParagraphText(block.id, text);
-          }}
-          onFocus={() => {
-            const input = { kind: 'paragraph' as const, blockId: block.id };
-            editorHasFocusRef.current = true;
-            activeInputRef.current = input;
-          }}
-          onSelectionChange={(event) => {
-            selectionRef.current = event.nativeEvent.selection;
-            selectionByInputRef.current.set(block.id, event.nativeEvent.selection);
-          }}
-          onTouchStart={markInteraction}
-          placeholder={block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined}
-          placeholderTextColor={theme.colors.textTertiary}
-          ref={(node) => {
-            if (!node) {
-              inputRefs.current.delete(block.id);
-              return;
-            }
-            inputRefs.current.set(block.id, node);
-          }}
-          selectionColor={theme.colors.primary}
-          style={{
-            color: theme.colors.textPrimary,
-            flex: 1,
-            fontSize,
-            fontStyle: block.italic ? 'italic' : 'normal',
-            fontWeight,
-            height: measuredInputHeights[block.id] ?? lineHeight,
-            lineHeight,
-            minHeight: lineHeight,
-            minWidth: 0,
-            padding: 0,
-            textAlignVertical: 'top',
-            textDecorationLine: block.underline ? 'underline' : 'none',
-          }}
-          scrollEnabled={false}
-          submitBehavior="newline"
-          value={block.text}
-        />
+        <View
+          onLayout={(event) => measureInputHitArea(block.id, event.nativeEvent.layout.width)}
+          style={{ flex: 1, minWidth: 0, position: 'relative' }}
+        >
+          <TextInput
+            accessibilityLabel={block.style === 'title' ? `Título do parágrafo ${index + 1}` : `Parágrafo ${index + 1}`}
+            autoCapitalize="sentences"
+            editable={!disabled}
+            multiline
+            onContentSizeChange={(event) => measureInput(block.id, event.nativeEvent.contentSize.height, lineHeight, lineHeight, 0, block.text)}
+            onBlur={handleInputBlur}
+            onChangeText={(text) => {
+              preserveExplicitLines(block.id, text, lineHeight);
+              updateParagraphText(block.id, text);
+            }}
+            onFocus={() => {
+              const input = { kind: 'paragraph' as const, blockId: block.id };
+              editorHasFocusRef.current = true;
+              activeInputRef.current = input;
+            }}
+            onSelectionChange={(event) => {
+              selectionRef.current = event.nativeEvent.selection;
+              selectionByInputRef.current.set(block.id, event.nativeEvent.selection);
+            }}
+            onTouchStart={(event) => markTextLineInteraction(block.id, event, lineHeight, measuredInputHeights[block.id] ?? lineHeight)}
+            placeholder={placeholder}
+            placeholderTextColor={theme.colors.textTertiary}
+            ref={(node) => {
+              if (!node) {
+                inputRefs.current.delete(block.id);
+                return;
+              }
+              inputRefs.current.set(block.id, node);
+            }}
+            selectionColor={theme.colors.primary}
+            style={{
+              ...inputTextStyle,
+              flex: 1,
+              height: measuredInputHeights[block.id] ?? lineHeight,
+              minHeight: lineHeight,
+              minWidth: 0,
+              textAlignVertical: 'top',
+            }}
+            scrollEnabled={false}
+            submitBehavior="newline"
+            value={block.text}
+          />
+          <Text
+            accessible={false}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            onTextLayout={(event) => measureInputTextLines(block.id, event.nativeEvent.lines.map((line) => ({ width: line.width, height: line.height })))}
+            pointerEvents="none"
+            style={{ ...inputTextStyle, left: 0, opacity: 0, position: 'absolute', top: 0, width: '100%' }}
+          >
+            {block.text || placeholder || '\u200b'}
+          </Text>
+        </View>
       </View>
     );
   };
@@ -871,44 +924,59 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             <ChecklistCheckboxIndicator isCompleted={item.checked} />
           </Pressable>
           </NativeCardContextMenu>
-          <TextInput
-            accessibilityLabel={`Tarefa ${index + 1}`}
-            editable={!disabled}
-            multiline
-            onContentSizeChange={(event) => measureChecklistInput(item.id, event.nativeEvent.contentSize.height, item.text)}
-            onBlur={handleInputBlur}
-            onChangeText={(text) => {
-              preserveExplicitLines(item.id, text, checklistTaskLineHeight, checklistTaskMinimumHeight, checklistTaskVerticalPadding);
-              updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`);
-            }}
-            onFocus={() => {
-              if (submittedChecklistItemRef.current === item.id) submittedChecklistItemRef.current = null;
-              const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
-              editorHasFocusRef.current = true;
-              activeInputRef.current = input;
-            }}
-            onSelectionChange={(event) => {
-              selectionRef.current = event.nativeEvent.selection;
-              selectionByInputRef.current.set(item.id, event.nativeEvent.selection);
-            }}
-            onSubmitEditing={() => submitChecklistItem(block.id, item.id)}
-            onTouchStart={markInteraction}
-            placeholder="Item da checklist"
-            placeholderTextColor={theme.colors.textTertiary}
-            ref={(node) => {
-              if (!node) {
-                inputRefs.current.delete(item.id);
-                return;
-              }
-              inputRefs.current.set(item.id, node);
-            }}
-            returnKeyType="next"
-            scrollEnabled={false}
-            selectionColor={theme.colors.primary}
-            style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, flex: 1, height: measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, minHeight: checklistTaskMinimumHeight, minWidth: 0, paddingVertical: theme.spacing.xs, textDecorationLine: item.checked ? 'line-through' : 'none', textAlignVertical: 'center' }]}
-            submitBehavior="submit"
-            value={item.text}
-          />
+          <View
+            onLayout={(event) => measureInputHitArea(item.id, event.nativeEvent.layout.width)}
+            style={{ flex: 1, minWidth: 0, position: 'relative' }}
+          >
+            <TextInput
+              accessibilityLabel={`Tarefa ${index + 1}`}
+              editable={!disabled}
+              multiline
+              onContentSizeChange={(event) => measureChecklistInput(item.id, event.nativeEvent.contentSize.height, item.text)}
+              onBlur={handleInputBlur}
+              onChangeText={(text) => {
+                preserveExplicitLines(item.id, text, checklistTaskLineHeight, checklistTaskMinimumHeight, checklistTaskVerticalPadding);
+                updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`);
+              }}
+              onFocus={() => {
+                if (submittedChecklistItemRef.current === item.id) submittedChecklistItemRef.current = null;
+                const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
+                editorHasFocusRef.current = true;
+                activeInputRef.current = input;
+              }}
+              onSelectionChange={(event) => {
+                selectionRef.current = event.nativeEvent.selection;
+                selectionByInputRef.current.set(item.id, event.nativeEvent.selection);
+              }}
+              onSubmitEditing={() => submitChecklistItem(block.id, item.id)}
+              onTouchStart={(event) => markTextLineInteraction(item.id, event, checklistTaskLineHeight, measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, theme.spacing.xs)}
+              placeholder="Item da checklist"
+              placeholderTextColor={theme.colors.textTertiary}
+              ref={(node) => {
+                if (!node) {
+                  inputRefs.current.delete(item.id);
+                  return;
+                }
+                inputRefs.current.set(item.id, node);
+              }}
+              returnKeyType="next"
+              scrollEnabled={false}
+              selectionColor={theme.colors.primary}
+              style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, flex: 1, height: measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, minHeight: checklistTaskMinimumHeight, minWidth: 0, paddingVertical: theme.spacing.xs, textDecorationLine: item.checked ? 'line-through' : 'none', textAlignVertical: 'center' }]}
+              submitBehavior="submit"
+              value={item.text}
+            />
+            <Text
+              accessible={false}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              onTextLayout={(event) => measureInputTextLines(item.id, event.nativeEvent.lines.map((line) => ({ width: line.width, height: line.height })))}
+              pointerEvents="none"
+              style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, left: 0, opacity: 0, paddingVertical: theme.spacing.xs, position: 'absolute', textDecorationLine: item.checked ? 'line-through' : 'none', top: 0, width: '100%' }]}
+            >
+              {item.text || 'Item da checklist'}
+            </Text>
+          </View>
         </View>
       ))}
       <Pressable
@@ -995,7 +1063,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   };
 
   return (
-    <View onLayout={handleEditorLayout} style={{ flexGrow: 1, width: '100%' }}>
+    <View onLayout={handleEditorLayout} style={{ width: '100%' }}>
       <View style={{ gap: theme.spacing.md, width: '100%' }}>
         {(() => {
           const composer = linkComposer;
@@ -1037,13 +1105,13 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
 });
 
 export function useRichNoteKeyboardInteractions(editorRef: { current: RichNoteEditorHandle | null }) {
-  const touchRef = useRef<{ x: number; y: number; moved: boolean; touchedInteractive: boolean } | null>(null);
+  const touchRef = useRef<{ x: number; y: number; moved: boolean; touchedInteractive: boolean; keyboardWasVisible: boolean } | null>(null);
 
   const markInteractiveTouch = useCallback(() => {
     if (touchRef.current) touchRef.current.touchedInteractive = true;
   }, []);
   const onTouchStartCapture = useCallback((event: GestureResponderEvent) => {
-    touchRef.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY, moved: false, touchedInteractive: false };
+    touchRef.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY, moved: false, touchedInteractive: false, keyboardWasVisible: Keyboard.isVisible() };
   }, []);
   const onTouchMove = useCallback((event: GestureResponderEvent) => {
     const touch = touchRef.current;
@@ -1055,7 +1123,8 @@ export function useRichNoteKeyboardInteractions(editorRef: { current: RichNoteEd
     const touch = touchRef.current;
     touchRef.current = null;
     if (!touch || touch.moved || touch.touchedInteractive) return;
-    editorRef.current?.handleToolbarAction('toggleKeyboard');
+    if (touch.keyboardWasVisible) editorRef.current?.dismissKeyboard();
+    else editorRef.current?.handleToolbarAction('focusAtEnd');
   }, [editorRef]);
 
   return { markInteractiveTouch, onTouchEnd, onTouchMove, onTouchStartCapture };

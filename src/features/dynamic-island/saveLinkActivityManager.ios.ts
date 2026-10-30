@@ -4,6 +4,12 @@ import * as Linking from 'expo-linking';
 import { createActivityReconciler } from './activityReconciler';
 import { createOptionalNativeModuleLoader } from './optionalNativeModuleLoader';
 import {
+  areBytesEqual,
+  isExpectedSaveLinkActivityPng,
+  SAVE_LINK_ACTIVITY_ICON_FILE,
+  SAVE_LINK_ACTIVITY_ICON_SIZE,
+} from './saveLinkActivityIconAssets';
+import {
   clearActivityLinkAuthorization,
   isMatchingActivityLinkToken,
   readActivityLinkAuthorization,
@@ -11,6 +17,7 @@ import {
 } from './activityLinkAuthorization';
 
 type SaveLinkActivityProps = {
+  iconUri: string;
   composeUrl: string;
   expandedHomeUrl: string;
   quickSaveStatus: 'ready';
@@ -47,9 +54,58 @@ export function isSaveLinkActivityAvailable(): boolean {
   return activityFactoryLoader.isAvailable();
 }
 
+async function getSharedAppIconUri(): Promise<string> {
+  // Keep native-only modules lazy so older binaries can still load this manager.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Asset } = require('expo-asset') as typeof import('expo-asset');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Directory, File } = require('expo-file-system') as typeof import('expo-file-system');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { widgetsDirectory } = require('expo-widgets') as typeof import('expo-widgets');
+
+  if (typeof widgetsDirectory !== 'string' || !widgetsDirectory.startsWith('file://')) {
+    throw new Error('O compartilhamento nativo do ícone não está disponível.');
+  }
+
+  const sharedDirectory = new Directory(widgetsDirectory);
+  await sharedDirectory.create({ idempotent: true, intermediates: true });
+
+  const [asset] = await Asset.loadAsync([require('../../../assets/live-activity-icon.png')]);
+  if (
+    !asset?.localUri?.startsWith('file://') ||
+    asset.width !== SAVE_LINK_ACTIVITY_ICON_SIZE ||
+    asset.height !== SAVE_LINK_ACTIVITY_ICON_SIZE
+  ) {
+    throw new Error('O ícone da Live Activity não tem o formato esperado.');
+  }
+
+  const source = new File(asset.localUri);
+  const destination = new File(sharedDirectory, SAVE_LINK_ACTIVITY_ICON_FILE);
+  if (!source.exists) throw new Error('Não foi possível localizar o ícone da Live Activity.');
+
+  const sourceBytes = await source.bytes();
+  if (!isExpectedSaveLinkActivityPng(sourceBytes)) {
+    throw new Error('Não foi possível validar o ícone da Live Activity.');
+  }
+
+  await source.copy(destination, { overwrite: true });
+  const copiedBytes = await destination.bytes();
+  if (
+    !destination.exists ||
+    !areBytesEqual(sourceBytes, copiedBytes) ||
+    !isExpectedSaveLinkActivityPng(copiedBytes) ||
+    !destination.uri.startsWith('file://')
+  ) {
+    throw new Error('Não foi possível preparar o ícone compartilhado com a extensão.');
+  }
+
+  return destination.uri;
+}
+
 const reconcileInstances = createActivityReconciler({
   getInstances: () => getActivityFactory().getInstances(),
   start: async () => {
+    const iconUri = await getSharedAppIconUri();
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { randomUUID } = require('expo-crypto') as typeof import('expo-crypto');
     const token = randomUUID();
@@ -63,7 +119,7 @@ const reconcileInstances = createActivityReconciler({
     let activity: StartedActivity | null = null;
     try {
       activity = getActivityFactory().start(
-        { composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },
+        { iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },
         composeUrl,
       );
       await writeActivityLinkAuthorization({ token, activityId: activity.getId() });

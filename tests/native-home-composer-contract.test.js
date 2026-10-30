@@ -45,7 +45,8 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(richNoteDocumentSource).toContain("createRichNoteParagraph('Adicionar texto'");
     expect(richNoteDocumentSource).toContain("role: 'document-title'");
     expect(editorSource).toContain('accessibilityLabel={block.style === \'title\' ? `Título do parágrafo ${index + 1}` : `Parágrafo ${index + 1}`}');
-    expect(editorSource).toContain("placeholder={block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined}");
+    expect(editorSource).toContain("const placeholder = block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined;");
+    expect(editorSource).toContain('placeholder={placeholder}');
     expect(composeRouteSource).toContain('const [hasDraft, setHasDraft] = useState(false)');
   });
 
@@ -56,9 +57,32 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(rootLayoutSource).toMatch(/name="\(tabs\)"/);
     expect(composeRouteSource).toMatch(/navigation\.addListener\('transitionEnd'/);
     expect(composeRouteSource).toMatch(/shouldFocusTextComposerAfterTransitionEnd/);
+    expect(composeRouteSource).toMatch(/setShouldFocusInput\(true\)[\s\S]*?<RichNoteEditor[\s\S]*?initialFocus=\{shouldFocusInput\}/);
     expect(composeRouteSource).toMatch(/usePreventRemove\(shouldPreventRemoval/);
     expect(composeRouteSource).toMatch(/Alert\.alert\('Descartar rascunho\?'/);
     expect(composeRouteSource).toMatch(/disableRemovalPrevention\(\)[\s\S]*?router\.back\(\)/);
+  });
+
+  test('uses the native iOS header save action and keeps a fallback only off iOS', () => {
+    const routeOptions = composeRouteSource.match(/const screenOptions = useMemo\(\(\) => \(\{([\s\S]*?)\n  \}\),/)?.[1] ?? '';
+    const rootComposeOptions = rootLayoutSource.match(/name="texts\/compose"[\s\S]*?options=\{\{([\s\S]*?)\}\}\s*\/>/)?.[1] ?? '';
+
+    expect(composeRouteSource).toMatch(/<Stack\.Toolbar placement="right">[\s\S]*?<Stack\.Toolbar\.Button[\s\S]*?disabled=\{isSaving \|\| !hasDraft\}[\s\S]*?onPress=\{\(\) => void onSave\(\)\}[\s\S]*?<Stack\.Toolbar\.Label>\{saveLabel\}<\/Stack\.Toolbar\.Label>[\s\S]*?<\/Stack\.Toolbar\.Button>[\s\S]*?<\/Stack\.Toolbar>/);
+    expect(composeRouteSource).toContain('separateBackground={false}');
+    expect(composeRouteSource).toMatch(/const onSave = useCallback\(async \(\) => \{[\s\S]*?submit\(encodeRichNoteDraft\(document\)\)[\s\S]*?disableRemovalPrevention\(\)[\s\S]*?router\.back\(\)/);
+    expect(routeOptions).toContain("headerTransparent: Platform.OS === 'ios'");
+    expect(routeOptions).not.toContain('headerStyle');
+    expect(rootComposeOptions).toContain("headerTransparent: Platform.OS === 'ios'");
+    expect(rootComposeOptions).not.toContain('headerStyle');
+    expect(composeRouteSource).toContain("contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'automatic' : undefined}");
+    expect(composeRouteSource).toContain('automaticallyAdjustKeyboardInsets={false}');
+    expect(composeRouteSource).not.toContain('automaticallyAdjustContentInsets');
+    expect(composeRouteSource).toContain("<SafeAreaView edges={['bottom']}");
+    expect(composeRouteSource).toContain('paddingTop: theme.spacing.lg');
+    expect(composeRouteSource).toContain('const IOS_RICH_NOTE_KEYBOARD_TOOLBAR_RESERVED_SPACE = 56 + 8');
+    expect(composeRouteSource).toContain("paddingBottom: Platform.OS === 'ios' ? IOS_RICH_NOTE_KEYBOARD_TOOLBAR_RESERVED_SPACE + keyboardViewportOverlap : 76");
+    expect(composeRouteSource).toMatch(/Platform\.OS !== 'ios' \? \([\s\S]*?<NativeButton[\s\S]*?\) : null/);
+    expect(composeRouteSource).not.toMatch(/Platform\.OS === 'ios'[\s\S]{0,500}<NativeButton/);
   });
 
   test('mounts one native toolbar continuously and anchors it to UIKit keyboard geometry', () => {
@@ -107,7 +131,7 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(detailRouteSource).not.toContain('<KeyboardAvoidingView');
     expect(composeRouteSource).not.toContain('keyboardVisible');
     expect(detailRouteSource).not.toContain('keyboardVisible');
-    expect(composeRouteSource).toContain('automaticallyAdjustKeyboardInsets={Platform.OS === \'ios\'}');
+    expect(composeRouteSource).toContain('automaticallyAdjustKeyboardInsets={false}');
     expect(detailRouteSource).toContain('automaticallyAdjustKeyboardInsets: Platform.OS === \'ios\'');
     expect(composeRouteSource.indexOf('</ScrollView>')).toBeLessThan(composeRouteSource.indexOf('<RichNoteKeyboardToolbar'));
     expect(detailRouteSource.indexOf('</ProgressiveCollapsibleScreen>')).toBeLessThan(detailRouteSource.indexOf('<RichNoteKeyboardToolbar'));
@@ -118,6 +142,44 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(keyboardObserver).toContain('model.keyboardVisible = false');
     expect(keyboardObserver).not.toMatch(/layoutIfNeeded|setNeedsLayout|NSLayoutConstraint|\.constant\s*=|\.frame\s*=/);
     expect(toolbarNativeSource).not.toMatch(/keyboardDidShow|keyboardDidHide/);
+  });
+
+  test('keeps the automatic header inset and measures keyboard overlap for scrollable content', () => {
+    const scrollStart = composeRouteSource.indexOf('<ScrollView');
+    const scrollEnd = composeRouteSource.indexOf('</ScrollView>', scrollStart);
+    const scrollSource = composeRouteSource.slice(scrollStart, scrollEnd);
+
+    expect(scrollSource).toContain("contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'automatic' : undefined}");
+    expect(scrollSource).toContain('automaticallyAdjustKeyboardInsets={false}');
+    expect(composeRouteSource).toContain("Keyboard.addListener('keyboardWillChangeFrame'");
+    expect(composeRouteSource).toContain('Keyboard.scheduleLayoutAnimation(event)');
+    expect(composeRouteSource).toContain('viewport.measureInWindow');
+    expect(composeRouteSource).toContain('IOS_RICH_NOTE_KEYBOARD_TOOLBAR_RESERVED_SPACE + keyboardViewportOverlap');
+    expect(composeRouteSource).toContain('initialFocus={shouldFocusInput}');
+    expect(scrollSource).not.toContain('flexGrow: 1');
+    expect(scrollSource).not.toMatch(/<View\s+style=\{\{\s*flex:\s*1/);
+    expect(scrollSource).not.toMatch(/contentInset=|contentOffset=|scrollTo(?:End)?\s*\(/);
+    expect(composeRouteSource).toContain("<SafeAreaView edges={['bottom']}");
+    expect(composeRouteSource).not.toContain('<KeyboardAvoidingView');
+    expect(composeRouteSource).toContain("Keyboard.addListener('keyboardWillChangeFrame'");
+    expect(composeRouteSource).toContain('Keyboard.scheduleLayoutAnimation(event)');
+    expect(editorSource).toContain('<View onLayout={handleEditorLayout} style={{ width: \'100%\' }}>');
+    expect(editorSource).not.toContain('style={{ flexGrow: 1, width: \'100%\' }}');
+  });
+
+  test('blank taps toggle the keyboard while drags and interactive editor touches are ignored', () => {
+    const hookStart = editorSource.indexOf('export function useRichNoteKeyboardInteractions');
+    const hookSource = editorSource.slice(hookStart);
+
+    expect(composeRouteSource).toContain('onTouchStartCapture={pageTouches.onTouchStartCapture}');
+    expect(composeRouteSource).toContain('onTouchMove={pageTouches.onTouchMove}');
+    expect(composeRouteSource).toContain('onTouchEnd={pageTouches.onTouchEnd}');
+    expect(hookSource).toContain('touch.moved = true');
+    expect(hookSource).toContain('touchRef.current.touchedInteractive = true');
+    expect(hookSource).toContain('if (!touch || touch.moved || touch.touchedInteractive) return;');
+    expect(hookSource).toContain('keyboardWasVisible: Keyboard.isVisible()');
+    expect(hookSource).toContain("if (touch.keyboardWasVisible) editorRef.current?.dismissKeyboard()");
+    expect(hookSource).toContain("else editorRef.current?.handleToolbarAction('focusAtEnd')");
   });
 
   test('lets long paragraphs and checklist tasks expand in the editor scroll view', () => {

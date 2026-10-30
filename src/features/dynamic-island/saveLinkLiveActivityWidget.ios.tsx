@@ -12,9 +12,8 @@ import {
 } from '@expo/ui/swift-ui/modifiers';
 import { createLiveActivity } from 'expo-widgets';
 
-import { SAVE_LINK_ACTIVITY_ASSET_NAME } from './saveLinkActivityIconAssets';
-
 type SaveLinkActivityProps = {
+  iconUri: string;
   composeUrl: string;
   expandedHomeUrl: string;
   quickSaveStatus?: 'ready' | 'processing' | 'queued' | 'alreadyQueued' | 'alreadySaved' | 'invalid' | 'failed';
@@ -67,7 +66,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
     banner: (
       <HStack alignment="center" spacing={12} modifiers={[padding({ all: 16 })]}>
         <Image
-          assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
+          uiImage={props.iconUri}
           modifiers={[resizable(), frame({ width: 34, height: 34 }), clipShape('roundedRectangle', 8)]}
         />
         <VStack alignment="leading" spacing={2}>
@@ -78,20 +77,20 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
     ),
     compactLeading: (
       <Image
-        assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
+        uiImage={props.iconUri}
         modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
       />
     ),
     minimal: (
       <Image
-        assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
+        uiImage={props.iconUri}
         modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
       />
     ),
     expandedLeading: (
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
         <Image
-          assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
+          uiImage={props.iconUri}
           modifiers={[
             resizable(),
             frame({ width: 48, height: 48 }),

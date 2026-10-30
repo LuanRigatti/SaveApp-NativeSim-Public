@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   Platform,
   ScrollView,
   Text,
   View,
+  type ViewInstance,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -25,6 +27,9 @@ import {
   shouldFocusTextComposerAfterTransitionEnd,
 } from '@/features/home-content/textComposerNavigation';
 import { useAppTheme } from '@/theme';
+import { getDockedKeyboardViewportOverlap } from '@/features/home-content/keyboardViewportOverlap';
+
+const IOS_RICH_NOTE_KEYBOARD_TOOLBAR_RESERVED_SPACE = 56 + 8;
 
 export default function ComposeTextScreen() {
   const router = useRouter();
@@ -38,9 +43,12 @@ export default function ComposeTextScreen() {
   const editorRef = useRef<RichNoteEditorHandle>(null);
   const [isFocused, setIsFocused] = useState(navigation.isFocused());
   const [auxiliaryPresentationVisible, setAuxiliaryPresentationVisible] = useState(false);
+  const [keyboardViewportOverlap, setKeyboardViewportOverlap] = useState(0);
   const pageTouches = useRichNoteKeyboardInteractions(editorRef);
   const focusRequestedRef = useRef(false);
   const isMountedRef = useRef(false);
+  const pageViewportRef = useRef<ViewInstance | null>(null);
+  const keyboardFrameSequenceRef = useRef(0);
   const shouldPreventRemoval = shouldPreventTextComposerRemoval({ allowRouteRemoval, hasDraft, isSaving });
 
   const onPreventedRemoval = useCallback(({ repeat }: { repeat: () => void }) => {
@@ -89,6 +97,38 @@ export default function ComposeTextScreen() {
     };
   }, [navigation]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+
+    const subscription = Keyboard.addListener('keyboardWillChangeFrame', (event) => {
+      Keyboard.scheduleLayoutAnimation(event);
+      const sequence = ++keyboardFrameSequenceRef.current;
+      const viewport = pageViewportRef.current;
+      if (!viewport) {
+        setKeyboardViewportOverlap(0);
+        return;
+      }
+
+      viewport.measureInWindow((x, y, width, height) => {
+        if (sequence !== keyboardFrameSequenceRef.current) return;
+        setKeyboardViewportOverlap(Math.round(getDockedKeyboardViewportOverlap({
+          viewport: { x, y, width, height },
+          keyboard: {
+            x: event.endCoordinates.screenX,
+            y: event.endCoordinates.screenY,
+            width: event.endCoordinates.width,
+            height: event.endCoordinates.height,
+          },
+        })));
+      });
+    });
+
+    return () => {
+      keyboardFrameSequenceRef.current += 1;
+      subscription.remove();
+    };
+  }, []);
+
   const screenOptions = useMemo(() => ({
     animation: 'default' as const,
     contentStyle: { backgroundColor: theme.colors.background },
@@ -96,10 +136,9 @@ export default function ComposeTextScreen() {
     headerBackTitle: '',
     headerShadowVisible: false,
     headerShown: true,
-    headerStyle: { backgroundColor: theme.colors.background },
     headerTintColor: theme.colors.textPrimary,
     headerTitle: '',
-    headerTransparent: false,
+    headerTransparent: Platform.OS === 'ios',
     presentation: 'card' as const,
   }), [isSaving, theme.colors.background, theme.colors.textPrimary]);
 
@@ -124,21 +163,35 @@ export default function ComposeTextScreen() {
       <Stack.Screen options={screenOptions}>
         <Stack.Screen.BackButton displayMode="minimal" />
       </Stack.Screen>
+      {Platform.OS === 'ios' ? (
+        <Stack.Toolbar placement="right">
+          <Stack.Toolbar.Button
+            accessibilityLabel={saveLabel}
+            disabled={isSaving || !hasDraft}
+            onPress={() => void onSave()}
+            separateBackground={false}
+          >
+            <Stack.Toolbar.Label>{saveLabel}</Stack.Toolbar.Label>
+          </Stack.Toolbar.Button>
+        </Stack.Toolbar>
+      ) : null}
       <SafeAreaView edges={['bottom']} style={{ backgroundColor: theme.colors.background, flex: 1 }}>
           <View style={{ flex: 1 }}>
             <View
+              ref={pageViewportRef}
               onTouchEnd={pageTouches.onTouchEnd}
               onTouchMove={pageTouches.onTouchMove}
               onTouchStartCapture={pageTouches.onTouchStartCapture}
               style={{ flex: 1 }}
             >
               <ScrollView
-                automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+                contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'automatic' : undefined}
+                automaticallyAdjustKeyboardInsets={false}
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: theme.layout.screenHorizontalPadding, paddingTop: theme.spacing.lg, paddingBottom: 76 }}
+                contentContainerStyle={{ paddingHorizontal: theme.layout.screenHorizontalPadding, paddingTop: theme.spacing.lg, paddingBottom: Platform.OS === 'ios' ? IOS_RICH_NOTE_KEYBOARD_TOOLBAR_RESERVED_SPACE + keyboardViewportOverlap : 76 }}
               >
-                <View style={{ flex: 1, gap: theme.spacing.lg }}>
+                <View style={{ gap: theme.spacing.lg }}>
                   <RichNoteEditor
                     document={document}
                     initialFocus={shouldFocusInput}
@@ -148,10 +201,12 @@ export default function ComposeTextScreen() {
                     ref={editorRef}
                   />
                   {errorMessage ? <Text accessibilityRole="alert" style={[theme.typography.footnote, { color: theme.colors.danger }]}>{errorMessage}</Text> : null}
-                  <View onTouchStart={pageTouches.markInteractiveTouch} style={{ alignItems: 'flex-end', minHeight: 52, justifyContent: 'center', paddingVertical: theme.spacing.xs }}>
-                    {isSaving ? <ActivityIndicator color={theme.colors.info} /> : null}
-                    <NativeButton disabled={isSaving || !hasDraft} label={saveLabel} onPress={() => void onSave()} variant="primary" />
-                  </View>
+                  {Platform.OS !== 'ios' ? (
+                    <View onTouchStart={pageTouches.markInteractiveTouch} style={{ alignItems: 'flex-end', minHeight: 52, justifyContent: 'center', paddingVertical: theme.spacing.xs }}>
+                      {isSaving ? <ActivityIndicator color={theme.colors.info} /> : null}
+                      <NativeButton disabled={isSaving || !hasDraft} label={saveLabel} onPress={() => void onSave()} variant="primary" />
+                    </View>
+                  ) : null}
                 </View>
               </ScrollView>
             </View>

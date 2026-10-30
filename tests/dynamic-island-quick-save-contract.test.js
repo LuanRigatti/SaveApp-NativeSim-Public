@@ -188,7 +188,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('Activity<LiveActivityAttributes>.activities');
     expect(quickSaveIntent).toContain('activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntent).not.toMatch(/console\.|print\(|clipboard\.value.*(props|ContentState)/i);
-    expect(activityManager).toContain("{ composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("source: 'dynamic-island-expanded'");
@@ -442,7 +442,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityManager).toContain('start: (props: SaveLinkActivityProps, url?: string)');
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
-    expect(activityManager).toContain("{ composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(expoWidgetsActivity).toContain('return island.widgetURL(url)');
     expect(expoWidgetsActivity).toContain('Only apply widgetURL when the activity has one');
   });

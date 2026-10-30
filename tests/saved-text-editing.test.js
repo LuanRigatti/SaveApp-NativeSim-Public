@@ -29,7 +29,8 @@ describe('saved text inline editing and autosave', () => {
     expect(composeSource).toMatch(/const handleChange = useCallback\([\s\S]*?setHasDraft\(hasRichNoteContent\(next\)\)/);
     expect(documentSource).toContain("role: 'document-title'");
     expect(documentSource).toContain('blocks: [title, createRichNoteParagraph()]');
-    expect(editorSource).toContain("placeholder={block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined}");
+    expect(editorSource).toContain("const placeholder = block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined;");
+    expect(editorSource).toContain('placeholder={placeholder}');
     expect(editorSource).toContain('theme.typography.largeTitle.fontSize + 2');
     expect(editorSource).toContain('theme.typography.largeTitle.lineHeight');
     expect(editorSource).toContain("case 'format.body': applyParagraphUpdate({ style: 'body', bold: false");
@@ -223,7 +224,9 @@ describe('saved text inline editing and autosave', () => {
     expect(editorSource).toContain('focusAtEnd: () => void');
     expect(editorSource).toContain('target.setNativeProps({ selection });');
     expect(editorSource).toContain('Keyboard.isVisible()');
-    expect(editorSource).toContain("handleToolbarAction('toggleKeyboard')");
+    expect(editorSource).toContain("case 'toggleKeyboard': toggleKeyboard(); break;");
+    expect(editorSource).toContain("editorRef.current?.handleToolbarAction('focusAtEnd')");
+    expect(editorSource).toContain("if (touch.keyboardWasVisible) editorRef.current?.dismissKeyboard()");
     expect(detailSource).toContain('onInteractionStart={pageTouches.markInteractiveTouch}');
     expect(composeSource).toContain('onInteractionStart={pageTouches.markInteractiveTouch}');
     expect(detailSource).toContain("keyboardDismissMode: Platform.OS === 'ios' ? 'interactive' : 'on-drag'");

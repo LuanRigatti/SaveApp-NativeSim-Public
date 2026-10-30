@@ -55,7 +55,7 @@ $requiredSnapshotFiles = @(
   '.agents/skills/saveapp-nativesim/SKILL.md','.agents/skills/saveapp-nativesim-nopreflight/SKILL.md',
   'docs/current-state.md','docs/design-system.md',
   'assets/icon.png','assets/splash.png','assets/adaptive-icon.png',
-  'assets/live-activity-icon.png','assets/live-activity-icon-dark.png'
+  'assets/live-activity-icon.png'
 )
 
 function Get-MirrorModule {
