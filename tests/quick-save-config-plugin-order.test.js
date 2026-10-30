@@ -47,6 +47,12 @@ function createTemporaryProject(podfile) {
   temporaryRoots.push(root);
   const iosRoot = path.join(root, 'ios');
   fs.mkdirSync(iosRoot, { recursive: true });
+  fs.mkdirSync(path.join(iosRoot, 'ExpoWidgetsTarget'), { recursive: true });
+  const assetsRoot = path.join(root, 'assets');
+  fs.mkdirSync(assetsRoot, { recursive: true });
+  for (const filename of ['live-activity-icon.png', 'live-activity-icon-dark.png']) {
+    fs.copyFileSync(path.join(projectRoot, 'assets', filename), path.join(assetsRoot, filename));
+  }
   fs.writeFileSync(path.join(iosRoot, 'Podfile'), podfile, 'utf8');
   return { root, iosRoot, podfilePath: path.join(iosRoot, 'Podfile') };
 }
@@ -170,6 +176,35 @@ function inspectBuildMembership(project, targetName, sourceRelativePath) {
   };
 }
 
+function addExpoWidgetsTarget(project) {
+  const targetUuid = project.generateUuid();
+  project.pbxNativeTargetSection()[targetUuid] = {
+    isa: 'PBXNativeTarget',
+    name: 'ExpoWidgetsTarget',
+    productName: 'ExpoWidgetsTarget',
+    productType: '"com.apple.product-type.app-extension"',
+    buildPhases: [],
+    buildRules: [],
+    dependencies: [],
+  };
+  const groupUuid = project.generateUuid();
+  const groups = project.hash.project.objects.PBXGroup;
+  groups[groupUuid] = {
+    isa: 'PBXGroup',
+    children: [],
+    name: 'ExpoWidgetsTarget',
+    path: 'ExpoWidgetsTarget',
+    sourceTree: '"<group>"',
+  };
+  groups[`${groupUuid}_comment`] = 'ExpoWidgetsTarget';
+  const mainGroupUuid = project.getFirstProject().firstProject.mainGroup.replace(/^"|"$/g, '');
+  project.hash.project.objects.PBXGroup[mainGroupUuid].children.push({
+    value: groupUuid,
+    comment: 'ExpoWidgetsTarget',
+  });
+  return { targetUuid, groupUuid };
+}
+
 function expectPhysicalSourceReference(project, fixture, sourceRelativePath) {
   const sourcePath = fs.realpathSync(fixture.sourcePath);
   const platformProjectRoot = fs.realpathSync(fixture.iosRoot);
@@ -220,6 +255,48 @@ afterEach(() => {
 });
 
 describe('SaveApp Quick Save Expo config plugin composition', () => {
+  test('adds the appearance-aware asset catalog to ExpoWidgetsTarget resources idempotently', () => {
+    const fixture = createTemporaryXcodeProject();
+    const { targetUuid } = addExpoWidgetsTarget(fixture.project);
+
+    const first = quickSavePlugin.ensureLiveActivityAssetCatalogTargetReference(fixture.project);
+    expect(first.targetUuid).toBe(targetUuid);
+    expect(first.fileReferenceUuid).toBeTruthy();
+    const firstProject = fixture.project.writeSync();
+
+    const second = quickSavePlugin.ensureLiveActivityAssetCatalogTargetReference(fixture.project);
+    expect(second).toEqual(first);
+    expect(fixture.project.writeSync()).toBe(firstProject);
+  });
+
+  test('generates both verified source variants into the extension asset catalog', async () => {
+    const fixture = createTemporaryProject('');
+    const assetsRoot = path.join(fixture.root, 'assets');
+    const extensionRoot = path.join(fixture.iosRoot, 'ExpoWidgetsTarget');
+    fs.mkdirSync(assetsRoot, { recursive: true });
+    fs.mkdirSync(extensionRoot, { recursive: true });
+    for (const filename of ['live-activity-icon.png', 'live-activity-icon-dark.png']) {
+      fs.copyFileSync(path.join(projectRoot, 'assets', filename), path.join(assetsRoot, filename));
+    }
+
+    await quickSavePlugin.createLiveActivityAssetCatalog(fixture.root, fixture.iosRoot);
+
+    const imageSet = path.join(
+      extensionRoot,
+      'SaveAppLiveActivityIcons.xcassets',
+      'SaveAppLiveActivityIcon.imageset',
+    );
+    const manifest = JSON.parse(fs.readFileSync(path.join(imageSet, 'Contents.json'), 'utf8'));
+    expect(manifest.images.map(({ filename, appearances }) => [filename, appearances[0].value])).toEqual([
+      ['live-activity-icon.png', 'light'],
+      ['live-activity-icon-dark.png', 'dark'],
+    ]);
+    expect(fs.readFileSync(path.join(imageSet, 'live-activity-icon.png')))
+      .toEqual(fs.readFileSync(path.join(assetsRoot, 'live-activity-icon.png')));
+    expect(fs.readFileSync(path.join(imageSet, 'live-activity-icon-dark.png')))
+      .toEqual(fs.readFileSync(path.join(assetsRoot, 'live-activity-icon-dark.png')));
+  });
+
   test('adds the AppIntentsPackage registry to the real application target idempotently', async () => {
     const fixture = createTemporaryXcodeProject({ useAliasedProjectRoot: true });
     const sourceRelativePath = path.relative(

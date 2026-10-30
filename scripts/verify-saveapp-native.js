@@ -244,6 +244,8 @@ if (!fs.existsSync(mirrorSecurityPath) || !fs.existsSync(mirrorScriptPath) || !f
     "'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift'",
     "'src/features/dynamic-island/quickSaveQueue.ts'",
     "'src/features/dynamic-island/quickSaveQueueImportPipeline.ts'",
+    "'src/features/home-content/quickSaveLinkPreviewEnrichment.ts'",
+    "'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts'",
   ];
   if (requiredMirrorDependencies.some((marker) => !mirrorSecuritySource.includes(marker))) {
     fail('the exact mirror allowlist omits a required NativeSim helper or local module dependency');
@@ -485,6 +487,30 @@ const quickSaveAppIntentsPackageSource = fs.existsSync(quickSaveAppIntentsPackag
   ? fs.readFileSync(quickSaveAppIntentsPackagePath, 'utf8')
   : '';
 const quickSaveAppIntentsVerifierPath = path.join(root, 'scripts/verify-saveapp-quick-save-app-intents.js');
+const quickSaveIconPluginPath = path.join(root, 'plugins/withSaveLinkQuickSave.js');
+const quickSaveIconPluginSource = fs.existsSync(quickSaveIconPluginPath)
+  ? fs.readFileSync(quickSaveIconPluginPath, 'utf8')
+  : '';
+const liveActivityLayoutPath = path.join(root, 'src/features/dynamic-island/saveLinkLiveActivityWidget.ios.tsx');
+const liveActivityLayoutSource = fs.existsSync(liveActivityLayoutPath)
+  ? fs.readFileSync(liveActivityLayoutPath, 'utf8')
+  : '';
+const savedContentLibraryPath = path.join(root, 'src/features/home-content/savedContentLibrary.ts');
+const savedContentLibrarySource = fs.existsSync(savedContentLibraryPath)
+  ? fs.readFileSync(savedContentLibraryPath, 'utf8')
+  : '';
+const quickSavePreviewPath = path.join(root, 'src/features/home-content/quickSaveLinkPreviewEnrichment.ts');
+const quickSavePreviewSource = fs.existsSync(quickSavePreviewPath)
+  ? fs.readFileSync(quickSavePreviewPath, 'utf8')
+  : '';
+const quickSavePreviewMigrationPath = path.join(root, 'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts');
+const quickSavePreviewMigrationSource = fs.existsSync(quickSavePreviewMigrationPath)
+  ? fs.readFileSync(quickSavePreviewMigrationPath, 'utf8')
+  : '';
+const photoLibraryPath = path.join(root, 'src/features/photos/photoLibrary.ts');
+const photoLibrarySource = fs.existsSync(photoLibraryPath)
+  ? fs.readFileSync(photoLibraryPath, 'utf8')
+  : '';
 const widgetsRendererPath = path.join(root, 'node_modules/expo-widgets/ios/Widgets/ViewRenderer.swift');
 const widgetsLiveActivityPath = path.join(root, 'node_modules/expo-widgets/ios/Widgets/WidgetLiveActivity.swift');
 if (!fs.existsSync(widgetsRendererPath) || !fs.existsSync(widgetsLiveActivityPath) || !fs.existsSync(quickSaveXcodeprojTestPath) || !fs.existsSync(quickSaveAppIntentsVerifierPath)) {
@@ -517,6 +543,18 @@ if (
   !quickSaveQueuePipelineSource.includes('await adapter.acknowledge(entry)') ||
   !quickSaveQueuePipelineSource.includes("adapter.record('commit_confirmed')") ||
   !quickSaveQueuePipelineSource.includes("adapter.record('duplicate_confirmed')") ||
+  !quickSaveIconPluginSource.includes('withSaveAppLiveActivityIconAssets') ||
+  !quickSaveIconPluginSource.includes('ensureLiveActivityAssetCatalogTargetReference') ||
+  !quickSaveIconPluginSource.includes('folder.assetcatalog') ||
+  (liveActivityLayoutSource.match(/assetName=\{SAVE_LINK_ACTIVITY_ASSET_NAME\}/g) ?? []).length !== 4 ||
+  liveActivityLayoutSource.includes('environment.colorScheme') ||
+  !quickSavePreviewSource.includes('createQuickSaveLinkPreviewEnricher') ||
+  !quickSavePreviewMigrationSource.includes('QUICK_SAVE_PREVIEW_ENRICHMENT_SCHEMA_VERSION = 11') ||
+  !photoLibrarySource.includes('ensureQuickSavePreviewEnrichmentSchema(database)') ||
+  !savedContentLibrarySource.includes('updateQuickSavePreviewIfUnchanged') ||
+  !savedContentLibrarySource.includes('getPreview: getLinkPreview') ||
+  !savedContentLibrarySource.includes('downloadLinkPreviewImage(url, signal)') ||
+  !savedContentLibrarySource.includes('AND url IS ? AND normalized_url IS ? AND title IS ?') ||
   !quickSavePodHelperSource.includes('project.native_targets.select') ||
   !quickSavePodHelperSource.includes('PBXSourcesBuildPhase') ||
   !quickSavePodHelperSource.includes('file_ref.real_path') ||

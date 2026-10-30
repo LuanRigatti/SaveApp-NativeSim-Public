@@ -10,6 +10,7 @@ import { ensureChecklistSchema } from '@/features/home-content/checklistSchemaMi
 import { ensureSavedTagSchema } from '@/features/home-tags/tagSchemaMigration';
 import { ensureRecentlyDeletedSchema } from '@/features/home-trash/trashSchemaMigration';
 import { ensureSavedFavoritesSchema } from '@/features/home-content/favoritesSchemaMigration';
+import { ensureQuickSavePreviewEnrichmentSchema } from '@/features/home-content/quickSavePreviewEnrichmentSchemaMigration';
 import {
   readHomeFolderAssociation,
   restoreHomeFolderAssociation,
@@ -64,6 +65,7 @@ function getDatabase(): Promise<SQLiteDatabase> {
         await ensureSavedTagSchema(database);
         await ensureRecentlyDeletedSchema(database);
         await ensureSavedFavoritesSchema(database);
+        await ensureQuickSavePreviewEnrichmentSchema(database);
         return database;
       })
       .catch((error: unknown) => {

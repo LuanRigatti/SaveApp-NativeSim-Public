@@ -137,6 +137,8 @@ function Get-SaveAppMirrorAllowlist {
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
     'src/features/dynamic-island/quickSaveQueue.ts',
     'src/features/dynamic-island/quickSaveQueueImportPipeline.ts',
+    'src/features/home-content/quickSaveLinkPreviewEnrichment.ts',
+    'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts',
     'plugins/withSaveLinkQuickSave.js',
     'plugins/withStarterToolbarSync.js',
     'scripts/patch-expo-ui-bottom-sheet.js','scripts/patch-expo-module-scan-timeout.js',
@@ -174,6 +176,8 @@ function Get-SaveAppMirrorAllowlist {
     'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
     'src/features/dynamic-island/quickSaveQueue.ts',
     'src/features/dynamic-island/quickSaveQueueImportPipeline.ts',
+    'src/features/home-content/quickSaveLinkPreviewEnrichment.ts',
+    'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts',
     '.github/native-sim/oslog-capture.sh',
     '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
   )

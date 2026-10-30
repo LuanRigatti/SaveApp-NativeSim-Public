@@ -22,6 +22,8 @@ const clipboardModule = readSource('../modules/clipboard-url-detection/src/index
 const clipboardOffer = readSource('../src/features/home-content/useClipboardLinkOffer.ts');
 const savedContentProvider = readSource('../src/features/home-content/LocalSavedContentProvider.tsx');
 const savedContentLibrary = readSource('../src/features/home-content/savedContentLibrary.ts');
+const quickSavePreviewEnrichment = readSource('../src/features/home-content/quickSaveLinkPreviewEnrichment.ts');
+const quickSavePreviewMigration = readSource('../src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts');
 const homeGallery = readSource('../src/components/photos/PhotoMasonryGallery.tsx');
 const homeScreen = readSource('../src/app/(tabs)/index.tsx');
 const composerRoute = readSource('../src/app/links/compose.tsx');
@@ -186,7 +188,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('Activity<LiveActivityAttributes>.activities');
     expect(quickSaveIntent).toContain('activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntent).not.toMatch(/console\.|print\(|clipboard\.value.*(props|ContentState)/i);
-    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(activityManager).toContain("{ composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("source: 'dynamic-island-expanded'");
@@ -372,6 +374,42 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(savedContentLibrary).toContain('fallbackLinkTitle(normalized.url)');
   });
 
+  test('enriches Quick Save metadata after commit without delaying import or overwriting a changed row', () => {
+    const importStart = savedContentLibrary.indexOf('export async function importQueuedQuickSaveLink');
+    const transactionIndex = savedContentLibrary.indexOf(
+      'await database.withExclusiveTransactionAsync(async (transaction) => {',
+      importStart,
+    );
+    const scheduleIndex = savedContentLibrary.indexOf(
+      'void quickSaveLinkPreviewEnricher.schedule(candidate);',
+      transactionIndex,
+    );
+    expect(transactionIndex).toBeGreaterThan(importStart);
+    expect(scheduleIndex).toBeGreaterThan(transactionIndex);
+    expect(savedContentLibrary).toContain('AND url IS ? AND normalized_url IS ? AND title IS ? AND description IS ?');
+    expect(savedContentLibrary).toContain('AND domain IS ? AND image_url IS ? AND favicon_url IS ?');
+    expect(savedContentLibrary).toContain('preview_image_relative_path = COALESCE(preview_image_relative_path, ?)');
+    expect(savedContentLibrary).toContain('preview_image_mime_type = COALESCE(preview_image_mime_type, ?)');
+    expect(savedContentLibrary).toContain('deleted_at IS NULL');
+    expect(savedContentLibrary).toContain('subscribeToQuickSaveLinkPreviewUpdates');
+    expect(savedContentLibrary).toContain('schedulePendingQuickSaveLinkPreviewEnrichment');
+    expect(savedContentProvider).toContain('subscribeToQuickSaveLinkPreviewUpdates');
+    expect(savedContentProvider).toContain('schedulePendingQuickSaveLinkPreviewEnrichment()');
+    expect(quickSavePreviewEnrichment).toContain('maxAttemptsPerUrl ?? 2');
+    expect(quickSavePreviewEnrichment).toContain('retryDelayMs ?? 30_000');
+    expect(quickSavePreviewEnrichment).toContain('maxConcurrent ?? 2');
+    expect(quickSavePreviewEnrichment).toContain('inFlight.get(candidate.normalizedUrl)');
+    expect(quickSavePreviewEnrichment).toContain('adapter.claimAttempt');
+    expect(quickSavePreviewMigration).toContain('QUICK_SAVE_PREVIEW_ENRICHMENT_SCHEMA_VERSION = 11');
+    expect(quickSavePreviewMigration).toContain('REFERENCES saved_content(id) ON DELETE CASCADE');
+    expect(quickSavePreviewEnrichment).toContain('adapter.getPreview(candidate.normalizedUrl)');
+    expect(quickSavePreviewEnrichment).not.toMatch(/fetch\(|expoFetch|console\.(?:log|warn|error)/);
+    expect(savedContentLibrary).toContain('getPreview: getLinkPreview');
+    expect(savedContentLibrary).toContain('downloadLinkPreviewImage(url, signal)');
+    expect(savedContentLibrary).toContain('cachePreview: cacheLinkPreviewImage');
+    expect(savedContentLibrary).toContain('saveLinkWithPreview(input, {');
+  });
+
   test('uses persistent App Group metadata only to suppress the same automatic clipboard offer', () => {
     expect(quickSaveIntent).toContain('UserDefaults(suiteName: appGroupIdentifier)');
     expect(quickSaveIntent).toContain('systemUptime');
@@ -404,7 +442,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityManager).toContain('start: (props: SaveLinkActivityProps, url?: string)');
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
-    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(activityManager).toContain("{ composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
     expect(expoWidgetsActivity).toContain('return island.widgetURL(url)');
     expect(expoWidgetsActivity).toContain('Only apply widgetURL when the activity has one');
   });
@@ -476,8 +514,12 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     }
     expect(mirrorSnapshot).toContain("'src/features/dynamic-island/quickSaveQueue.ts'");
     expect(mirrorSnapshot).toContain("'src/features/dynamic-island/quickSaveQueueImportPipeline.ts'");
+    expect(mirrorSnapshot).toContain("'src/features/home-content/quickSaveLinkPreviewEnrichment.ts'");
+    expect(mirrorSnapshot).toContain("'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts'");
     expect(mirrorSecurity).toContain("'src/features/dynamic-island/quickSaveQueue.ts'");
     expect(mirrorSecurity).toContain("'src/features/dynamic-island/quickSaveQueueImportPipeline.ts'");
+    expect(mirrorSecurity).toContain("'src/features/home-content/quickSaveLinkPreviewEnrichment.ts'");
+    expect(mirrorSecurity).toContain("'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts'");
     expect(mirrorSecurity).toContain("'tests/quick-save-xcodeproj-contract.rb'");
     expect(mirrorSecurity).toContain("'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift'");
     expect(mirrorSecurity).toContain("'scripts/verify-saveapp-quick-save-app-intents.js'");

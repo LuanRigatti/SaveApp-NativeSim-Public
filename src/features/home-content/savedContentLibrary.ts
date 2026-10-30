@@ -29,16 +29,270 @@ import {
   releaseRichNoteAssetReservations,
   removeRichNoteAssetPaths,
 } from './richNoteAssets';
+import {
+  createQuickSaveLinkPreviewEnricher,
+  type CachedQuickSavePreview,
+  type QuickSaveLinkPreviewCandidate,
+} from './quickSaveLinkPreviewEnrichment';
 
 const PREVIEW_DIRECTORY = 'home-content/link-previews';
 const SAFE_PREVIEW_PATH =
   /^home-content\/link-previews\/(?:preview-[a-z0-9-]+\.(?:jpg|png|webp|gif)|\.delete-preview-[a-z0-9-]+\.(?:jpg|png|webp|gif))$/i;
+const quickSaveLinkPreviewListeners = new Set<() => void>();
 
 function fileForPreviewPath(relativePath: string): File {
   if (!SAFE_PREVIEW_PATH.test(relativePath)) {
     throw new Error('Invalid saved content preview path');
   }
   return new File(Paths.document, ...relativePath.split('/'));
+}
+
+async function cacheLinkPreviewImage(
+  url: string,
+  signal?: AbortSignal,
+): Promise<CachedQuickSavePreview & { uri: string }> {
+  const downloaded = await downloadLinkPreviewImage(url, signal);
+  const directory = new Directory(Paths.document, ...PREVIEW_DIRECTORY.split('/'));
+  await directory.create({ idempotent: true, intermediates: true });
+  const name = `preview-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${downloaded.extension}`;
+  const relativePath = `${PREVIEW_DIRECTORY}/${name}`;
+  const file = fileForPreviewPath(relativePath);
+
+  try {
+    file.create();
+    await file.write(downloaded.bytes);
+    if (!file.exists || !file.size || file.size <= 0) {
+      throw new Error('The saved link preview image is empty.');
+    }
+  } catch (error) {
+    if (file.exists) file.delete();
+    throw error;
+  }
+
+  return { relativePath, uri: file.uri, mimeType: downloaded.mimeType };
+}
+
+async function deleteCachedLinkPreview(relativePath: string): Promise<void> {
+  const file = fileForPreviewPath(relativePath);
+  if (file.exists) file.delete();
+  if (file.exists) throw new Error('The saved link preview could not be removed.');
+}
+
+function toQuickSavePreviewCandidate(row: {
+  id: number;
+  url: string | null;
+  normalized_url: string | null;
+  title: string | null;
+  description: string | null;
+  domain: string | null;
+  image_url: string | null;
+  favicon_url: string | null;
+  preview_image_relative_path: string | null;
+  preview_image_mime_type: string | null;
+}): QuickSaveLinkPreviewCandidate | null {
+  if (!row.url || !row.normalized_url || !row.title) return null;
+  return {
+    id: row.id,
+    url: row.url,
+    normalizedUrl: row.normalized_url,
+    title: row.title,
+    description: row.description,
+    domain: row.domain,
+    imageUrl: row.image_url,
+    faviconUrl: row.favicon_url,
+    previewImageRelativePath: row.preview_image_relative_path,
+    previewImageMimeType: row.preview_image_mime_type,
+  };
+}
+
+async function updateQuickSavePreviewIfUnchanged(
+  candidate: QuickSaveLinkPreviewCandidate,
+  metadata: { title: string; description: string | null; domain: string; imageUrl: string | null; faviconUrl: string | null },
+  preview: CachedQuickSavePreview | null,
+  complete: boolean,
+): Promise<boolean> {
+  const database = await getSaveAppDatabase();
+  let updated = false;
+  const nextTitle = candidate.title === fallbackLinkTitle(candidate.normalizedUrl) &&
+      metadata.title.trim() !== fallbackLinkTitle(candidate.normalizedUrl)
+    ? metadata.title
+    : candidate.title;
+
+  await database.withExclusiveTransactionAsync(async (transaction) => {
+    const result = await transaction.runAsync(
+      `UPDATE saved_content
+       SET title = ?,
+           description = COALESCE(description, ?),
+           domain = COALESCE(NULLIF(domain, ''), ?),
+           image_url = COALESCE(image_url, ?),
+           favicon_url = COALESCE(favicon_url, ?),
+           preview_image_relative_path = COALESCE(preview_image_relative_path, ?),
+           preview_image_mime_type = COALESCE(preview_image_mime_type, ?)
+       WHERE id = ? AND content_type = 'link' AND deleted_at IS NULL
+         AND url IS ? AND normalized_url IS ? AND title IS ? AND description IS ?
+         AND domain IS ? AND image_url IS ? AND favicon_url IS ?
+         AND preview_image_relative_path IS ? AND preview_image_mime_type IS ?;`,
+      nextTitle,
+      metadata.description,
+      metadata.domain,
+      metadata.imageUrl,
+      metadata.faviconUrl,
+      preview?.relativePath ?? null,
+      preview?.mimeType ?? null,
+      candidate.id,
+      candidate.url,
+      candidate.normalizedUrl,
+      candidate.title,
+      candidate.description,
+      candidate.domain,
+      candidate.imageUrl,
+      candidate.faviconUrl,
+      candidate.previewImageRelativePath,
+      candidate.previewImageMimeType,
+    );
+    updated = result.changes === 1;
+    if (updated) {
+      const ledgerUpdate = await transaction.runAsync(
+        `UPDATE saved_link_preview_enrichment
+         SET completed_at = ?
+         WHERE content_id = ?;`,
+        complete ? Date.now() : null,
+        candidate.id,
+      );
+      if (ledgerUpdate.changes !== 1) {
+        throw new Error('Quick Save preview attempt ledger changed during metadata update.');
+      }
+    }
+  });
+  return updated;
+}
+
+async function claimQuickSavePreviewAttempt(
+  candidate: QuickSaveLinkPreviewCandidate,
+  policy: { maxAttempts: number; retryDelayMs: number; now: number },
+): Promise<boolean> {
+  const database = await getSaveAppDatabase();
+  let claimed = false;
+  await database.withExclusiveTransactionAsync(async (transaction) => {
+    const current = await transaction.getFirstAsync<{
+      url: string | null;
+      normalized_url: string | null;
+      title: string | null;
+      description: string | null;
+      domain: string | null;
+      image_url: string | null;
+      favicon_url: string | null;
+      preview_image_relative_path: string | null;
+      preview_image_mime_type: string | null;
+    }>(
+      `SELECT url, normalized_url, title, description, domain, image_url, favicon_url,
+              preview_image_relative_path, preview_image_mime_type
+       FROM saved_content
+       WHERE id = ? AND content_type = 'link' AND deleted_at IS NULL;`,
+      candidate.id,
+    );
+    if (!current ||
+        current.url !== candidate.url || current.normalized_url !== candidate.normalizedUrl ||
+        current.title !== candidate.title || current.description !== candidate.description ||
+        current.domain !== candidate.domain || current.image_url !== candidate.imageUrl ||
+        current.favicon_url !== candidate.faviconUrl ||
+        current.preview_image_relative_path !== candidate.previewImageRelativePath ||
+        current.preview_image_mime_type !== candidate.previewImageMimeType) return;
+
+    const attempt = await transaction.getFirstAsync<{
+      attempt_count: number;
+      last_attempt_at: number | null;
+      completed_at: number | null;
+    }>(
+      'SELECT attempt_count, last_attempt_at, completed_at FROM saved_link_preview_enrichment WHERE content_id = ?;',
+      candidate.id,
+    );
+    if (attempt?.completed_at != null || (attempt?.attempt_count ?? 0) >= policy.maxAttempts) return;
+    if (attempt?.last_attempt_at != null && policy.now - attempt.last_attempt_at < policy.retryDelayMs) return;
+
+    const result = await transaction.runAsync(
+      `INSERT INTO saved_link_preview_enrichment (content_id, attempt_count, last_attempt_at, completed_at)
+       VALUES (?, 1, ?, NULL)
+       ON CONFLICT(content_id) DO UPDATE SET
+         attempt_count = saved_link_preview_enrichment.attempt_count + 1,
+         last_attempt_at = excluded.last_attempt_at,
+         completed_at = NULL
+       WHERE saved_link_preview_enrichment.attempt_count < ?;`,
+      candidate.id,
+      policy.now,
+      policy.maxAttempts,
+    );
+    claimed = result.changes === 1;
+  });
+  return claimed;
+}
+
+async function isLinkPreviewPathReferenced(relativePath: string): Promise<boolean> {
+  const database = await getSaveAppDatabase();
+  return (await database.getFirstAsync<{ id: number }>(
+    'SELECT id FROM saved_content WHERE content_type = \'link\' AND preview_image_relative_path = ? LIMIT 1;',
+    relativePath,
+  )) != null;
+}
+
+const quickSaveLinkPreviewEnricher = createQuickSaveLinkPreviewEnricher({
+  getPreview: getLinkPreview,
+  claimAttempt: claimQuickSavePreviewAttempt,
+  cachePreview: async (url) => {
+    const cached = await cacheLinkPreviewImage(url);
+    return { relativePath: cached.relativePath, mimeType: cached.mimeType };
+  },
+  updateIfUnchanged: updateQuickSavePreviewIfUnchanged,
+  isPreviewReferenced: isLinkPreviewPathReferenced,
+  deletePreview: deleteCachedLinkPreview,
+  onUpdated() {
+    for (const listener of quickSaveLinkPreviewListeners) {
+      try { listener(); } catch { /* A view refresh must not fail the committed enrichment. */ }
+    }
+  },
+});
+
+export function subscribeToQuickSaveLinkPreviewUpdates(listener: () => void): () => void {
+  quickSaveLinkPreviewListeners.add(listener);
+  return () => quickSaveLinkPreviewListeners.delete(listener);
+}
+
+export async function schedulePendingQuickSaveLinkPreviewEnrichment(): Promise<void> {
+  const database = await getSaveAppDatabase();
+  const rows = await database.getAllAsync<{
+    id: number;
+    url: string | null;
+    normalized_url: string | null;
+    title: string | null;
+    description: string | null;
+    domain: string | null;
+    image_url: string | null;
+    favicon_url: string | null;
+    preview_image_relative_path: string | null;
+    preview_image_mime_type: string | null;
+  }>(
+    `SELECT id, url, normalized_url, title, description, domain, image_url, favicon_url,
+            preview_image_relative_path, preview_image_mime_type
+     FROM saved_content
+     WHERE content_type = 'link' AND deleted_at IS NULL AND preview_image_relative_path IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM saved_link_preview_enrichment enrichment
+         WHERE enrichment.content_id = saved_content.id
+           AND (
+             enrichment.completed_at IS NOT NULL OR
+             enrichment.attempt_count >= 2 OR
+             (enrichment.last_attempt_at IS NOT NULL AND enrichment.last_attempt_at > ?)
+           )
+       )
+     ORDER BY created_at DESC, id DESC
+     LIMIT 128;`,
+    Date.now() - 30_000,
+  );
+  const candidates = rows.flatMap((row) => {
+    const candidate = toQuickSavePreviewCandidate(row);
+    return candidate ? [candidate] : [];
+  });
+  void quickSaveLinkPreviewEnricher.scheduleBatch(candidates, 8);
 }
 
 async function insertLinkRow(input: {
@@ -98,32 +352,8 @@ export async function saveSavedLink(input: string, signal?: AbortSignal): Promis
       return row != null;
     },
     getPreview: (url, abortSignal) => getLinkPreview(url, abortSignal),
-    async cachePreview(url, abortSignal) {
-      const downloaded = await downloadLinkPreviewImage(url, abortSignal);
-      const directory = new Directory(Paths.document, ...PREVIEW_DIRECTORY.split('/'));
-      await directory.create({ idempotent: true, intermediates: true });
-      const name = `preview-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${downloaded.extension}`;
-      const relativePath = `${PREVIEW_DIRECTORY}/${name}`;
-      const file = fileForPreviewPath(relativePath);
-
-      try {
-        file.create();
-        await file.write(downloaded.bytes);
-        if (!file.exists || !file.size || file.size <= 0) {
-          throw new Error('The saved link preview image is empty.');
-        }
-      } catch (error) {
-        if (file.exists) file.delete();
-        throw error;
-      }
-
-      return { relativePath, uri: file.uri, mimeType: downloaded.mimeType };
-    },
-    async deletePreview(relativePath) {
-      const file = fileForPreviewPath(relativePath);
-      if (file.exists) file.delete();
-      if (file.exists) throw new Error('The saved link preview could not be removed.');
-    },
+    cachePreview: cacheLinkPreviewImage,
+    deletePreview: deleteCachedLinkPreview,
     insertLink: insertLinkRow,
     async deleteInsertedLink(id) {
       const database = await getSaveAppDatabase();
@@ -147,18 +377,21 @@ export async function importQueuedQuickSaveLink(
 
   const database = await getSaveAppDatabase();
   let result: 'inserted' | 'alreadySaved' = 'inserted';
+  let savedId: number | null = null;
   await database.withExclusiveTransactionAsync(async (transaction) => {
     const findExisting = () => transaction.getFirstAsync<{ id: number }>(
       "SELECT id FROM saved_content WHERE content_type = 'link' AND normalized_url = ? AND deleted_at IS NULL LIMIT 1;",
       normalized.url,
     );
-    if (await findExisting()) {
+    const existing = await findExisting();
+    if (existing) {
       result = 'alreadySaved';
+      savedId = existing.id;
       return;
     }
 
     try {
-      await transaction.runAsync(
+      const inserted = await transaction.runAsync(
         `INSERT INTO saved_content
            (content_type, created_at, url, normalized_url, title, description, domain,
             image_url, favicon_url, preview_image_relative_path, preview_image_mime_type, text_content)
@@ -169,15 +402,40 @@ export async function importQueuedQuickSaveLink(
         fallbackLinkTitle(normalized.url),
         normalized.domain,
       );
+      savedId = inserted.lastInsertRowId;
     } catch (error) {
       // The partial unique index remains the final guard against a concurrent manual save.
-      if (await findExisting()) {
+      const concurrentExisting = await findExisting();
+      if (concurrentExisting) {
         result = 'alreadySaved';
+        savedId = concurrentExisting.id;
         return;
       }
       throw error;
     }
   });
+
+  if (savedId != null) {
+    const row = await database.getFirstAsync<{
+      id: number;
+      url: string | null;
+      normalized_url: string | null;
+      title: string | null;
+      description: string | null;
+      domain: string | null;
+      image_url: string | null;
+      favicon_url: string | null;
+      preview_image_relative_path: string | null;
+      preview_image_mime_type: string | null;
+    }>(
+      `SELECT id, url, normalized_url, title, description, domain, image_url, favicon_url,
+              preview_image_relative_path, preview_image_mime_type
+       FROM saved_content WHERE id = ? AND content_type = 'link' AND deleted_at IS NULL;`,
+      savedId,
+    );
+    const candidate = row ? toQuickSavePreviewCandidate(row) : null;
+    if (candidate) void quickSaveLinkPreviewEnricher.schedule(candidate);
+  }
 
   return result;
 }

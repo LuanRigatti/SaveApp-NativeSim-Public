@@ -10,21 +10,18 @@ import {
   resizable,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
-import { createLiveActivity, type LiveActivityEnvironment } from 'expo-widgets';
+import { createLiveActivity } from 'expo-widgets';
+
+import { SAVE_LINK_ACTIVITY_ASSET_NAME } from './saveLinkActivityIconAssets';
 
 type SaveLinkActivityProps = {
-  iconUri: string | { light: string; dark: string };
   composeUrl: string;
   expandedHomeUrl: string;
   quickSaveStatus?: 'ready' | 'processing' | 'queued' | 'alreadyQueued' | 'alreadySaved' | 'invalid' | 'failed';
 };
 
-function SaveLinkActivity(props: SaveLinkActivityProps, environment: LiveActivityEnvironment) {
+function SaveLinkActivity(props: SaveLinkActivityProps) {
   'widget';
-
-  const iconUri = typeof props.iconUri === 'string'
-    ? props.iconUri
-    : props.iconUri[environment.colorScheme];
 
   const quickSaveLabels = {
     ready: 'Salvar link',
@@ -70,7 +67,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps, environment: LiveActivit
     banner: (
       <HStack alignment="center" spacing={12} modifiers={[padding({ all: 16 })]}>
         <Image
-          uiImage={iconUri}
+          assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
           modifiers={[resizable(), frame({ width: 34, height: 34 }), clipShape('roundedRectangle', 8)]}
         />
         <VStack alignment="leading" spacing={2}>
@@ -81,20 +78,20 @@ function SaveLinkActivity(props: SaveLinkActivityProps, environment: LiveActivit
     ),
     compactLeading: (
       <Image
-        uiImage={iconUri}
+        assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
         modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
       />
     ),
     minimal: (
       <Image
-        uiImage={iconUri}
+        assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
         modifiers={[resizable(), frame({ width: 20, height: 20 }), clipShape('roundedRectangle', 5)]}
       />
     ),
     expandedLeading: (
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
         <Image
-          uiImage={iconUri}
+          assetName={SAVE_LINK_ACTIVITY_ASSET_NAME}
           modifiers={[
             resizable(),
             frame({ width: 48, height: 48 }),

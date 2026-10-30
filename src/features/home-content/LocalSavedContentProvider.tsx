@@ -14,8 +14,10 @@ import {
   getSavedText,
   listSavedHomeContent,
   cleanupUnreferencedSavedNoteAssets,
+  schedulePendingQuickSaveLinkPreviewEnrichment,
   saveSavedLink,
   saveSavedText,
+  subscribeToQuickSaveLinkPreviewUpdates,
   updateSavedText,
 } from './savedContentLibrary';
 import { prependSavedHomeContent } from './homeContentState';
@@ -70,6 +72,7 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
         })
         .then((nextContents) => {
           setContents(nextContents);
+          void schedulePendingQuickSaveLinkPreviewEnrichment().catch(() => undefined);
           setHasCatalogLoadSucceeded(true);
           recordSaveAppDiagnosticEvent('home.catalog.initialize_completed');
           recordSaveAppDiagnosticEvent(nextContents.some((item) => item.contentType === 'link')
@@ -113,6 +116,7 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
       })
       .then((nextContents) => {
         setContents(nextContents);
+        void schedulePendingQuickSaveLinkPreviewEnrichment().catch(() => undefined);
         setHasCatalogLoadSucceeded(true);
         setIsReady(true);
         recordSaveAppDiagnosticEvent('home.catalog.refresh_completed');
@@ -131,6 +135,16 @@ export function LocalSavedContentProvider({ children }: { children: ReactNode })
     refreshPromiseRef.current = refreshPromise;
     return refreshPromise;
   }, [initialize]);
+
+  useEffect(() => subscribeToQuickSaveLinkPreviewUpdates(() => {
+    void initialize()
+      .then(() => listSavedHomeContent())
+      .then((nextContents) => {
+        setContents(nextContents);
+        setHasCatalogLoadSucceeded(true);
+      })
+      .catch(() => undefined);
+  }), [initialize]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {

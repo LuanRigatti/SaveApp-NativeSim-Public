@@ -42,6 +42,8 @@ $requiredSnapshotFiles = @(
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
   'src/features/dynamic-island/quickSaveQueue.ts',
   'src/features/dynamic-island/quickSaveQueueImportPipeline.ts',
+  'src/features/home-content/quickSaveLinkPreviewEnrichment.ts',
+  'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts',
   '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
   '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs',
   '.github/native-sim/oslog-capture.sh',
@@ -52,7 +54,8 @@ $requiredSnapshotFiles = @(
   'tests/native-sim-build-settings.test.js',
   '.agents/skills/saveapp-nativesim/SKILL.md','.agents/skills/saveapp-nativesim-nopreflight/SKILL.md',
   'docs/current-state.md','docs/design-system.md',
-  'assets/icon.png','assets/splash.png','assets/adaptive-icon.png'
+  'assets/icon.png','assets/splash.png','assets/adaptive-icon.png',
+  'assets/live-activity-icon.png','assets/live-activity-icon-dark.png'
 )
 
 function Get-MirrorModule {

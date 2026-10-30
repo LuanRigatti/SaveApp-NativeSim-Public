@@ -1,6 +1,7 @@
 export const SAVE_LINK_ACTIVITY_ICON_SIZE = 96;
-export const SAVE_LINK_ACTIVITY_LIGHT_ICON_NAME = 'saveapp-live-activity-icon.png';
-export const SAVE_LINK_ACTIVITY_DARK_ICON_NAME = 'saveapp-live-activity-icon-dark.png';
+export const SAVE_LINK_ACTIVITY_ASSET_NAME = 'SaveAppLiveActivityIcon';
+export const SAVE_LINK_ACTIVITY_LIGHT_ICON_FILE = 'live-activity-icon.png';
+export const SAVE_LINK_ACTIVITY_DARK_ICON_FILE = 'live-activity-icon-dark.png';
 
 export function hasPngSignature(bytes: Uint8Array): boolean {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
