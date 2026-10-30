@@ -15,18 +15,27 @@ const {
 } = require('../src/features/home-content/richNoteDocument');
 
 describe('versioned rich note document', () => {
-  test('starts new notes with an editable marked title and a separate body paragraph', () => {
+  test('starts new notes with an editable Adicionar texto title and a separate body paragraph', () => {
     const document = createEmptyRichNoteDocument();
 
     expect(document.blocks).toHaveLength(2);
     expect(document.blocks[0]).toMatchObject({
       type: 'paragraph',
-      text: 'Texto',
+      text: 'Adicionar texto',
       style: 'title',
       bold: true,
       role: 'document-title',
     });
     expect(document.blocks[1]).toMatchObject({ type: 'paragraph', text: '', style: 'body' });
+  });
+
+  test('preserves the initial editable title in the versioned draft without adding a separate title field', () => {
+    const document = createEmptyRichNoteDocument();
+    const reopened = parseRichNoteStorage(encodeRichNoteDraft(document)).document;
+
+    expect(reopened.blocks[0]).toMatchObject({ text: 'Adicionar texto', role: 'document-title', style: 'title', bold: true });
+    expect(reopened.blocks[1]).toMatchObject({ text: '', style: 'body' });
+    expect(reopened.blocks.filter((block) => block.type === 'paragraph' && block.role === 'document-title')).toHaveLength(1);
   });
 
   test('adds the old static title only to the editor model and preserves legacy text until edited', () => {

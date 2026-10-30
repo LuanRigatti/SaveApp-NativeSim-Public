@@ -5,6 +5,7 @@ type ChecklistTaskInputHeightOptions = {
   fontSize: number;
   lineHeight: number;
   minimumHeight?: number;
+  verticalPadding?: number;
 };
 
 type ChecklistCheckboxTopOffsetOptions = {
@@ -47,16 +48,43 @@ export function getBoundedChecklistTaskInputHeight({
   fontSize,
   lineHeight,
   minimumHeight = 44,
+  verticalPadding = 8,
 }: ChecklistTaskInputHeightOptions): number {
   const minHeight = Math.max(minimumHeight, Math.ceil(lineHeight));
   if (!Number.isFinite(availableWidth) || availableWidth <= 0) return minHeight;
+  const safeVerticalPadding = Number.isFinite(verticalPadding) && verticalPadding > 0 ? verticalPadding : 0;
 
   const estimatedLines = text.split(/\r\n|\r|\n/).reduce((total, paragraph) => {
-    const characterCount = Array.from(paragraph).length;
-    const wrappedLines = Math.ceil((characterCount * fontSize * 0.7) / availableWidth);
+    // Estimate common Latin glyph widths without inflating short tasks; use
+    // full-em width for wide BMP glyphs and two em for astral symbols/emoji.
+    // This keeps the cap conservative for full-width text without turning
+    // ordinary short rows into extra lines during a transient viewport event.
+    const estimatedTextWidth = Array.from(paragraph).reduce((width, character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      const isWideBmp = (codePoint >= 0x1100 && codePoint <= 0x11ff)
+        || (codePoint >= 0x2300 && codePoint <= 0x23ff)
+        || (codePoint >= 0x2e80 && codePoint <= 0xa4cf)
+        || (codePoint >= 0xac00 && codePoint <= 0xd7af)
+        || (codePoint >= 0xf900 && codePoint <= 0xfaff)
+        || (codePoint >= 0xfe10 && codePoint <= 0xfe6f)
+        || (codePoint >= 0xff01 && codePoint <= 0xff60)
+        || (codePoint >= 0xffe0 && codePoint <= 0xffe6)
+        || (codePoint >= 0x2600 && codePoint <= 0x27bf);
+      const emWidth = codePoint > 0xffff
+        ? 2
+        : isWideBmp
+          ? 1
+          : /[MWmw@%&]/.test(character)
+            ? 0.95
+            : /[ilI1.,:;'`!|]/.test(character) || /\s/.test(character)
+              ? 0.35
+              : 0.7;
+      return width + fontSize * emWidth;
+    }, 0);
+    const wrappedLines = Math.ceil(estimatedTextWidth / availableWidth);
     return total + Math.max(1, wrappedLines);
   }, 0);
-  const plausibleMaximum = Math.max(minHeight, Math.ceil(estimatedLines * lineHeight) + 8);
+  const plausibleMaximum = Math.max(minHeight, Math.ceil(estimatedLines * lineHeight) + safeVerticalPadding);
   const safeMeasurement = Number.isFinite(measuredHeight) && measuredHeight > 0
     ? Math.ceil(measuredHeight)
     : minHeight;

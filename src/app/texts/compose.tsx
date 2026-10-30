@@ -139,9 +139,6 @@ export default function ComposeTextScreen() {
                 contentContainerStyle={{ flexGrow: 1, paddingHorizontal: theme.layout.screenHorizontalPadding, paddingTop: theme.spacing.lg, paddingBottom: 76 }}
               >
                 <View style={{ flex: 1, gap: theme.spacing.lg }}>
-                  <Text accessibilityRole="header" style={[theme.typography.largeTitle, { color: theme.colors.textPrimary, fontSize: theme.typography.largeTitle.fontSize + 2 }]}>
-                    Adicionar texto
-                  </Text>
                   <RichNoteEditor
                     document={document}
                     initialFocus={shouldFocusInput}

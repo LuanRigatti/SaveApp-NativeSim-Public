@@ -2,6 +2,7 @@
 
 const { readFileSync } = require('node:fs');
 const { getRichNoteInputHeight } = require('../src/features/home-content/richNoteEditorLayout');
+const { getBoundedChecklistTaskInputHeight } = require('../src/features/home-content/checklistTaskRowLayout');
 
 const editorSource = readFileSync(require.resolve('../src/components/homeContent/RichNoteEditor.tsx'), 'utf8');
 const toolbarSource = readFileSync(require.resolve('../modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift'), 'utf8');
@@ -45,10 +46,109 @@ describe('rich note editor iOS regressions', () => {
     expect(insertSource).toContain('insertAfterActivePosition([block], false)');
     expect(insertSource).toContain('scheduleFocus({ kind: \'checklist\', blockId, itemId }');
     expect(editorSource).toContain('accessibilityRole="checkbox"');
-    expect(editorSource).toContain('onSubmitEditing={() => addChecklistItem(block.id, item.id)}');
+    expect(editorSource).toContain('onSubmitEditing={() => submitChecklistItem(block.id, item.id)}');
     expect(editorSource).toContain('onPress={() => toggleChecklistItem(block.id, item.id)}');
     expect(librarySource).toContain('encodePersistedRichNote');
     expect(librarySource).toContain('UPDATE saved_content SET text_content = ?');
+  });
+
+  test('keeps the checklist checkbox inside a finite native context-menu trigger', () => {
+    const checklistStart = editorSource.indexOf('const renderChecklist');
+    const checklistEnd = editorSource.indexOf('const renderInlineLinkComposer', checklistStart);
+    const checklistSource = editorSource.slice(checklistStart, checklistEnd);
+
+    expect(checklistSource).toContain('matchContents={{ vertical: true }}');
+    expect(checklistSource).toContain('triggerContentWidth={RICH_NOTE_CHECKLIST_CONTROL_WIDTH}');
+    expect(editorSource).toContain('const RICH_NOTE_CHECKLIST_CONTROL_WIDTH = 44');
+    expect(checklistSource).toContain('width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH');
+    expect(checklistSource).toContain("alignItems: 'center', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum");
+    expect(checklistSource).not.toContain('hitSlop={4}');
+    expect(checklistSource).toContain('<ChecklistCheckboxIndicator isCompleted={item.checked} />');
+    expect(checklistSource).toContain('accessibilityRole="checkbox"');
+  });
+
+  test('bounds transient keyboard viewport heights for 1, 2, 5, and 10 checklist rows', () => {
+    for (const rowCount of [1, 2, 5, 10]) {
+      const heights = Array.from({ length: rowCount }, (_, index) => getBoundedChecklistTaskInputHeight({
+        availableWidth: 280,
+        fontSize: 17,
+        lineHeight: 24,
+        measuredHeight: 1800,
+        minimumHeight: 44,
+        text: `Tarefa ${index + 1}`,
+        verticalPadding: 16,
+      }));
+
+      expect(heights).toEqual(Array(rowCount).fill(44));
+      expect(heights.reduce((total, height) => total + height, 2 * Math.max(0, rowCount - 1)))
+        .toBe(rowCount * 44 + 2 * Math.max(0, rowCount - 1));
+    }
+
+    const longMultiline = `${'Detalhe de tarefa longa '.repeat(10)}\n\n${'Continuação da tarefa '.repeat(8)}`;
+    const boundedHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 150,
+      fontSize: 20,
+      lineHeight: 28,
+      measuredHeight: 1800,
+      minimumHeight: 72,
+      text: longMultiline,
+      verticalPadding: 16,
+    });
+
+    expect(boundedHeight).toBeGreaterThan(72);
+    expect(boundedHeight).toBeLessThan(1800);
+  });
+
+  test('limits checklist height by text width and advances once per Return action', () => {
+    const checklistStart = editorSource.indexOf('const renderChecklist');
+    const checklistEnd = editorSource.indexOf('const renderInlineLinkComposer', checklistStart);
+    const checklistSource = editorSource.slice(checklistStart, checklistEnd);
+    const longText = 'Uma descrição de tarefa com muitas palavras. '.repeat(12);
+    const narrowHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 150, fontSize: 17, lineHeight: 24, measuredHeight: 1200, text: longText, verticalPadding: 16,
+    });
+    const wideHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 300, fontSize: 17, lineHeight: 24, measuredHeight: 1200, text: longText, verticalPadding: 16,
+    });
+
+    expect(editorSource).toContain('measureChecklistInput(item.id, event.nativeEvent.contentSize.height, item.text)');
+    expect(editorSource).toContain('editorContentWidth - RICH_NOTE_CHECKLIST_CONTROL_WIDTH');
+    expect(editorSource).toContain('submittedChecklistItemRef.current === itemId');
+    expect(checklistSource).toContain('onSubmitEditing={() => submitChecklistItem(block.id, item.id)}');
+    expect(checklistSource).toContain('submitBehavior="submit"');
+    expect(checklistSource).not.toContain('onSubmitEditing={() => addChecklistItem(block.id, item.id)}');
+    expect(narrowHeight).toBeGreaterThan(wideHeight);
+    expect(wideHeight).toBeGreaterThanOrEqual(44);
+  });
+
+  test('keeps full-width Unicode, emoji, explicit blank lines, and scaled text within the measured-height bound', () => {
+    const wideLatinHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 170, fontSize: 17, lineHeight: 24, measuredHeight: 1800,
+      minimumHeight: 44, text: 'W'.repeat(12), verticalPadding: 16,
+    });
+    const fullWidthHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 170, fontSize: 17, lineHeight: 24, measuredHeight: 1800,
+      minimumHeight: 44, text: '漢'.repeat(12), verticalPadding: 16,
+    });
+    const emojiHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 170, fontSize: 17, lineHeight: 24, measuredHeight: 1800,
+      minimumHeight: 44, text: '😀'.repeat(6), verticalPadding: 16,
+    });
+    const explicitLinesHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 1000, fontSize: 17, lineHeight: 24, measuredHeight: 1800,
+      minimumHeight: 44, text: 'linha 1\n\nlinha 3', verticalPadding: 16,
+    });
+    const scaledTextHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: 220, fontSize: 34, lineHeight: 44, measuredHeight: 1800,
+      minimumHeight: 60, text: '漢'.repeat(20), verticalPadding: 16,
+    });
+
+    expect(wideLatinHeight).toBe(64);
+    expect(fullWidthHeight).toBe(64);
+    expect(emojiHeight).toBe(64);
+    expect(explicitLinesHeight).toBe(88);
+    expect(scaledTextHeight).toBeGreaterThanOrEqual(60);
+    expect(scaledTextHeight).toBeLessThan(1800);
   });
 
   test('keeps bullet and numbered markers visible and tied to paragraph formatting actions', () => {

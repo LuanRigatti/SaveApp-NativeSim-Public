@@ -10,6 +10,7 @@ const controllerSource = readSource('../src/components/homeContent/HomeContentCo
 const composeRouteSource = readSource('../src/app/texts/compose.tsx');
 const detailRouteSource = readSource('../src/app/texts/[id].tsx');
 const editorSource = readSource('../src/components/homeContent/RichNoteEditor.tsx');
+const richNoteDocumentSource = readSource('../src/features/home-content/richNoteDocument.ts');
 const toolbarSource = readSource('../src/components/homeContent/RichNoteKeyboardToolbar.ios.tsx');
 const toolbarNativeSource = readSource('../modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift');
 const librarySource = readSource('../src/features/home-content/savedContentLibrary.ts');
@@ -36,6 +37,16 @@ describe('home link composer and shared rich text editor contract', () => {
     expect(detailRouteSource).toContain('savedText.richDocument');
     expect(composeRouteSource).not.toContain('HomeContentComposerSwiftUI.ios');
     expect(detailRouteSource).not.toMatch(/<TextInput/);
+  });
+
+  test('renders the creation title only as the first editable document block', () => {
+    expect(composeRouteSource).not.toMatch(/>\s*Adicionar texto\s*</);
+    expect(composeRouteSource).toContain('<RichNoteEditor');
+    expect(richNoteDocumentSource).toContain("createRichNoteParagraph('Adicionar texto'");
+    expect(richNoteDocumentSource).toContain("role: 'document-title'");
+    expect(editorSource).toContain('accessibilityLabel={block.style === \'title\' ? `Título do parágrafo ${index + 1}` : `Parágrafo ${index + 1}`}');
+    expect(editorSource).toContain("placeholder={block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined}");
+    expect(composeRouteSource).toContain('const [hasDraft, setHasDraft] = useState(false)');
   });
 
   test('keeps the existing root Native Stack card, transition focus, and discard protection', () => {
@@ -111,8 +122,9 @@ describe('home link composer and shared rich text editor contract', () => {
 
   test('lets long paragraphs and checklist tasks expand in the editor scroll view', () => {
     expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(block\.id, event\.nativeEvent\.contentSize\.height, lineHeight, lineHeight, 0, block\.text\)\}[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{block\.text\}/);
-    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(item\.id, event\.nativeEvent\.contentSize\.height[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{item\.text\}/);
+    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureChecklistInput\(item\.id, event\.nativeEvent\.contentSize\.height, item\.text\)\}[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{item\.text\}/);
     expect(editorSource).toContain('preserveExplicitLines(block.id, text, lineHeight)');
+    expect(editorSource).toContain('getBoundedChecklistTaskInputHeight');
   });
 
   test('inserts local multiple images and safe asynchronous link previews at the active position', () => {

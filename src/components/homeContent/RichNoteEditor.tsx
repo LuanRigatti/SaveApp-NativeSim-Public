@@ -7,6 +7,7 @@ import {
   Alert,
   Keyboard,
   Linking,
+  PixelRatio,
   Pressable,
   Text,
   TextInput,
@@ -32,8 +33,11 @@ import { canFetchLinkPreview, fallbackLinkTitle, normalizeWebLink } from '@/feat
 import { getLinkPreview } from '@/features/home-content/linkPreview';
 import { confirmSavedLinkOpen } from '@/features/home-content/savedLinkOpenConfirmation';
 import { getRichNoteAssetUri } from '@/features/home-content/richNoteAssets';
+import { getBoundedChecklistTaskInputHeight } from '@/features/home-content/checklistTaskRowLayout';
 import { getRichNoteInputHeight } from '@/features/home-content/richNoteEditorLayout';
 import { useAppTheme } from '@/theme';
+
+const RICH_NOTE_CHECKLIST_CONTROL_WIDTH = 44;
 
 export type RichNoteEditorHandle = {
   dismissKeyboard: () => void;
@@ -121,6 +125,14 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   disabled = false,
 }: RichNoteEditorProps, forwardedRef) {
   const { theme } = useAppTheme();
+  const fontScale = PixelRatio.getFontScale();
+  const checklistTaskFontSize = (theme.typography.body.fontSize ?? 17) * fontScale;
+  const checklistTaskLineHeight = (theme.typography.body.lineHeight ?? 24) * fontScale;
+  const checklistTaskVerticalPadding = theme.spacing.xs * 2;
+  const checklistTaskMinimumHeight = Math.max(
+    theme.sizes.touchTargetMinimum,
+    Math.ceil(checklistTaskLineHeight + checklistTaskVerticalPadding),
+  );
   const documentRef = useRef(document);
   const inputRefs = useRef(new Map<string, TextInputInstance>());
   const handledImageRetryRef = useRef<{ blockId: string } | null>(null);
@@ -131,6 +143,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   const undoStackRef = useRef<RichNoteDocument[]>([]);
   const undoGroupRef = useRef<{ key: string; timestamp: number } | null>(null);
   const pendingFocusRef = useRef<{ input: EditorInput; selection?: { start: number; end: number } } | null>(null);
+  const submittedChecklistItemRef = useRef<string | null>(null);
   const previewRequestsRef = useRef(new Map<string, AbortController>());
   const attemptedPreviewUrlsRef = useRef(new Map<string, string>());
   const didInitialFocusRef = useRef(false);
@@ -286,6 +299,28 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     });
     setMeasuredInputHeights((current) => current[inputId] === nextHeight ? current : { ...current, [inputId]: nextHeight });
   }, []);
+
+  const measureChecklistInput = useCallback((inputId: string, contentHeight: number, text: string) => {
+    const requiredHeight = getRichNoteInputHeight({
+      measuredHeight: 0,
+      text,
+      lineHeight: checklistTaskLineHeight,
+      minimumHeight: checklistTaskMinimumHeight,
+      verticalPadding: checklistTaskVerticalPadding,
+    });
+    const nextHeight = getBoundedChecklistTaskInputHeight({
+      availableWidth: editorContentWidth > RICH_NOTE_CHECKLIST_CONTROL_WIDTH
+        ? editorContentWidth - RICH_NOTE_CHECKLIST_CONTROL_WIDTH
+        : 0,
+      fontSize: checklistTaskFontSize,
+      lineHeight: checklistTaskLineHeight,
+      measuredHeight: contentHeight,
+      minimumHeight: requiredHeight,
+      text,
+      verticalPadding: checklistTaskVerticalPadding,
+    });
+    setMeasuredInputHeights((current) => current[inputId] === nextHeight ? current : { ...current, [inputId]: nextHeight });
+  }, [checklistTaskFontSize, checklistTaskLineHeight, checklistTaskMinimumHeight, checklistTaskVerticalPadding, editorContentWidth]);
 
   const preserveExplicitLines = useCallback((inputId: string, text: string, lineHeight: number, minimumHeight = lineHeight, verticalPadding = 0) => {
     const requiredHeight = getRichNoteInputHeight({ measuredHeight: 0, text, lineHeight, minimumHeight, verticalPadding });
@@ -523,6 +558,12 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     activeInputRef.current = { kind: 'checklist', blockId, itemId };
     scheduleFocus({ kind: 'checklist', blockId, itemId }, { start: 0, end: 0 });
   }, [scheduleFocus, updateBlock]);
+
+  const submitChecklistItem = useCallback((blockId: string, itemId: string) => {
+    if (submittedChecklistItemRef.current === itemId) return;
+    submittedChecklistItemRef.current = itemId;
+    addChecklistItem(blockId, itemId);
+  }, [addChecklistItem]);
 
   const insertChecklist = useCallback(() => {
     const blockId = createRichNoteId('checklist');
@@ -812,15 +853,20 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
     <View key={block.id} style={{ gap: 2, width: '100%' }}>
       {block.items.map((item, index) => (
         <View key={item.id} style={{ alignItems: 'center', flexDirection: 'row', minHeight: theme.sizes.touchTargetMinimum, width: '100%' }}>
-          <NativeCardContextMenu actions={checklistItemActions(block.id, item.id)} title="Tarefa">
+          <NativeCardContextMenu
+            actions={checklistItemActions(block.id, item.id)}
+            matchContents={{ vertical: true }}
+            style={{ alignSelf: 'flex-start', flexShrink: 0, width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH }}
+            title="Tarefa"
+            triggerContentWidth={RICH_NOTE_CHECKLIST_CONTROL_WIDTH}
+          >
           <Pressable
             accessibilityLabel={item.checked ? `Desmarcar tarefa ${index + 1}` : `Marcar tarefa ${index + 1}`}
             accessibilityRole="checkbox"
             accessibilityState={{ checked: item.checked }}
-            hitSlop={4}
             onPress={() => toggleChecklistItem(block.id, item.id)}
             onPressIn={markInteraction}
-            style={{ alignItems: 'flex-start', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum, width: 34 }}
+            style={{ alignItems: 'center', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum, width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH }}
           >
             <ChecklistCheckboxIndicator isCompleted={item.checked} />
           </Pressable>
@@ -829,14 +875,14 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             accessibilityLabel={`Tarefa ${index + 1}`}
             editable={!disabled}
             multiline
-            onContentSizeChange={(event) => measureInput(item.id, event.nativeEvent.contentSize.height,
-              theme.typography.body.lineHeight, theme.sizes.touchTargetMinimum, theme.spacing.xs * 2, item.text)}
+            onContentSizeChange={(event) => measureChecklistInput(item.id, event.nativeEvent.contentSize.height, item.text)}
             onBlur={handleInputBlur}
             onChangeText={(text) => {
-              preserveExplicitLines(item.id, text, theme.typography.body.lineHeight, theme.sizes.touchTargetMinimum, theme.spacing.xs * 2);
+              preserveExplicitLines(item.id, text, checklistTaskLineHeight, checklistTaskMinimumHeight, checklistTaskVerticalPadding);
               updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`);
             }}
             onFocus={() => {
+              if (submittedChecklistItemRef.current === item.id) submittedChecklistItemRef.current = null;
               const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
               editorHasFocusRef.current = true;
               activeInputRef.current = input;
@@ -845,7 +891,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
               selectionRef.current = event.nativeEvent.selection;
               selectionByInputRef.current.set(item.id, event.nativeEvent.selection);
             }}
-            onSubmitEditing={() => addChecklistItem(block.id, item.id)}
+            onSubmitEditing={() => submitChecklistItem(block.id, item.id)}
             onTouchStart={markInteraction}
             placeholder="Item da checklist"
             placeholderTextColor={theme.colors.textTertiary}
@@ -859,7 +905,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             returnKeyType="next"
             scrollEnabled={false}
             selectionColor={theme.colors.primary}
-            style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, flex: 1, height: measuredInputHeights[item.id] ?? theme.sizes.touchTargetMinimum, minHeight: theme.sizes.touchTargetMinimum, minWidth: 0, paddingVertical: theme.spacing.xs, textDecorationLine: item.checked ? 'line-through' : 'none', textAlignVertical: 'center' }]}
+            style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, flex: 1, height: measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, minHeight: checklistTaskMinimumHeight, minWidth: 0, paddingVertical: theme.spacing.xs, textDecorationLine: item.checked ? 'line-through' : 'none', textAlignVertical: 'center' }]}
             submitBehavior="submit"
             value={item.text}
           />

@@ -103,7 +103,7 @@ export function createRichNoteParagraph(
 }
 
 export function createEmptyRichNoteDocument(): RichNoteDocument {
-  const title = createRichNoteParagraph('Texto', {
+  const title = createRichNoteParagraph('Adicionar texto', {
     bold: true,
     role: 'document-title',
     style: 'title',
