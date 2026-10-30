@@ -82,13 +82,22 @@ try {
     } else fail();
   } else {
     const value = parse();
-    if (filter === '.id|tostring == $run_id') result(String(value.id) === vars.run_id);
-    else if (filter === '.run_attempt|tostring == $attempt') result(String(value.run_attempt) === vars.attempt);
-    else if (filter.startsWith('.path == ".github/workflows/native-sim.yml"')) {
-      result(value.path === '.github/workflows/native-sim.yml' && value.event === 'workflow_dispatch' &&
-        value.head_branch === 'main' && value.head_sha === vars.sha && value.actor?.login === vars.actor &&
-        value.status === 'in_progress' && value.conclusion === null && typeof value.created_at === 'string' &&
-        value.created_at.length > 0 && value.display_title === 'native-sim ' + vars.session + ' · release · ' + vars.minutes + 'm');
+    if (filter.includes('["run_id"]') && filter.includes('["display_title"]')) {
+      const createdAt = Date.parse(value.created_at);
+      const checks = [
+        ['run_id', String(value.id) === vars.run_id],
+        ['run_attempt', String(value.run_attempt) === vars.attempt],
+        ['workflow_path', value.path === '.github/workflows/native-sim.yml'],
+        ['event', value.event === 'workflow_dispatch'],
+        ['head_branch', value.head_branch === 'main'],
+        ['head_sha', value.head_sha === vars.sha],
+        ['actor', value.actor?.login === vars.actor],
+        ['run_status', value.status === 'in_progress'],
+        ['run_conclusion', value.conclusion === null],
+        ['created_at', typeof value.created_at === 'string' && value.created_at.length > 0 && Number.isFinite(createdAt)],
+        ['display_title', value.display_title === 'native-sim ' + vars.session + ' · release · ' + vars.minutes + 'm'],
+      ];
+      process.stdout.write(checks.filter(([, valid]) => !valid).map(([name]) => name).join('\n'));
     } else if (filter === '.created_at | select(type == "string" and length > 0)') {
       result(typeof value.created_at === 'string' && value.created_at.length ? value.created_at : null);
     } else if (filter.includes('all(.[]; type == "object"')) {
@@ -216,6 +225,26 @@ describe('SaveApp per-session OSLog NativeSim choice', () => {
   const snapshotGate = read('scripts/Test-SaveAppMirrorSnapshot.ps1');
   const primarySkill = read('.agents/skills/saveapp-nativesim/SKILL.md');
   const noPreflightSkill = read('.agents/skills/saveapp-nativesim-nopreflight/SKILL.md');
+
+  test('each fixed run metadata diagnostic is tied to its production jq predicate', () => {
+    const predicates = [
+      '(if ((.id | tostring) == $run_id) then [] else ["run_id"] end)',
+      '(if ((.run_attempt | tostring) == $attempt) then [] else ["run_attempt"] end)',
+      '(if .path == ".github/workflows/native-sim.yml" then [] else ["workflow_path"] end)',
+      '(if .event == "workflow_dispatch" then [] else ["event"] end)',
+      '(if .head_branch == "main" then [] else ["head_branch"] end)',
+      '(if .head_sha == $sha then [] else ["head_sha"] end)',
+      '(if (try (.actor.login == $actor) catch false) then [] else ["actor"] end)',
+      '(if .status == "in_progress" then [] else ["run_status"] end)',
+      '(if .conclusion == null then [] else ["run_conclusion"] end)',
+      '(if (try ((.created_at | type) == "string" and (.created_at | length) > 0 and ((.created_at | fromdateiso8601) != null)) catch false) then [] else ["created_at"] end)',
+      '(if .display_title == ("native-sim " + $session + " · release · " + $minutes + "m") then [] else ["display_title"] end)',
+    ];
+
+    for (const predicate of predicates) expect(helper).toContain(predicate);
+    expect(helper).toContain('SAVEAPP_HANDSHAKE_FAILED: %s');
+    expect(helper).toContain('SAVEAPP_HANDSHAKE_FAILED: run_metadata');
+  });
 
   test('OSLog defaults OFF and the old repository-wide switch is not consulted', () => {
     expect(workflow).not.toContain('SAVEAPP_OSLOG_CAPTURE_ENABLED');
@@ -401,12 +430,69 @@ describe('SaveApp Bash exact-run OSLog choice behavior', () => {
     }
   }, 30000);
 
+  test('reports each failed run metadata condition by fixed identifier only', () => {
+    const sentinel = 'PRIVATE_API_METADATA_SENTINEL';
+    const failures = [
+      ['run_id', { id: sentinel }],
+      ['run_attempt', { run_attempt: 2 }],
+      ['workflow_path', { path: sentinel }],
+      ['event', { event: sentinel }],
+      ['head_branch', { head_branch: sentinel }],
+      ['head_sha', { head_sha: sentinel }],
+      ['actor', { actor: { login: sentinel } }],
+      ['run_status', { status: 'queued' }],
+      ['run_conclusion', { conclusion: 'success' }],
+      ['created_at', { created_at: sentinel }],
+      ['display_title', { display_title: sentinel }],
+    ];
+
+    for (const [condition, invalidField] of failures) {
+      const outcome = runBashChoice({ run: invalidField, statuses: [makeChoiceStatus()] });
+      const diagnostics = outcome.stdout.split(/\r?\n/).filter((line) => line.includes('SAVEAPP_HANDSHAKE_FAILED:'));
+      expect(outcome.exitCode).toBe(0);
+      expect(outcome.stdout).toContain('__CHOICE_EXIT__=1');
+      expect(diagnostics).toEqual([`::error::SAVEAPP_HANDSHAKE_FAILED: ${condition}`]);
+      expect(`${outcome.stdout}\n${outcome.stderr}`).not.toContain(sentinel);
+      expect(outcome.stdout).not.toContain('enabled=');
+      expect(outcome.stderr).toBe('');
+    }
+  }, 30000);
+
+  test('reports all failed metadata identifiers and keeps queued runs fail-closed', () => {
+    const outcome = runBashChoice({ run: {
+      status: 'queued',
+      actor: { login: 'PRIVATE_ACTOR_SENTINEL' },
+    }, statuses: [makeChoiceStatus({ capture: false })] });
+    const diagnostics = outcome.stdout.split(/\r?\n/).filter((line) => line.includes('SAVEAPP_HANDSHAKE_FAILED:'));
+
+    expect(outcome.stdout).toContain('__CHOICE_EXIT__=1');
+    expect(diagnostics).toEqual([
+      '::error::SAVEAPP_HANDSHAKE_FAILED: actor',
+      '::error::SAVEAPP_HANDSHAKE_FAILED: run_status',
+    ]);
+    expect(outcome.stdout).not.toContain('PRIVATE_ACTOR_SENTINEL');
+    expect(outcome.stdout).not.toContain('enabled=');
+  }, 30000);
+
+  test('does not publish either capture choice when exact run authentication fails', () => {
+    for (const capture of [false, true]) {
+      const outcome = runBashChoice({
+        run: { head_sha: 'PRIVATE_WRONG_SHA_SENTINEL' },
+        statuses: [makeChoiceStatus({ capture })],
+      });
+      expect(outcome.stdout).toContain('__CHOICE_EXIT__=1');
+      expect(outcome.stdout).toContain('SAVEAPP_HANDSHAKE_FAILED: head_sha');
+      expect(outcome.stdout).not.toContain('enabled=');
+      expect(outcome.stdout).not.toContain('PRIVATE_WRONG_SHA_SENTINEL');
+    }
+  }, 30000);
+
   test('fails closed for wrong identities, altered status data, ambiguity, missing data, and API failures', () => {
     const cases = [
-      ['run ID mismatch', { run: { id: '987654322' }, statuses: [makeChoiceStatus()] }, 'run ID'],
-      ['attempt mismatch', { run: { run_attempt: 2 }, statuses: [makeChoiceStatus()] }, 'run metadata'],
-      ['SHA mismatch on run', { run: { head_sha: 'b'.repeat(40) }, statuses: [makeChoiceStatus()] }, 'run metadata'],
-      ['session mismatch', { run: { display_title: 'native-sim 0a1b2c3d · release · 120m' }, statuses: [makeChoiceStatus()] }, 'run metadata'],
+      ['run ID mismatch', { run: { id: '987654322' }, statuses: [makeChoiceStatus()] }, 'SAVEAPP_HANDSHAKE_FAILED: run_id'],
+      ['attempt mismatch', { run: { run_attempt: 2 }, statuses: [makeChoiceStatus()] }, 'SAVEAPP_HANDSHAKE_FAILED: run_attempt'],
+      ['SHA mismatch on run', { run: { head_sha: 'b'.repeat(40) }, statuses: [makeChoiceStatus()] }, 'SAVEAPP_HANDSHAKE_FAILED: head_sha'],
+      ['session mismatch', { run: { display_title: 'native-sim 0a1b2c3d · release · 120m' }, statuses: [makeChoiceStatus()] }, 'SAVEAPP_HANDSHAKE_FAILED: display_title'],
       ['context/session mismatch', { statuses: [makeChoiceStatus({ context: 'saveapp/oslog-choice/987654321/1/0a1b2c3d' })] }, 'bounded timeout'],
       ['duplicate status', { statuses: [makeChoiceStatus(), makeChoiceStatus({ id: 123456790 })] }, 'ambiguous'],
       ['wrong creator', { statuses: [makeChoiceStatus({ creator: 'other-user' })] }, 'identity validation'],

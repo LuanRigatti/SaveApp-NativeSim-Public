@@ -29,27 +29,42 @@ saveapp_capture_resolve_session_choice() {
     echo '::error::Could not verify the SaveApp NativeSim run for its OSLog choice'
     return 1
   fi
-  if ! jq -e \
+  local metadata_failures
+  if ! metadata_failures=$(jq -r \
     --arg run_id "$run_id" --arg attempt "$attempt" --arg sha "$sha" \
     --arg session "$session_id" --arg minutes "$minutes" --arg actor "$actor" \
-    '.id|tostring == $run_id' >/dev/null <<<"$run_json"; then
-    echo '::error::SaveApp NativeSim run ID does not match the active workflow'
+    '[
+      (if ((.id | tostring) == $run_id) then [] else ["run_id"] end),
+      (if ((.run_attempt | tostring) == $attempt) then [] else ["run_attempt"] end),
+      (if .path == ".github/workflows/native-sim.yml" then [] else ["workflow_path"] end),
+      (if .event == "workflow_dispatch" then [] else ["event"] end),
+      (if .head_branch == "main" then [] else ["head_branch"] end),
+      (if .head_sha == $sha then [] else ["head_sha"] end),
+      (if (try (.actor.login == $actor) catch false) then [] else ["actor"] end),
+      (if .status == "in_progress" then [] else ["run_status"] end),
+      (if .conclusion == null then [] else ["run_conclusion"] end),
+      (if (try ((.created_at | type) == "string" and (.created_at | length) > 0 and ((.created_at | fromdateiso8601) != null)) catch false) then [] else ["created_at"] end),
+      (if .display_title == ("native-sim " + $session + " · release · " + $minutes + "m") then [] else ["display_title"] end)
+    ] | add | .[]' 2>/dev/null <<<"$run_json"); then
+    echo '::error::SAVEAPP_HANDSHAKE_FAILED: run_metadata'
     return 1
   fi
-  if ! jq -e \
-    --arg run_id "$run_id" --arg attempt "$attempt" --arg sha "$sha" \
-    --arg session "$session_id" --arg minutes "$minutes" --arg actor "$actor" \
-    '.run_attempt|tostring == $attempt' >/dev/null <<<"$run_json" ||
-     ! jq -e \
-    --arg run_id "$run_id" --arg attempt "$attempt" --arg sha "$sha" \
-    --arg session "$session_id" --arg minutes "$minutes" --arg actor "$actor" \
-    '.path == ".github/workflows/native-sim.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $sha and .actor.login == $actor and .status == "in_progress" and .conclusion == null and (.created_at | type == "string" and length > 0) and .display_title == ("native-sim " + $session + " · release · " + $minutes + "m")' >/dev/null <<<"$run_json"; then
-    echo '::error::SaveApp NativeSim run metadata does not match the exact session, attempt, actor, and SHA'
+  if [[ -n "$metadata_failures" ]]; then
+    while IFS= read -r failed_condition; do
+      case "$failed_condition" in
+        run_id|run_attempt|workflow_path|event|head_branch|head_sha|actor|run_status|run_conclusion|created_at|display_title)
+          printf '::error::SAVEAPP_HANDSHAKE_FAILED: %s\n' "$failed_condition"
+          ;;
+        *)
+          echo '::error::SAVEAPP_HANDSHAKE_FAILED: run_metadata'
+          ;;
+      esac
+    done <<<"$metadata_failures"
     return 1
   fi
   local run_created_at
   if ! run_created_at=$(jq -er '.created_at | select(type == "string" and length > 0)' <<<"$run_json"); then
-    echo '::error::SaveApp NativeSim run timestamp is invalid'
+    echo '::error::SAVEAPP_HANDSHAKE_FAILED: created_at'
     return 1
   fi
 
