@@ -137,9 +137,11 @@ Imagens selecionadas entram no ponto do cursor, preservam proporção e usam lar
 
 
 
-## Dynamic Island Quick Save — revisão local de 28 de outubro de 2026
+## Dynamic Island Quick Save — revisão local de 29 de outubro de 2026
 
-A apresentação inicial segue a imagem aprovada: ícone SaveApp à esquerda e, no centro, apenas “Salvar link”; não há subtítulo nesse estado. À direita, o botão circular usa aro branco e check, com área/diâmetro fixo de 44 pt. Durante processing, o anel aberto e estático conserva o mesmo diâmetro, sem animação contínua. A confirmação verde significa que o registro foi verificado como persistido na fila do App Group; não significa commit no catálogo. Duplicata ainda na fila usa cinza. Falhas usam vermelho. O Reduce Motion remove bounce e animação de estado.
+A apresentação inicial segue a imagem aprovada: ícone SaveApp à esquerda e, no centro, apenas “Salvar link”; não há subtítulo nesse estado. À direita, o botão circular usa aro branco e check. Os dois círculos expandidos medem 48 × 48 pt e permanecem iguais; durante processing, o anel aberto e estático conserva esse diâmetro, sem animação contínua. A confirmação verde significa que o registro foi verificado como persistido na fila do App Group; não significa commit no catálogo. Duplicata ainda na fila usa cinza. Falhas usam vermelho. O Reduce Motion remove bounce e animação de estado.
+
+A Live Activity usa PNGs dedicados de 96 × 96 px derivados dos ícones atuais: `assets/live-activity-icon.png` e `assets/live-activity-icon-dark.png`. Os arquivos são RGBA de 8 bits, com alpha de antialias nas bordas e o fundo visual dos ícones preservado; os ícones de instalação do app permanecem inalterados. O carregador valida dimensão, cabeçalho RGBA, assinatura PNG e igualdade dos bytes depois da cópia para `widgetsDirectory` do App Group; os quatro destinos do renderer (`compactLeading`, `minimal`, expanded leading e banner) usam o URI correspondente ao `colorScheme`. A leitura e decodificação efetivas pela extensão ainda dependem de compilação e teste iOS.
 
 O Quick Save escreve no App Group existente e a Home importa pendências para SQLite depois da inicialização do schema. O check de fila depende de a atualização ActivityKit ser visível e entregue ao renderer; como já houve runtime com lookup `not_found`, a nova apresentação ainda não está validada em iOS e não deve ser descrita como confirmação visual garantida. A persistência e o estado visual são independentes; nunca mostre sucesso visual só porque o App Group foi encontrado ou o intent foi tocado.
 

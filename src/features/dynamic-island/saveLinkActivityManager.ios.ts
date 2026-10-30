@@ -5,6 +5,13 @@ import * as Linking from 'expo-linking';
 import { createActivityReconciler } from './activityReconciler';
 import { createOptionalNativeModuleLoader } from './optionalNativeModuleLoader';
 import {
+  areBytesEqual,
+  isExpectedSaveLinkActivityPng,
+  SAVE_LINK_ACTIVITY_DARK_ICON_NAME,
+  SAVE_LINK_ACTIVITY_ICON_SIZE,
+  SAVE_LINK_ACTIVITY_LIGHT_ICON_NAME,
+} from './saveLinkActivityIconAssets';
+import {
   clearActivityLinkAuthorization,
   isMatchingActivityLinkToken,
   readActivityLinkAuthorization,
@@ -27,8 +34,6 @@ type LiveActivityFactory = {
   getInstances: () => NativeActivity[];
 };
 
-const APP_GROUP_ICON_NAME = 'saveapp-live-activity-icon.png';
-const APP_GROUP_DARK_ICON_NAME = 'saveapp-live-activity-icon-dark.png';
 const activityFactoryLoader = createOptionalNativeModuleLoader(
   'ExpoWidgets',
   requireOptionalNativeModule,
@@ -65,20 +70,43 @@ async function getSharedAppIconUri(): Promise<{ light: string; dark: string }> {
   const sharedDirectory = new Directory(widgetsDirectory);
   await sharedDirectory.create({ idempotent: true, intermediates: true });
   const [lightAsset, darkAsset] = await Asset.loadAsync([
-    require('../../../assets/icon.png'),
-    require('../../../assets/icon-dark.png'),
+    require('../../../assets/live-activity-icon.png'),
+    require('../../../assets/live-activity-icon-dark.png'),
   ]);
-  if (!lightAsset?.localUri || !darkAsset?.localUri) {
-    throw new Error('Não foi possível preparar os ícones do SaveApp.');
-  }
+  const lightIcon = new File(sharedDirectory, SAVE_LINK_ACTIVITY_LIGHT_ICON_NAME);
+  const darkIcon = new File(sharedDirectory, SAVE_LINK_ACTIVITY_DARK_ICON_NAME);
 
-  const lightIcon = new File(sharedDirectory, APP_GROUP_ICON_NAME);
-  const darkIcon = new File(sharedDirectory, APP_GROUP_DARK_ICON_NAME);
-  await Promise.all([
-    new File(lightAsset.localUri).copy(lightIcon, { overwrite: true }),
-    new File(darkAsset.localUri).copy(darkIcon, { overwrite: true }),
+  const copyValidatedIcon = async (asset: (typeof lightAsset) | undefined, destination: File) => {
+    if (
+      !asset?.localUri ||
+      asset.width !== SAVE_LINK_ACTIVITY_ICON_SIZE ||
+      asset.height !== SAVE_LINK_ACTIVITY_ICON_SIZE
+    ) {
+      throw new Error('O asset da Live Activity não tem o formato esperado.');
+    }
+    const source = new File(asset.localUri);
+    const sourceBytes = await source.bytes();
+    if (!source.exists || !isExpectedSaveLinkActivityPng(sourceBytes)) {
+      throw new Error('Não foi possível validar o asset da Live Activity.');
+    }
+    await source.copy(destination, { overwrite: true });
+    const copiedBytes = await destination.bytes();
+    if (
+      !destination.exists ||
+      !areBytesEqual(sourceBytes, copiedBytes) ||
+      !isExpectedSaveLinkActivityPng(copiedBytes) ||
+      !destination.uri.startsWith('file://')
+    ) {
+      throw new Error('Não foi possível preparar o ícone compartilhado com a extensão.');
+    }
+    return destination.uri;
+  };
+
+  const [light, dark] = await Promise.all([
+    copyValidatedIcon(lightAsset, lightIcon),
+    copyValidatedIcon(darkAsset, darkIcon),
   ]);
-  return { light: lightIcon.uri, dark: darkIcon.uri };
+  return { light, dark };
 }
 
 const reconcileInstances = createActivityReconciler({

@@ -125,7 +125,7 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
             Circle()
               .trim(from: 0.08, to: 0.92)
               .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-              .frame(width: 44, height: 44)
+              .frame(width: 48, height: 48)
               .rotationEffect(.degrees(-90))
               .accessibilityHidden(true)
           } else if quickSaveIsSuccess || quickSaveIsQueuedDuplicate || quickSaveIsFailure {
@@ -157,7 +157,7 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
               }
           }
         }
-        .frame(width: 44, height: 44)
+        .frame(width: 48, height: 48)
         .contentShape(Circle())
       }
       .buttonStyle(.plain)

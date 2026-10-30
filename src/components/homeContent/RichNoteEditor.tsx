@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
   type GestureResponderEvent,
+  type LayoutChangeEvent,
   type TextInputInstance,
 } from 'react-native';
 
@@ -31,6 +32,7 @@ import { canFetchLinkPreview, fallbackLinkTitle, normalizeWebLink } from '@/feat
 import { getLinkPreview } from '@/features/home-content/linkPreview';
 import { confirmSavedLinkOpen } from '@/features/home-content/savedLinkOpenConfirmation';
 import { getRichNoteAssetUri } from '@/features/home-content/richNoteAssets';
+import { getRichNoteInputHeight } from '@/features/home-content/richNoteEditorLayout';
 import { useAppTheme } from '@/theme';
 
 export type RichNoteEditorHandle = {
@@ -72,6 +74,33 @@ function imageUri(block: Extract<RichNoteBlock, { type: 'image' }>): string | nu
   }
 }
 
+function RichNoteImageLoadFailure({
+  blockId,
+  width,
+  theme,
+  onInteractionStart,
+  onRetry,
+}: {
+  blockId: string;
+  width: number;
+  theme: ReturnType<typeof useAppTheme>['theme'];
+  onInteractionStart: () => void;
+  onRetry: (blockId: string) => void;
+}) {
+  return (
+    <Pressable
+      accessibilityLabel="Imagem indisponível. Toque para selecionar outra foto."
+      accessibilityRole="button"
+      onPress={() => onRetry(blockId)}
+      onPressIn={onInteractionStart}
+      style={{ alignItems: 'flex-start', alignSelf: 'stretch', borderRadius: theme.radius.card, gap: theme.spacing.xs, minHeight: 64, justifyContent: 'center', padding: theme.spacing.md, width }}
+    >
+      <Text accessibilityRole="alert" style={[theme.typography.footnote, { color: theme.colors.danger }]}>Não foi possível carregar esta imagem.</Text>
+      <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>Toque para selecionar outra foto.</Text>
+    </Pressable>
+  );
+}
+
 function listNumber(blocks: readonly RichNoteBlock[], blockId: string): number {
   let count = 0;
   for (const block of blocks) {
@@ -94,6 +123,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   const { theme } = useAppTheme();
   const documentRef = useRef(document);
   const inputRefs = useRef(new Map<string, TextInputInstance>());
+  const handledImageRetryRef = useRef<{ blockId: string } | null>(null);
   const linkURLInputRef = useRef<TextInputInstance>(null);
   const activeInputRef = useRef<EditorInput | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
@@ -109,7 +139,10 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   const [linkURL, setLinkURL] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);
   const [failedPreviewIds, setFailedPreviewIds] = useState<Set<string>>(new Set());
+  const [failedImageIds, setFailedImageIds] = useState<Set<string>>(new Set());
+  const [imageRetryRequest, setImageRetryRequest] = useState<{ blockId: string } | null>(null);
   const [measuredInputHeights, setMeasuredInputHeights] = useState<Record<string, number>>({});
+  const [editorContentWidth, setEditorContentWidth] = useState(0);
 
   const hasLinkComposer = linkComposer !== null;
   useLayoutEffect(() => {
@@ -118,6 +151,17 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
 
   useEffect(() => {
     documentRef.current = document;
+  }, [document]);
+
+  useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    const inputId = pending.input.kind === 'paragraph' ? pending.input.blockId : pending.input.itemId;
+    const target = inputRefs.current.get(inputId);
+    if (!target) return;
+    target.focus();
+    if (pending.selection) target.setNativeProps({ selection: pending.selection });
+    pendingFocusRef.current = null;
   }, [document]);
 
   useEffect(() => {
@@ -151,22 +195,21 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       selectionByInputRef.current.set(inputId, selection);
       selectionRef.current = selection;
     }
-    requestAnimationFrame(() => {
-      const target = inputRefs.current.get(input.kind === 'paragraph' ? input.blockId : input.itemId);
-      if (!target) return;
-      target.focus();
-      if (selection) target.setNativeProps({ selection });
-    });
-  }, []);
-
-  const scheduleFocus = useCallback((input: EditorInput, selection?: { start: number; end: number }) => {
     const pending = { input, selection };
     pendingFocusRef.current = pending;
     requestAnimationFrame(() => {
       if (pendingFocusRef.current !== pending) return;
+      const target = inputRefs.current.get(input.kind === 'paragraph' ? input.blockId : input.itemId);
+      // Keep the request until the callback ref registers a field created by this edit.
+      if (!target) return;
+      target.focus();
+      if (selection) target.setNativeProps({ selection });
       pendingFocusRef.current = null;
-      focusInput(input, selection);
     });
+  }, []);
+
+  const scheduleFocus = useCallback((input: EditorInput, selection?: { start: number; end: number }) => {
+    focusInput(input, selection);
   }, [focusInput]);
 
   const focusAtEnd = useCallback(() => {
@@ -182,6 +225,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   }, [focusInput, publishDocument]);
 
   const dismissKeyboard = useCallback(() => {
+    pendingFocusRef.current = null;
     const activeId = activeInputRef.current?.kind === 'paragraph'
       ? activeInputRef.current.blockId
       : activeInputRef.current?.itemId;
@@ -203,6 +247,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   }, [focusAtEnd, initialFocus]);
 
   const markInteraction = useCallback(() => onInteractionStart?.(), [onInteractionStart]);
+  const requestImageRetry = useCallback((blockId: string) => setImageRetryRequest({ blockId }), []);
 
   const currentInsertionAnchor = useCallback((): InsertionAnchor => {
     const input = activeInputRef.current;
@@ -231,9 +276,29 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       : block, historyGroup);
   }, [updateBlock]);
 
-  const measureInput = useCallback((inputId: string, contentHeight: number, minimumHeight: number, verticalPadding = 0) => {
-    const nextHeight = Math.max(minimumHeight, Math.ceil(contentHeight + verticalPadding));
+  const measureInput = useCallback((inputId: string, contentHeight: number, lineHeight: number, minimumHeight = lineHeight, verticalPadding = 0, text = '') => {
+    const nextHeight = getRichNoteInputHeight({
+      measuredHeight: contentHeight,
+      text,
+      lineHeight,
+      minimumHeight,
+      verticalPadding,
+    });
     setMeasuredInputHeights((current) => current[inputId] === nextHeight ? current : { ...current, [inputId]: nextHeight });
+  }, []);
+
+  const preserveExplicitLines = useCallback((inputId: string, text: string, lineHeight: number, minimumHeight = lineHeight, verticalPadding = 0) => {
+    const requiredHeight = getRichNoteInputHeight({ measuredHeight: 0, text, lineHeight, minimumHeight, verticalPadding });
+    setMeasuredInputHeights((current) => (current[inputId] ?? 0) >= requiredHeight
+      ? current
+      : { ...current, [inputId]: requiredHeight });
+  }, []);
+
+  const handleEditorLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = event.nativeEvent.layout.width;
+    if (Number.isFinite(nextWidth) && nextWidth > 0) {
+      setEditorContentWidth((current) => Math.abs(current - nextWidth) < 0.5 ? current : nextWidth);
+    }
   }, []);
 
   const insertAtAnchor = useCallback((inserted: RichNoteBlock[], anchor: InsertionAnchor, focusAfter = true) => {
@@ -330,6 +395,12 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
       if (focusAfterPicker) scheduleFocus(focusAfterPicker.input, focusAfterPicker.selection);
     }
   }, [currentInsertionAnchor, dismissKeyboard, insertAtAnchor, markInteraction, onAuxiliaryPresentationChange, scheduleFocus, updateBlock]);
+
+  useEffect(() => {
+    if (!imageRetryRequest || handledImageRetryRef.current === imageRetryRequest) return;
+    handledImageRetryRef.current = imageRetryRequest;
+    void openImagePicker(imageRetryRequest.blockId);
+  }, [imageRetryRequest, openImagePicker]);
 
   const openLinkComposer = useCallback((blockId: string | null = null) => {
     markInteraction();
@@ -626,9 +697,12 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
           autoCapitalize="sentences"
           editable={!disabled}
           multiline
-          onContentSizeChange={(event) => measureInput(block.id, event.nativeEvent.contentSize.height, lineHeight)}
+          onContentSizeChange={(event) => measureInput(block.id, event.nativeEvent.contentSize.height, lineHeight, lineHeight, 0, block.text)}
           onBlur={handleInputBlur}
-          onChangeText={(text) => updateParagraphText(block.id, text)}
+          onChangeText={(text) => {
+            preserveExplicitLines(block.id, text, lineHeight);
+            updateParagraphText(block.id, text);
+          }}
           onFocus={() => {
             const input = { kind: 'paragraph' as const, blockId: block.id };
             editorHasFocusRef.current = true;
@@ -641,7 +715,13 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
           onTouchStart={markInteraction}
           placeholder={block.id === bodyPlaceholderBlockId ? 'Comece a escrever...' : undefined}
           placeholderTextColor={theme.colors.textTertiary}
-          ref={(node) => { if (node) inputRefs.current.set(block.id, node); else inputRefs.current.delete(block.id); }}
+          ref={(node) => {
+            if (!node) {
+              inputRefs.current.delete(block.id);
+              return;
+            }
+            inputRefs.current.set(block.id, node);
+          }}
           selectionColor={theme.colors.primary}
           style={{
             color: theme.colors.textPrimary,
@@ -667,16 +747,19 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
 
   const renderImage = (block: Extract<RichNoteBlock, { type: 'image' }>) => {
     const uri = imageUri(block);
+    const imageWidth = Math.max(1, editorContentWidth * (block.size === 'small' ? 0.45 : block.size === 'medium' ? 0.72 : 1));
+    const showImageFailure = () => <RichNoteImageLoadFailure blockId={block.id} key={block.id} onInteractionStart={markInteraction} onRetry={requestImageRetry} theme={theme} width={imageWidth} />;
     if (!uri) {
-      return <Text key={block.id} style={[theme.typography.footnote, { color: theme.colors.danger }]}>Imagem indisponível. Remova e insira novamente.</Text>;
+      return showImageFailure();
     }
-    const width = block.size === 'small' ? '45%' : block.size === 'medium' ? '72%' : '100%';
+    if (failedImageIds.has(block.id)) return showImageFailure();
     return (
-      <NativeCardContextMenu key={block.id} actions={imageActions(block.id)} title="Imagem" style={{ alignSelf: 'flex-start', width }}>
-        <View onTouchStart={markInteraction} style={{ alignSelf: 'flex-start', borderRadius: theme.radius.card, overflow: 'hidden', width }}>
+      <NativeCardContextMenu key={block.id} actions={imageActions(block.id)} matchContents={{ vertical: true }} title="Imagem" triggerContentWidth={imageWidth} style={{ alignSelf: 'flex-start', width: imageWidth }}>
+        <View onTouchStart={markInteraction} style={{ alignSelf: 'flex-start', borderRadius: theme.radius.card, overflow: 'hidden', width: imageWidth }}>
           <Image
             accessibilityLabel="Imagem dentro da nota. Toque e segure para ações."
             contentFit="contain"
+            onError={() => setFailedImageIds((current) => new Set(current).add(block.id))}
             source={{ uri }}
             style={{ aspectRatio: block.width / block.height, backgroundColor: theme.colors.surfaceMuted, width: '100%' }}
           />
@@ -746,9 +829,13 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             accessibilityLabel={`Tarefa ${index + 1}`}
             editable={!disabled}
             multiline
-            onContentSizeChange={(event) => measureInput(item.id, event.nativeEvent.contentSize.height, theme.sizes.touchTargetMinimum, theme.spacing.xs * 2)}
+            onContentSizeChange={(event) => measureInput(item.id, event.nativeEvent.contentSize.height,
+              theme.typography.body.lineHeight, theme.sizes.touchTargetMinimum, theme.spacing.xs * 2, item.text)}
             onBlur={handleInputBlur}
-            onChangeText={(text) => updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`)}
+            onChangeText={(text) => {
+              preserveExplicitLines(item.id, text, theme.typography.body.lineHeight, theme.sizes.touchTargetMinimum, theme.spacing.xs * 2);
+              updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`);
+            }}
             onFocus={() => {
               const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
               editorHasFocusRef.current = true;
@@ -762,7 +849,13 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
             onTouchStart={markInteraction}
             placeholder="Item da checklist"
             placeholderTextColor={theme.colors.textTertiary}
-            ref={(node) => { if (node) inputRefs.current.set(item.id, node); else inputRefs.current.delete(item.id); }}
+            ref={(node) => {
+              if (!node) {
+                inputRefs.current.delete(item.id);
+                return;
+              }
+              inputRefs.current.set(item.id, node);
+            }}
             returnKeyType="next"
             scrollEnabled={false}
             selectionColor={theme.colors.primary}
@@ -856,7 +949,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   };
 
   return (
-    <View style={{ flexGrow: 1, width: '100%' }}>
+    <View onLayout={handleEditorLayout} style={{ flexGrow: 1, width: '100%' }}>
       <View style={{ gap: theme.spacing.md, width: '100%' }}>
         {(() => {
           const composer = linkComposer;

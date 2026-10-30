@@ -110,8 +110,9 @@ describe('home link composer and shared rich text editor contract', () => {
   });
 
   test('lets long paragraphs and checklist tasks expand in the editor scroll view', () => {
-    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(block\.id[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{block\.text\}/);
-    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(item\.id[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{item\.text\}/);
+    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(block\.id, event\.nativeEvent\.contentSize\.height, lineHeight, lineHeight, 0, block\.text\)\}[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{block\.text\}/);
+    expect(editorSource).toMatch(/onContentSizeChange=\{\(event\) => measureInput\(item\.id, event\.nativeEvent\.contentSize\.height[\s\S]*?scrollEnabled=\{false\}[\s\S]*?value=\{item\.text\}/);
+    expect(editorSource).toContain('preserveExplicitLines(block.id, text, lineHeight)');
   });
 
   test('inserts local multiple images and safe asynchronous link previews at the active position', () => {

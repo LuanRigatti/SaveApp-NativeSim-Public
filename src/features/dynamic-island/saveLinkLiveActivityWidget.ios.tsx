@@ -97,7 +97,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps, environment: LiveActivit
           uiImage={iconUri}
           modifiers={[
             resizable(),
-            frame({ width: 44, height: 44 }),
+            frame({ width: 48, height: 48 }),
             clipShape('circle'),
           ]}
         />
