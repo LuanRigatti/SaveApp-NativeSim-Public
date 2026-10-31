@@ -167,6 +167,16 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(nativeBuildBlock).toContain('npx pod-install ios');
     expect(nativeBuildBlock).toContain('xcodebuild');
     expect(nativeBuildBlock).toContain('CODE_SIGNING_ALLOWED=NO');
+    expect(nativeBuildBlock).toMatch(/^\s+runs-on:\s*xcode-27\s*$/m);
+    expect(nativeBuildBlock).toContain('xcrun swift --version');
+    expect(nativeBuildBlock).toContain('xcrun --sdk iphonesimulator --show-sdk-version');
+    expect(nativeBuildBlock).toContain('saveapp-app-intents-sdk-probe.swift');
+    expect(nativeBuildBlock).toContain('static var allowedExecutionTargets: IntentExecutionTargets { .main }');
+    expect(nativeBuildBlock).toContain('-target arm64-apple-ios27.0-simulator');
+    for (const block of validationBlocks) {
+      expect(block).toMatch(/^\s+runs-on:\s*macos-26\s*$/m);
+    }
+    expect(readSource('../.github/workflows/native-sim.yml')).not.toContain('runs-on: xcode-27');
     expect(preflightWorkflow).not.toContain('continue-on-error');
 
     expect(getJobBlock('javascript-validation')).toContain('exit "$failed"');

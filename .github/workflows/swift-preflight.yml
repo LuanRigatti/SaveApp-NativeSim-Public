@@ -153,7 +153,7 @@ jobs:
 
   native-integration-build:
     name: Generate, install Pods, and compile iOS Simulator app
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 120
     needs:
       - javascript-validation
@@ -169,13 +169,55 @@ jobs:
           node-version: 22.14.0
           cache: npm
 
-      - name: Report native toolchain
+      - name: Report and verify Xcode 27 App Intents SDK
+        shell: bash
         run: |
+          set -euo pipefail
           node --version
           npm --version
-          xcodebuild -version
           ruby --version
           pod --version
+
+          XCODE_OUTPUT="$(xcodebuild -version)"
+          printf '%s\n' "$XCODE_OUTPUT"
+          XCODE_VERSION="$(printf '%s\n' "$XCODE_OUTPUT" | awk '/^Xcode / { print $2; exit }')"
+
+          SWIFT_OUTPUT="$(xcrun swift --version)"
+          printf '%s\n' "$SWIFT_OUTPUT"
+
+          IOS_SIMULATOR_SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          IOS_SIMULATOR_SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          printf 'iOS Simulator SDK version: %s\niOS Simulator SDK path: %s\n' \
+            "$IOS_SIMULATOR_SDK_VERSION" "$IOS_SIMULATOR_SDK_PATH"
+
+          case "$XCODE_VERSION" in
+            27.*) ;;
+            *) echo "::error::Expected Xcode 27, found ${XCODE_VERSION:-unknown}"; exit 1 ;;
+          esac
+          case "$IOS_SIMULATOR_SDK_VERSION" in
+            27.*) ;;
+            *) echo "::error::Expected iOS Simulator SDK 27, found ${IOS_SIMULATOR_SDK_VERSION:-unknown}"; exit 1 ;;
+          esac
+
+          cat > "$RUNNER_TEMP/saveapp-app-intents-sdk-probe.swift" <<'SWIFT'
+          import AppIntents
+
+          @available(iOS 27.0, *)
+          private struct SaveAppExecutionTargetSDKProbe: AppIntent {
+            static var title: LocalizedStringResource = "SaveApp SDK probe"
+            static var allowedExecutionTargets: IntentExecutionTargets { .main }
+
+            func perform() async throws -> some IntentResult {
+              .result()
+            }
+          }
+          SWIFT
+
+          xcrun --sdk iphonesimulator swiftc \
+            -typecheck \
+            -sdk "$IOS_SIMULATOR_SDK_PATH" \
+            -target arm64-apple-ios27.0-simulator \
+            "$RUNNER_TEMP/saveapp-app-intents-sdk-probe.swift"
 
       - name: Install JavaScript dependencies
         run: npm ci

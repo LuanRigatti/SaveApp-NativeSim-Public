@@ -1162,6 +1162,16 @@ try {
   Assert-True ($launcherMirrorIndex -ge 0 -and $launcherMirrorFailureIndex -gt $launcherMirrorIndex -and
     $launcherPreflightIndex -gt $launcherMirrorFailureIndex -and $launcherNativeStartIndex -gt $launcherPreflightIndex) 'a failed local snapshot/mirror gate stops before Swift Preflight dispatch or NativeSim launch'
   $preflightWorkflow = Get-Content -LiteralPath (Join-Path $repositoryRoot '.github\workflows\swift-preflight.yml') -Raw
+  $nativePreflightJobMatch = [regex]::Match($preflightWorkflow,'(?ms)^  native-integration-build:\s+(?<job>.*?)(?=^  [a-z][a-z0-9-]*:\s*$|\z)')
+  $nativePreflightJob = if ($nativePreflightJobMatch.Success) { $nativePreflightJobMatch.Groups['job'].Value } else { '' }
+  Assert-True ($nativePreflightJobMatch.Success -and
+    $nativePreflightJob -match '(?m)^\s+runs-on:\s*xcode-27\s*$' -and
+    $nativePreflightJob.Contains('xcodebuild -version') -and
+    $nativePreflightJob.Contains('xcrun swift --version') -and
+    $nativePreflightJob.Contains('xcrun --sdk iphonesimulator --show-sdk-version') -and
+    $nativePreflightJob.Contains('static var allowedExecutionTargets: IntentExecutionTargets { .main }') -and
+    $nativePreflightJob.Contains('-target arm64-apple-ios27.0-simulator') -and
+    $preflightWorkflow.Contains('runs-on: macos-26')) 'only the Swift Preflight native integration job requires Xcode/iOS SDK 27 and compile-checks the App Intents execution-target API'
   Assert-True ($launcher.Contains('Invoke-SaveAppSwiftPreflightGate') -and $launcher.Contains('-SkipPreflight:$SkipSwiftPreflight') -and
     $launcher.Contains('-ExpectedSha $mirrorSha') -and $preflight.Contains('$live.Split()[0] -ne $sha')) 'the default launcher path requires a successful Swift Preflight for the exact public mirror SHA, with only an explicit switch to skip it'
   $nativeVerificationIndex = $preflightWorkflow.IndexOf('node scripts/verify-saveapp-native.js',[StringComparison]::Ordinal)
