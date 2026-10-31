@@ -477,7 +477,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(clipboardNative).toContain('static func setRecentHistoryVisible(_ visible: Bool) -> Bool');
   });
 
-  test('returns after durable Quick Save and serializes best-effort ActivityKit updates without holding the file lock', () => {
+  test('waits for the first ActivityKit submission after durable Quick Save without holding the file lock', () => {
     const queueWrite = quickSaveIntent.indexOf('SaveAppQuickSaveQueue.enqueue(normalized)');
     const processingUpdate = quickSaveIntent.indexOf('statuses: [.processing, .queued]');
     const historyRead = quickSaveIntent.indexOf('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
@@ -497,10 +497,12 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(historyRead).toBeGreaterThan(processingUpdate);
     expect(activityAwait).toBeGreaterThan(historyRead);
     expect(performSerially).not.toContain('await updateActivity(');
-    expect(performSerially).toContain('enqueueActivityStatusSequence(');
+    expect(performSerially).toContain('await enqueueActivityStatusSequence(');
+    expect(performSerially).not.toMatch(/(?<!await )enqueueActivityStatusSequence\(/);
     expect(performSerially).toContain('guard lockScreenHistoryUpdated else {');
     expect(quickSaveIntent).toContain('pendingActivityUpdates[activityID] = update');
     expect(quickSaveIntent).toContain('await previous?.value');
+    expect(quickSaveIntent).toContain('await update.value');
     expect(quickSaveIntent).toContain('requiresCurrentGeneration: true');
     expect(historyReader).toContain('withExclusiveFileLock(in: directory)');
     expect(historyReader).not.toContain('await');
@@ -513,6 +515,63 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveQueueSwift).toContain('fileLockTimeoutNanoseconds');
     expect(clipboardNative).toContain('LOCK_EX | LOCK_NB');
     expect(clipboardNative).toContain('fileLockTimeoutNanoseconds');
+  });
+
+  test('cleans serialized Activity update tasks only through actor-isolated current-ticket cleanup', () => {
+    const enqueueStart = quickSaveIntent.indexOf('private func enqueueActivityStatusSequence(');
+    const cleanupStart = quickSaveIntent.indexOf('private func clearActivityStatusSequenceIfCurrent(', enqueueStart);
+    const submitStart = quickSaveIntent.indexOf('private func submitActivityStatusSequence(', cleanupStart);
+    const enqueue = quickSaveIntent.slice(enqueueStart, cleanupStart);
+    const cleanup = quickSaveIntent.slice(cleanupStart, submitStart);
+    const taskBody = enqueue.slice(enqueue.indexOf('let update = Task'), enqueue.indexOf('pendingActivityUpdates[activityID] = update'));
+
+    expect(enqueue).toMatch(/private func enqueueActivityStatusSequence\([\s\S]*?\) async \{/);
+    expect(enqueue).toContain('await previous?.value');
+    expect(enqueue).toContain('await self.submitActivityStatusSequence(');
+    expect(taskBody).toContain('await self.clearActivityStatusSequenceIfCurrent(activityID: activityID, ticket: ticket)');
+    expect(taskBody).not.toMatch(/pendingActivityUpdate(?:Tickets|s)\[/);
+    expect(cleanup).toMatch(/private func clearActivityStatusSequenceIfCurrent\(activityID: String, ticket: UUID\)/);
+    expect(cleanup.indexOf('guard pendingActivityUpdateTickets[activityID] == ticket else { return }'))
+      .toBeLessThan(cleanup.indexOf('pendingActivityUpdates.removeValue(forKey: activityID)'));
+    expect(cleanup).toContain('pendingActivityUpdateTickets.removeValue(forKey: activityID)');
+    expect(cleanup).not.toContain('nonisolated');
+    expect(cleanup).not.toContain('unsafe');
+  });
+
+  test('awaits the intent-owned Activity update while keeping ready restoration separate and generation-guarded', () => {
+    const performStart = quickSaveIntent.indexOf('func perform() async throws');
+    const coordinatorStart = quickSaveIntent.indexOf('await SaveLinkQuickSaveCoordinator.shared.perform(', performStart);
+    const performEnd = quickSaveIntent.indexOf('\n}\n\nprivate enum SaveLinkQuickSaveStatus', performStart);
+    const perform = quickSaveIntent.slice(performStart, performEnd);
+    const submitStart = quickSaveIntent.indexOf('private func submitActivityStatusSequence(');
+    const updateActivityStart = quickSaveIntent.indexOf('private func updateActivity(', submitStart);
+    const submit = quickSaveIntent.slice(submitStart, updateActivityStart);
+    const failedSubmissionGuard = submit.indexOf('guard submitted else {');
+    const readyDelay = submit.indexOf('try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
+    const activityUpdateStart = quickSaveIntent.indexOf('private func updateActivity(');
+    const clipboardReaderStart = quickSaveIntent.indexOf('@MainActor\n  private func readClipboardAfterExplicitAction', activityUpdateStart);
+    const activityUpdate = quickSaveIntent.slice(activityUpdateStart, clipboardReaderStart);
+    const enqueueStart = quickSaveIntent.indexOf('private func enqueueActivityStatusSequence(');
+    const cleanupStart = quickSaveIntent.indexOf('private func clearActivityStatusSequenceIfCurrent(', enqueueStart);
+    const enqueue = quickSaveIntent.slice(enqueueStart, cleanupStart);
+    const readyStart = quickSaveIntent.indexOf('private func enqueueReadyRestoreIfCurrent(');
+    const readyEnd = quickSaveIntent.indexOf('private func updateActivity(', readyStart);
+    const readyRestore = quickSaveIntent.slice(readyStart, readyEnd);
+
+    expect(coordinatorStart).toBeGreaterThan(performStart);
+    expect(perform.indexOf('await SaveLinkQuickSaveCoordinator.shared.perform('))
+      .toBeLessThan(perform.lastIndexOf('return .result()'));
+    expect(enqueue.indexOf('pendingActivityUpdateTickets[activityID] = ticket'))
+      .toBeLessThan(enqueue.indexOf('await update.value'));
+    expect(submit.indexOf('let submitted = await updateActivity(')).toBeLessThan(failedSubmissionGuard);
+    expect(failedSubmissionGuard).toBeGreaterThanOrEqual(0);
+    expect(readyDelay).toBeGreaterThan(failedSubmissionGuard);
+    expect(submit.slice(failedSubmissionGuard, readyDelay)).toContain('return');
+    expect(activityUpdate).toContain('await activity.update(ActivityContent(state: state, staleDate: nil))');
+    expect(readyRestore).toContain('requestGenerationByActivity[activityID] == generation');
+    expect(readyRestore).toContain('await enqueueActivityStatusSequence(');
+    expect(readyRestore).toContain('statuses: [.ready]');
+    expect(quickSaveIntent).toContain('delivery_confirmation=unavailable');
   });
 
   test('uses persistent App Group metadata only to suppress the same automatic clipboard offer', () => {

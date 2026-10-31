@@ -102,7 +102,7 @@ private actor SaveLinkQuickSaveCoordinator {
       clipboard = input
     case .empty:
       SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=clipboard_empty operation=\(operationID, privacy: .public)")
-      enqueueActivityStatusSequence(
+      await enqueueActivityStatusSequence(
         activityID: activityID,
         statuses: [.invalid],
         generation: generation,
@@ -113,7 +113,7 @@ private actor SaveLinkQuickSaveCoordinator {
       // The system may deny or defer pasteboard access. Keep this distinct from
       // an invalid URL so the UI offers a truthful retry state.
       SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=clipboard_read reason=unavailable operation=\(operationID, privacy: .public)")
-      enqueueActivityStatusSequence(
+      await enqueueActivityStatusSequence(
         activityID: activityID,
         statuses: [.failed],
         generation: generation,
@@ -125,7 +125,7 @@ private actor SaveLinkQuickSaveCoordinator {
     guard let normalized = SaveLinkQuickSaveSQLite.normalize(clipboard.value) else {
       SaveAppQuickSaveLog.logger.notice("event=clipboard.validation.result=invalid operation=\(operationID, privacy: .public)")
       SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=url_invalid operation=\(operationID, privacy: .public)")
-      enqueueActivityStatusSequence(
+      await enqueueActivityStatusSequence(
         activityID: activityID,
         statuses: [.invalid],
         generation: generation,
@@ -146,8 +146,8 @@ private actor SaveLinkQuickSaveCoordinator {
           return
         }
         // The queue and recent-link summary are durable before ActivityKit is
-        // scheduled. The App Intent returns without waiting for renderer delivery.
-        enqueueActivityStatusSequence(
+        // awaited. The intent waits for the local update attempt, not rendering.
+        await enqueueActivityStatusSequence(
           activityID: activityID,
           statuses: [.processing, .queued],
           generation: generation,
@@ -160,7 +160,7 @@ private actor SaveLinkQuickSaveCoordinator {
           SaveAppQuickSaveLog.logger.error("event=quick_save.operation.visual_update_unavailable reason=history_write_failed operation=\(operationID, privacy: .public)")
           return
         }
-        enqueueActivityStatusSequence(
+        await enqueueActivityStatusSequence(
           activityID: activityID,
           statuses: [.processing, .alreadyQueued],
           generation: generation,
@@ -169,7 +169,7 @@ private actor SaveLinkQuickSaveCoordinator {
       }
     } catch let error as QuickSaveQueueFailure {
       SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=queue reason=\(error.diagnosticCode, privacy: .public) operation=\(operationID, privacy: .public)")
-      enqueueActivityStatusSequence(
+      await enqueueActivityStatusSequence(
         activityID: activityID,
         statuses: [.failed],
         generation: generation,
@@ -177,7 +177,7 @@ private actor SaveLinkQuickSaveCoordinator {
       )
     } catch {
       SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=queue_unexpected operation=\(operationID, privacy: .public)")
-      enqueueActivityStatusSequence(
+      await enqueueActivityStatusSequence(
         activityID: activityID,
         statuses: [.failed],
         generation: generation,
@@ -192,7 +192,7 @@ private actor SaveLinkQuickSaveCoordinator {
     generation: UInt64,
     operationID: String,
     requiresCurrentGeneration: Bool = false
-  ) {
+  ) async {
     let previous = pendingActivityUpdates[activityID]
     let ticket = UUID()
     let update = Task { [weak self] in
@@ -205,13 +205,17 @@ private actor SaveLinkQuickSaveCoordinator {
         requiresCurrentGeneration: requiresCurrentGeneration,
         operationID: operationID
       )
-      if self.pendingActivityUpdateTickets[activityID] == ticket {
-        self.pendingActivityUpdates.removeValue(forKey: activityID)
-        self.pendingActivityUpdateTickets.removeValue(forKey: activityID)
-      }
+      await self.clearActivityStatusSequenceIfCurrent(activityID: activityID, ticket: ticket)
     }
     pendingActivityUpdates[activityID] = update
     pendingActivityUpdateTickets[activityID] = ticket
+    await update.value
+  }
+
+  private func clearActivityStatusSequenceIfCurrent(activityID: String, ticket: UUID) {
+    guard pendingActivityUpdateTickets[activityID] == ticket else { return }
+    pendingActivityUpdates.removeValue(forKey: activityID)
+    pendingActivityUpdateTickets.removeValue(forKey: activityID)
   }
 
   private func submitActivityStatusSequence(
@@ -258,13 +262,13 @@ private actor SaveLinkQuickSaveCoordinator {
     }
   }
 
-  private func enqueueReadyRestoreIfCurrent(activityID: String, generation: UInt64, operationID: String) {
+  private func enqueueReadyRestoreIfCurrent(activityID: String, generation: UInt64, operationID: String) async {
     guard requestGenerationByActivity[activityID] == generation else {
       SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.skipped reason=newer_operation operation=\(operationID, privacy: .public)")
       return
     }
     SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.started operation=\(operationID, privacy: .public)")
-    enqueueActivityStatusSequence(
+    await enqueueActivityStatusSequence(
       activityID: activityID,
       statuses: [.ready],
       generation: generation,
