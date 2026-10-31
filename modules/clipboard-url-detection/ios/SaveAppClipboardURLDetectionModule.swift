@@ -52,9 +52,42 @@ private enum SaveAppQuickSaveLockScreenFaviconStore {
   private static let historyFileName = "QuickSaveLockScreenRecentLinks.json"
   private static let visibleKey = "saveapp.dynamic-island.lock-screen-recents-visible-v1"
   private static let maximumHistoryBytes = 4 * 1_024
+  private static let maximumHistoryRevision: Int64 = 9_007_199_254_740_991
   private static let maximumSourceBytes = 256 * 1_024
   private static let maximumFaviconBytes = 64 * 1_024
+  private static let fileLockTimeoutNanoseconds: UInt64 = 1_000_000_000
+  private static let fileLockRetryInterval: TimeInterval = 0.01
   private static let fileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
+
+  static func setRecentHistoryVisible(_ visible: Bool) -> Bool {
+    guard let container = FileManager.default.containerURL(
+      forSecurityApplicationGroupIdentifier: appGroupIdentifier
+    ) else { return false }
+    let directory = container.appendingPathComponent(historyDirectoryName, isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true,
+        attributes: [.protectionKey: fileProtection]
+      )
+      try FileManager.default.setAttributes([.protectionKey: fileProtection], ofItemAtPath: directory.path)
+    } catch { return false }
+
+    let lockURL = directory.appendingPathComponent(".queue.lock", isDirectory: false)
+    let descriptor = open(lockURL.path, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
+    guard descriptor >= 0 else { return false }
+    defer { _ = close(descriptor) }
+    do {
+      try FileManager.default.setAttributes([.protectionKey: fileProtection], ofItemAtPath: lockURL.path)
+      try acquireFileLock(descriptor)
+    } catch { return false }
+    defer { _ = flock(descriptor, LOCK_UN) }
+
+    guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return false }
+    defaults.set(visible, forKey: visibleKey)
+    _ = defaults.synchronize()
+    return defaults.bool(forKey: visibleKey) == visible
+  }
 
   static func associateContent(id: String, contentId: Int) -> Bool {
     guard isDigest(id), contentId > 0 else { return false }
@@ -138,14 +171,27 @@ private enum SaveAppQuickSaveLockScreenFaviconStore {
     do {
       try FileManager.default.setAttributes([.protectionKey: fileProtection], ofItemAtPath: lockURL.path)
     } catch { return false }
-    while flock(descriptor, LOCK_EX) != 0 {
-      if errno == EINTR { continue }
-      return false
-    }
+    do { try acquireFileLock(descriptor) } catch { return false }
     defer { _ = flock(descriptor, LOCK_UN) }
 
     guard var links = readHistory(in: directory), update(directory, &links) else { return false }
     return true
+  }
+
+  private static func acquireFileLock(_ descriptor: Int32) throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds &+ fileLockTimeoutNanoseconds
+    while true {
+      if flock(descriptor, LOCK_EX | LOCK_NB) == 0 { return }
+      let code = errno
+      if code == EINTR { continue }
+      guard code == EWOULDBLOCK || code == EAGAIN else {
+        throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+      }
+      guard DispatchTime.now().uptimeNanoseconds < deadline else {
+        throw POSIXError(.ETIMEDOUT)
+      }
+      Thread.sleep(forTimeInterval: fileLockRetryInterval)
+    }
   }
 
   private static func readHistory(in directory: URL) -> [[String: Any]]? {
@@ -157,7 +203,12 @@ private enum SaveAppQuickSaveLockScreenFaviconStore {
           size <= maximumHistoryBytes,
           let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          (root["formatVersion"] as? Int) == 1,
+          let formatVersion = root["formatVersion"] as? Int,
+          (formatVersion == 1 || formatVersion == 2) else { return nil }
+    let revision: Int64 = formatVersion == 1 ? 0 : (root["revision"] as? Int64 ?? -1)
+    guard revision >= 0,
+          revision <= maximumHistoryRevision,
+          (formatVersion == 1 || revision > 0),
           let links = root["links"] as? [[String: Any]],
           (1...3).contains(links.count),
           links.allSatisfy(isValidHistoryLink),
@@ -191,12 +242,16 @@ private enum SaveAppQuickSaveLockScreenFaviconStore {
   }
 
   private static func writeHistory(directory: URL, links: [[String: Any]]) -> Bool {
-    let root: [String: Any] = ["formatVersion": 1, "links": links]
+    guard let currentRevision = readHistoryRevision(in: directory) else { return false }
+    let (revision, overflow) = currentRevision.addingReportingOverflow(1)
+    guard !overflow, revision > 0, revision <= maximumHistoryRevision else { return false }
+    let root: [String: Any] = ["formatVersion": 2, "revision": revision, "links": links]
     guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]),
           data.count <= maximumHistoryBytes else { return false }
     let destination = directory.appendingPathComponent(historyFileName, isDirectory: false)
     guard atomicWrite(data, to: destination, in: directory),
-          let verified = readHistory(in: directory) else { return false }
+          let verified = readHistory(in: directory),
+          readHistoryRevision(in: directory) == revision else { return false }
     let matches = verified.count == links.count && zip(verified, links).allSatisfy { pair in
       let (current, expected) = pair
       return current["id"] as? String == expected["id"] as? String &&
@@ -207,6 +262,20 @@ private enum SaveAppQuickSaveLockScreenFaviconStore {
     }
     if matches { pruneAbandonedHistoryTemporaries(in: directory) }
     return matches
+  }
+
+  private static func readHistoryRevision(in directory: URL) -> Int64? {
+    let url = directory.appendingPathComponent(historyFileName, isDirectory: false)
+    guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+    guard readHistory(in: directory) != nil,
+          let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let version = root["formatVersion"] as? Int else { return nil }
+    if version == 1 { return 0 }
+    guard version == 2,
+          let revision = root["revision"] as? Int64,
+          revision > 0 else { return nil }
+    return revision
   }
 
   private static func atomicWrite(_ data: Data, to destination: URL, in directory: URL) -> Bool {
@@ -360,9 +429,7 @@ public final class SaveAppClipboardURLDetectionModule: Module {
     }
 
     Function("setQuickSaveLockScreenRecentLinksVisible") { (visible: Bool) -> Bool in
-      guard let defaults = UserDefaults(suiteName: self.quickSaveMarkerAppGroup) else { return false }
-      defaults.set(visible, forKey: self.lockScreenRecentLinksVisibleKey)
-      return defaults.bool(forKey: self.lockScreenRecentLinksVisibleKey) == visible
+      SaveAppQuickSaveLockScreenFaviconStore.setRecentHistoryVisible(visible)
     }
 
     Function("associateQuickSaveLockScreenContent") { (id: String, savedContentId: Int) -> Bool in

@@ -259,7 +259,7 @@ class SaveAppQuickSaveXcodeprojContractTest < Minitest::Test
     package_root = File.join(root, 'node_modules', 'expo-widgets')
     renderer_path = File.join(package_root, 'ios', 'Widgets', 'Buttons.swift')
     FileUtils.mkdir_p(File.dirname(renderer_path))
-    File.write(File.join(package_root, 'package.json'), JSON.generate({ version: '58.0.25' }))
+    File.write(File.join(package_root, 'package.json'), JSON.generate({ version: '58.0.26' }))
     File.write(renderer_path, "// installed ExpoWidgets renderer fixture\n")
 
     source_paths = QUICK_SAVE_SOURCE_NAMES.map do |name|

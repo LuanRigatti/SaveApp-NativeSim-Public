@@ -14,7 +14,7 @@ struct QuickSaveQueueRecord: Codable, Equatable {
   let domain: String
 }
 
-struct QuickSaveLockScreenRecentLink: Codable, Equatable {
+struct QuickSaveLockScreenRecentLink: Codable, Equatable, Sendable {
   let id: String
   let domain: String
   let createdAt: Int64
@@ -24,16 +24,62 @@ struct QuickSaveLockScreenRecentLink: Codable, Equatable {
 
 private struct QuickSaveLockScreenRecentLinksFile: Codable, Equatable {
   let formatVersion: Int
+  let revision: Int64
   var links: [QuickSaveLockScreenRecentLink]
+
+  private enum CodingKeys: String, CodingKey {
+    case formatVersion
+    case revision
+    case links
+  }
+
+  init(formatVersion: Int, revision: Int64, links: [QuickSaveLockScreenRecentLink]) {
+    self.formatVersion = formatVersion
+    self.revision = revision
+    self.links = links
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    formatVersion = try container.decode(Int.self, forKey: .formatVersion)
+    // Version 1 summaries predate revisions and remain readable as revision 0.
+    revision = try container.decodeIfPresent(Int64.self, forKey: .revision) ?? 0
+    links = try container.decode([QuickSaveLockScreenRecentLink].self, forKey: .links)
+  }
+}
+
+struct QuickSaveLockScreenRecentLinksSnapshot: Sendable {
+  let revision: Int64
+  let links: [QuickSaveLockScreenRecentLink]
+
+  func activityProps() -> [[String: Any]] {
+    links.map { link in
+      var result: [String: Any] = [
+        "domain": link.domain,
+        "createdAt": link.createdAt,
+      ]
+      if let fileName = link.faviconFileName,
+         let uri = SaveAppQuickSaveQueue.validFaviconURLForActivity(fileName: fileName, id: link.id) {
+        result["faviconUri"] = uri.absoluteString
+      }
+      return result
+    }
+  }
+}
+
+struct QuickSaveLockScreenActivityHistory: Sendable {
+  let snapshot: QuickSaveLockScreenRecentLinksSnapshot?
+  let showRecentLinks: Bool
 }
 
 enum QuickSaveQueueWriteResult {
-  case enqueued
-  case alreadyQueued
+  case enqueued(lockScreenHistoryUpdated: Bool)
+  case alreadyQueued(lockScreenHistoryUpdated: Bool)
 }
 
 enum QuickSaveQueueFailure: Error {
   case unavailable
+  case lockTimeout
   case invalidRecord
   case capacityExceeded
   case io(Int32)
@@ -41,6 +87,7 @@ enum QuickSaveQueueFailure: Error {
   var diagnosticCode: String {
     switch self {
     case .unavailable: return "app_group_unavailable"
+    case .lockTimeout: return "app_group_lock_timeout"
     case .invalidRecord: return "record_invalid"
     case .capacityExceeded: return "capacity_exceeded"
     case .io(let code): return "io_\(code)"
@@ -55,13 +102,16 @@ enum SaveAppQuickSaveQueue {
   static let maximumPendingRecords = 1_000
   static let maximumRecordBytes = 16 * 1_024
   static let lockScreenRecentLinksFileName = "QuickSaveLockScreenRecentLinks.json"
-  static let lockScreenRecentLinksVersion = 1
+  static let lockScreenRecentLinksVersion = 2
+  private static let maximumLockScreenHistoryRevision: Int64 = 9_007_199_254_740_991
   static let maximumLockScreenRecentLinks = 3
   static let lockScreenFaviconDirectoryName = "Favicons"
   static let maximumLockScreenFaviconBytes = 64 * 1_024
   static let lockScreenRecentLinksVisibleKey = "saveapp.dynamic-island.lock-screen-recents-visible-v1"
   static let quickSaveActivityStatusKey = "saveapp.dynamic-island.quick-save-status-v1"
   private static let maximumLockScreenRecentLinksBytes = 4 * 1_024
+  private static let fileLockTimeoutNanoseconds: UInt64 = 1_000_000_000
+  private static let fileLockRetryInterval: TimeInterval = 0.01
   private static let logger = Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.queue")
   private static let fileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
 
@@ -104,9 +154,9 @@ enum SaveAppQuickSaveQueue {
           logger.error("event=quick_save.queue.write_failed reason=existing_record_invalid")
           throw QuickSaveQueueFailure.invalidRecord
         }
-        updateLockScreenRecentLinksBestEffort(existing, in: directory)
+        let historyUpdated = updateLockScreenRecentLinksBestEffort(existing, in: directory)
         logger.notice("event=quick_save.queue.duplicate")
-        return .alreadyQueued
+        return .alreadyQueued(lockScreenHistoryUpdated: historyUpdated)
       }
 
       let pendingCount = try FileManager.default.contentsOfDirectory(
@@ -141,9 +191,9 @@ enum SaveAppQuickSaveQueue {
         throw QuickSaveQueueFailure.io(EIO)
       }
 
-      updateLockScreenRecentLinksBestEffort(record, in: directory)
+      let historyUpdated = updateLockScreenRecentLinksBestEffort(record, in: directory)
       logger.notice("event=quick_save.queue.write_confirmed")
-      return .enqueued
+      return .enqueued(lockScreenHistoryUpdated: historyUpdated)
     }
   }
 
@@ -163,23 +213,52 @@ enum SaveAppQuickSaveQueue {
     }
   }
 
-  static func lockScreenRecentLinkActivityProps() -> [[String: Any]] {
-    lockScreenRecentLinks().map { link in
-      var result: [String: Any] = ["domain": link.domain, "createdAt": link.createdAt]
-      if let fileName = link.faviconFileName,
-         let uri = validFaviconURL(fileName: fileName, id: link.id) {
-        result["faviconUri"] = uri.absoluteString
+  /// Reads the revision and privacy preference atomically. The shared file lock
+  /// is released before callers submit any asynchronous ActivityKit update.
+  static func lockScreenHistoryForActivityUpdate() -> QuickSaveLockScreenActivityHistory? {
+    guard let sharedContainer = FileManager.default.containerURL(
+      forSecurityApplicationGroupIdentifier: appGroupIdentifier
+    ) else { return nil }
+    let directory = sharedContainer.appendingPathComponent(directoryName, isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try FileManager.default.setAttributes([.protectionKey: fileProtection], ofItemAtPath: directory.path)
+      return try withExclusiveFileLock(in: directory) {
+        let historyURL = directory.appendingPathComponent(lockScreenRecentLinksFileName, isDirectory: false)
+        let snapshot: QuickSaveLockScreenRecentLinksSnapshot?
+        if FileManager.default.fileExists(atPath: historyURL.path) {
+          snapshot = readLockScreenRecentLinks(in: directory).map {
+            QuickSaveLockScreenRecentLinksSnapshot(revision: $0.revision, links: $0.links)
+          }
+        } else {
+          snapshot = QuickSaveLockScreenRecentLinksSnapshot(revision: 0, links: [])
+        }
+        let showRecentLinks = UserDefaults(suiteName: appGroupIdentifier)?
+          .bool(forKey: lockScreenRecentLinksVisibleKey) ?? false
+        return QuickSaveLockScreenActivityHistory(snapshot: snapshot, showRecentLinks: showRecentLinks)
       }
-      return result
+    } catch {
+      logger.notice("event=quick_save.lock_screen_history.activity_read_failed")
+      return nil
     }
   }
 
   private static func updateLockScreenRecentLinksBestEffort(
     _ record: QuickSaveQueueRecord,
     in directory: URL
-  ) {
+  ) -> Bool {
     do {
-      var links = readLockScreenRecentLinks(in: directory)?.links ?? []
+      let historyURL = directory.appendingPathComponent(lockScreenRecentLinksFileName, isDirectory: false)
+      let previousFile: QuickSaveLockScreenRecentLinksFile?
+      if FileManager.default.fileExists(atPath: historyURL.path) {
+        guard let existing = readLockScreenRecentLinks(in: directory) else {
+          throw QuickSaveQueueFailure.invalidRecord
+        }
+        previousFile = existing
+      } else {
+        previousFile = nil
+      }
+      var links = previousFile?.links ?? []
       let id = String(queueFileName(for: record.normalizedURL).dropLast(".json".count))
       let previous = links.first(where: { $0.id == id })
       let entry = QuickSaveLockScreenRecentLink(
@@ -195,8 +274,13 @@ enum SaveAppQuickSaveQueue {
         if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
         return $0.id < $1.id
       }
+      let (revision, overflow) = (previousFile?.revision ?? 0).addingReportingOverflow(1)
+      guard !overflow, revision > 0, revision <= maximumLockScreenHistoryRevision else {
+        throw QuickSaveQueueFailure.invalidRecord
+      }
       let file = QuickSaveLockScreenRecentLinksFile(
         formatVersion: lockScreenRecentLinksVersion,
+        revision: revision,
         links: Array(links.prefix(maximumLockScreenRecentLinks))
       )
       let encoder = JSONEncoder()
@@ -212,10 +296,12 @@ enum SaveAppQuickSaveQueue {
       }
       pruneObsoleteFavicons(in: directory, referencedNames: Set(file.links.compactMap(\.faviconFileName)))
       logger.notice("event=quick_save.lock_screen_history.write_confirmed count=\(file.links.count, privacy: .public)")
+      return true
     } catch {
       // The durable queue record is authoritative. A summary failure must never turn a
       // confirmed Quick Save into a failed save or remove it from the import queue.
       logger.notice("event=quick_save.lock_screen_history.write_failed")
+      return false
     }
   }
 
@@ -228,7 +314,10 @@ enum SaveAppQuickSaveQueue {
           size <= maximumLockScreenRecentLinksBytes,
           let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
           let decoded = try? JSONDecoder().decode(QuickSaveLockScreenRecentLinksFile.self, from: data),
-          decoded.formatVersion == lockScreenRecentLinksVersion,
+          (decoded.formatVersion == 1 || decoded.formatVersion == lockScreenRecentLinksVersion),
+          decoded.revision >= 0,
+          decoded.revision <= maximumLockScreenHistoryRevision,
+          (decoded.formatVersion == 1 ? decoded.revision == 0 : decoded.revision > 0),
           decoded.links.count <= maximumLockScreenRecentLinks,
           decoded.links.allSatisfy(isValidLockScreenRecentLink),
           Set(decoded.links.map(\.id)).count == decoded.links.count,
@@ -281,6 +370,10 @@ enum SaveAppQuickSaveQueue {
     return url
   }
 
+  fileprivate static func validFaviconURLForActivity(fileName: String, id: String) -> URL? {
+    validFaviconURL(fileName: fileName, id: id)
+  }
+
   private static func pruneObsoleteFavicons(in directory: URL, referencedNames: Set<String>) {
     let faviconDirectory = directory.appendingPathComponent(lockScreenFaviconDirectoryName, isDirectory: true)
     guard let children = try? FileManager.default.contentsOfDirectory(
@@ -318,12 +411,25 @@ enum SaveAppQuickSaveQueue {
       throw QuickSaveQueueFailure.unavailable
     }
 
-    while flock(descriptor, LOCK_EX) != 0 {
-      if errno == EINTR { continue }
-      throw QuickSaveQueueFailure.io(errno)
-    }
+    try acquireFileLock(descriptor)
     defer { _ = flock(descriptor, LOCK_UN) }
     return try body()
+  }
+
+  private static func acquireFileLock(_ descriptor: Int32) throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds &+ fileLockTimeoutNanoseconds
+    while true {
+      if flock(descriptor, LOCK_EX | LOCK_NB) == 0 { return }
+      let code = errno
+      if code == EINTR { continue }
+      guard code == EWOULDBLOCK || code == EAGAIN else {
+        throw QuickSaveQueueFailure.io(code)
+      }
+      guard DispatchTime.now().uptimeNanoseconds < deadline else {
+        throw QuickSaveQueueFailure.lockTimeout
+      }
+      Thread.sleep(forTimeInterval: fileLockRetryInterval)
+    }
   }
 
   private static func writeAtomically(_ data: Data, to destination: URL, in directory: URL) throws {

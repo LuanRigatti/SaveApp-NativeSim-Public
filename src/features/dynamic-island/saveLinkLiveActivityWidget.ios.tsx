@@ -5,6 +5,7 @@ import {
   foregroundStyle,
   frame,
   lineLimit,
+  monospacedDigit,
   multilineTextAlignment,
   padding,
   resizable,
@@ -18,6 +19,7 @@ type SaveLinkActivityProps = {
   expandedHomeUrl: string;
   quickSaveStatus?: 'ready' | 'processing' | 'queued' | 'alreadyQueued' | 'alreadySaved' | 'invalid' | 'failed';
   showRecentQuickSaveLinks?: boolean;
+  recentQuickSaveLinksRevision?: number;
   recentQuickSaveLinks?: { domain: string; createdAt: number; faviconUri?: string }[];
 };
 
@@ -93,28 +95,51 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
             <Divider modifiers={[foregroundStyle({ type: 'hierarchical', style: 'tertiary' })]} />
             <VStack alignment="leading" spacing={3}>
               {recentQuickSaveLinks.map((link) => (
-                <HStack key={`${link.domain}-${link.createdAt}`} alignment="center" spacing={10}>
+                <HStack
+                  key={`${link.domain}-${link.createdAt}`}
+                  alignment="center"
+                  spacing={10}
+                  modifiers={[frame({ maxWidth: Infinity })]}
+                >
                   {link.faviconUri ? (
                     <Image
                       uiImage={link.faviconUri}
-                      modifiers={[resizable(), frame({ width: 18, height: 18 }), clipShape('roundedRectangle', 4)]}
+                      modifiers={[
+                        resizable(),
+                        frame({ width: 18, height: 18 }),
+                        clipShape('roundedRectangle', 4),
+                        frame({ width: 24, height: 24, alignment: 'center' }),
+                      ]}
                     />
                   ) : (
                     <Image
                       systemName="globe"
                       size={18}
-                      modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}
+                      modifiers={[
+                        foregroundStyle({ type: 'hierarchical', style: 'secondary' }),
+                        frame({ width: 24, height: 24, alignment: 'center' }),
+                      ]}
                     />
                   )}
-                  <Text modifiers={[font({ textStyle: 'subheadline' }), lineLimit(1)]}>{link.domain}</Text>
+                  <Text
+                    modifiers={[
+                      font({ textStyle: 'subheadline' }),
+                      lineLimit(1),
+                      frame({ maxWidth: Infinity, alignment: 'leading' }),
+                    ]}
+                  >
+                    {link.domain}
+                  </Text>
                   <Spacer minLength={6} />
                   <Text
                     date={new Date(link.createdAt)}
-                    dateStyle="relative"
+                    dateStyle="time"
                     modifiers={[
                       font({ textStyle: 'caption' }),
                       foregroundStyle({ type: 'hierarchical', style: 'secondary' }),
                       lineLimit(1),
+                      monospacedDigit(),
+                      frame({ minWidth: 56, alignment: 'trailing' }),
                     ]}
                   />
                 </HStack>

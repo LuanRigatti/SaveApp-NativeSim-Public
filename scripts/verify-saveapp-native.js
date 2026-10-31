@@ -15,23 +15,28 @@ const prohibitedDependencies = [
 ];
 
 const expectedVersions = {
-  '@expo/ui': '~58.0.25',
-  expo: '~58.0.21',
+  '@expo/metro-runtime': '~58.0.16',
+  '@expo/ui': '~58.0.26',
+  expo: '~58.0.22',
+  'expo-blur': '~58.0.5',
   'expo-asset': '~58.0.19',
   'expo-constants': '~58.0.14',
   'expo-crypto': '~58.0.7',
-  'expo-dev-client': '~58.0.17',
+  'expo-dev-client': '~58.0.18',
   'expo-file-system': '~58.0.13',
   'expo-font': '~58.0.11',
+  'expo-haptics': '~58.0.7',
   'expo-image': '~58.0.18',
   'expo-image-manipulator': '~58.0.16',
   'expo-linking': '~58.0.15',
   'expo-media-library': '~58.0.13',
-  'expo-router': '~58.0.28',
+  'expo-router': '~58.0.29',
+  'expo-sqlite': '~58.0.15',
   'expo-splash-screen': '~58.0.12',
+  'expo-status-bar': '~58.0.4',
   'expo-video': '~58.0.13',
-  'expo-widgets': '~58.0.25',
-  'react-native-screens': '4.30.0',
+  'expo-widgets': '~58.0.26',
+  'react-native-screens': '~4.30.1',
   'react-native': '0.88.1',
   'jest-expo': '~58.0.13',
 };
@@ -61,9 +66,10 @@ if (pkg.name !== 'saveapp') fail('package.json must identify the independent Sav
 const checks = [
   ['src/app/(tabs)/_layout.tsx', 'expo-router/native-tabs'],
   ['plugins/withStarterToolbarSync.js', 'StarterToolbarMorphExperimentVariant'],
+  ['plugins/withStarterToolbarSync.js', "version !== '4.30.1'"],
   ['plugins/withSaveLinkQuickSave.js', 'saveapp_configure_expo_widgets_quick_save'],
   ['scripts/patch-expo-ui-bottom-sheet.js', 'ignoresSafeArea(.container, edges: .bottom)'],
-  ['scripts/patch-expo-ui-bottom-sheet.js', "EXPECTED_UI_VERSION = '58.0.25'"],
+  ['scripts/patch-expo-ui-bottom-sheet.js', "EXPECTED_UI_VERSION = '58.0.26'"],
   ['.github/workflows/swift-preflight.yml', 'CODE_SIGNING_ALLOWED=NO'],
   ['.github/workflows/native-sim.yml', 'native-sim-template-version: 20'],
 ];
@@ -379,7 +385,7 @@ if (!fs.existsSync(autolinkingCli)) {
       if (
         !widgetsPod ||
         !widgetsModule.swiftModuleNames?.includes('ExpoWidgets') ||
-        widgetsModule.packageVersion !== '~58.0.25' && widgetsModule.packageVersion !== '58.0.25'
+        widgetsModule.packageVersion !== '~58.0.26' && widgetsModule.packageVersion !== '58.0.26'
       ) {
         fail('Expo SDK 58 did not resolve the pinned ExpoWidgets native module');
       }
@@ -472,6 +478,14 @@ for (const relativePath of quickSaveNativeSources) {
 const quickSaveIntentSource = fs.readFileSync(path.join(root, quickSaveNativeSources[1]), 'utf8');
 const quickSaveButtonSource = fs.readFileSync(path.join(root, quickSaveNativeSources[2]), 'utf8');
 const quickSaveQueueSource = fs.readFileSync(path.join(root, quickSaveNativeSources[4]), 'utf8');
+const lockScreenHistoryReaderStart = quickSaveQueueSource.indexOf('static func lockScreenHistoryForActivityUpdate()');
+const lockScreenHistoryReaderEnd = quickSaveQueueSource.indexOf(
+  'private static func updateLockScreenRecentLinksBestEffort',
+  lockScreenHistoryReaderStart,
+);
+const lockScreenHistoryReaderSource = lockScreenHistoryReaderStart >= 0 && lockScreenHistoryReaderEnd > lockScreenHistoryReaderStart
+  ? quickSaveQueueSource.slice(lockScreenHistoryReaderStart, lockScreenHistoryReaderEnd)
+  : '';
 const quickSaveQueueImportPath = path.join(root, 'src/features/dynamic-island/quickSaveQueue.ts');
 const quickSaveQueueImportSource = fs.existsSync(quickSaveQueueImportPath)
   ? fs.readFileSync(quickSaveQueueImportPath, 'utf8')
@@ -522,6 +536,22 @@ if (!fs.existsSync(widgetsRendererPath) || !fs.existsSync(widgetsLiveActivityPat
 }
 const widgetsRendererSource = fs.readFileSync(widgetsRendererPath, 'utf8');
 const widgetsLiveActivitySource = fs.readFileSync(widgetsLiveActivityPath, 'utf8');
+const queueRecordConfirmationIndex = quickSaveIntentSource.indexOf('SaveAppQuickSaveQueue.enqueue(normalized)');
+const activityHistoryUpdateIndex = quickSaveIntentSource.indexOf(
+  'SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()',
+  queueRecordConfirmationIndex,
+);
+const activityUpdateSubmissionIndex = quickSaveIntentSource.indexOf(
+  'await activity.update(ActivityContent(state: state, staleDate: nil))',
+  activityHistoryUpdateIndex,
+);
+const queueRecordConfirmationIndexInQueue = quickSaveQueueSource.indexOf(
+  'guard let persisted = try readAndValidateRecord(at: destination), persisted == record',
+);
+const queueHistoryConfirmationIndex = quickSaveQueueSource.indexOf(
+  'updateLockScreenRecentLinksBestEffort(record, in: directory)',
+  queueRecordConfirmationIndexInQueue,
+);
 if (
   !quickSaveIntentSource.includes('LiveActivityIntent') ||
   !quickSaveIntentSource.includes('public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage') ||
@@ -539,9 +569,23 @@ if (
   !quickSaveQueueSource.includes('forSecurityApplicationGroupIdentifier: appGroupIdentifier') ||
   !quickSaveQueueSource.includes('Darwin.rename(') ||
   !quickSaveQueueSource.includes('fsync(descriptor)') ||
-  !quickSaveQueueSource.includes('flock(descriptor, LOCK_EX)') ||
+  !quickSaveQueueSource.includes('flock(descriptor, LOCK_EX | LOCK_NB)') ||
+  !quickSaveQueueSource.includes('fileLockTimeoutNanoseconds') ||
+  /while flock\(descriptor, LOCK_EX\)/.test(quickSaveQueueSource) ||
   !quickSaveQueueSource.includes('completeUntilFirstUserAuthentication') ||
   quickSaveQueueSource.includes('saveapp-photos.db') ||
+  !quickSaveQueueSource.includes('lockScreenRecentLinksVersion = 2') ||
+  !quickSaveQueueSource.includes('addingReportingOverflow(1)') ||
+  !quickSaveQueueSource.includes('func lockScreenHistoryForActivityUpdate()') ||
+  !lockScreenHistoryReaderSource.includes('withExclusiveFileLock(in: directory)') ||
+  lockScreenHistoryReaderSource.includes('await') ||
+  queueRecordConfirmationIndexInQueue < 0 ||
+  queueHistoryConfirmationIndex <= queueRecordConfirmationIndexInQueue ||
+  !quickSaveQueueSource.includes('return .enqueued(lockScreenHistoryUpdated: historyUpdated)') ||
+  !quickSaveQueueSource.includes('return .alreadyQueued(lockScreenHistoryUpdated: historyUpdated)') ||
+  !quickSaveIntentSource.includes('case .enqueued(let lockScreenHistoryUpdated)') ||
+  !quickSaveIntentSource.includes('case .alreadyQueued(let lockScreenHistoryUpdated)') ||
+  !quickSaveIntentSource.includes('guard lockScreenHistoryUpdated else {') ||
   !quickSaveQueueImportSource.includes('Paths.appleSharedContainers[APP_GROUP_IDENTIFIER]') ||
   !quickSaveQueueImportSource.includes('importQueuedQuickSaveLink') ||
   !quickSaveQueuePipelineSource.includes('await adapter.acknowledge(entry)') ||
@@ -554,8 +598,25 @@ if (
   !liveActivityManagerSource.includes("destination.uri.startsWith('file://')") ||
   !liveActivityManagerSource.includes("quickSaveStatus: 'ready'") ||
   !liveActivityManagerSource.includes('showRecentQuickSaveLinks') ||
-  !liveActivityManagerSource.includes('recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)') ||
+  !liveActivityManagerSource.includes('recentQuickSaveLinks: recentProps.links') ||
+  !liveActivityManagerSource.includes('recentQuickSaveLinksRevision: recentProps.revision') ||
+  !liveActivityManagerSource.includes('serializeActivityUpdate(async () =>') ||
+  !liveActivityManagerSource.includes('attempt < 3') ||
+  queueRecordConfirmationIndex < 0 ||
+  activityHistoryUpdateIndex <= queueRecordConfirmationIndex ||
+  activityUpdateSubmissionIndex <= activityHistoryUpdateIndex ||
+  !quickSaveIntentSource.includes('props["recentQuickSaveLinksRevision"]') ||
+  !quickSaveIntentSource.includes('props["recentQuickSaveLinks"] = showRecentLinks ? snapshot?.activityProps() ?? [] : []') ||
+  !quickSaveIntentSource.includes('activity.activityState == .active') ||
+  !quickSaveIntentSource.includes('maximumActivityContentStateBytes = 4 * 1_024') ||
+  !quickSaveIntentSource.includes('encodedState.count <= Self.maximumActivityContentStateBytes') ||
+  !quickSaveQueueSource.includes('.bool(forKey: lockScreenRecentLinksVisibleKey) ?? false') ||
   (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 4 ||
+  !liveActivityLayoutSource.includes('date={new Date(link.createdAt)}') ||
+  !liveActivityLayoutSource.includes('dateStyle="time"') ||
+  liveActivityLayoutSource.includes('ageMinutes') ||
+  !liveActivityLayoutSource.includes('monospacedDigit()') ||
+  !liveActivityLayoutSource.includes('frame({ width: 24, height: 24, alignment: \'center\' })') ||
   liveActivityLayoutSource.includes('assetName=') ||
   liveActivityLayoutSource.includes('environment.colorScheme') ||
   !quickSavePreviewSource.includes('createQuickSaveLinkPreviewEnricher') ||

@@ -15,7 +15,10 @@ import {
   readActivityLinkAuthorization,
   writeActivityLinkAuthorization,
 } from './activityLinkAuthorization';
-import { readQuickSaveLockScreenHistory } from './quickSaveLockScreenHistory';
+import {
+  readQuickSaveLockScreenHistorySnapshot,
+  type QuickSaveLockScreenHistorySnapshot,
+} from './quickSaveLockScreenHistory';
 import {
   getQuickSaveLockScreenSettings,
   setQuickSaveActivityStatus,
@@ -31,6 +34,7 @@ type SaveLinkActivityProps = {
   expandedHomeUrl: string;
   quickSaveStatus: QuickSaveActivityStatus;
   showRecentQuickSaveLinks: boolean;
+  recentQuickSaveLinksRevision: number;
   recentQuickSaveLinks: RecentQuickSaveActivityLink[];
 };
 type NativeActivity = {
@@ -56,6 +60,14 @@ const activityFactoryLoader = createOptionalNativeModuleLoader(
   },
 );
 
+let activityUpdateQueue: Promise<void> = Promise.resolve();
+
+function serializeActivityUpdate(operation: () => Promise<void>): Promise<void> {
+  const next = activityUpdateQueue.then(operation, operation);
+  activityUpdateQueue = next.catch(() => undefined);
+  return next;
+}
+
 function getActivityFactory(): LiveActivityFactory {
   const factory = activityFactoryLoader.get();
   if (!factory) throw new Error('Live Activities não estão disponíveis nesta versão do app.');
@@ -66,15 +78,19 @@ export function isSaveLinkActivityAvailable(): boolean {
   return activityFactoryLoader.isAvailable();
 }
 
-async function makeRecentQuickSaveActivityProps(visible: boolean): Promise<RecentQuickSaveActivityLink[]> {
-  if (!visible) return [];
-  return (await readQuickSaveLockScreenHistory())
-    .slice(0, 3)
-    .map(({ domain, createdAt, faviconUri }) => ({
+function makeRecentQuickSaveActivityProps(
+  visible: boolean,
+  snapshot: QuickSaveLockScreenHistorySnapshot | null,
+): { revision: number; links: RecentQuickSaveActivityLink[] } {
+  if (!visible || !snapshot) return { revision: snapshot?.revision ?? 0, links: [] };
+  return {
+    revision: snapshot.revision,
+    links: snapshot.links.slice(0, 3).map(({ domain, createdAt, faviconUri }) => ({
       domain,
       createdAt,
       ...(faviconUri ? { faviconUri } : {}),
-    }));
+    })),
+  };
 }
 
 async function getSharedAppIconUri(): Promise<string> {
@@ -144,6 +160,10 @@ const reconcileInstances = createActivityReconciler({
     // A new Activity starts in `ready`; prevent a previous Activity's persisted
     // status from being copied into it when the lock-screen privacy toggle is used.
     setQuickSaveActivityStatus('ready');
+    const recentSnapshot = showRecentQuickSaveLinks
+      ? await readQuickSaveLockScreenHistorySnapshot()
+      : null;
+    const recentProps = makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks, recentSnapshot);
     let activity: StartedActivity | null = null;
     try {
       activity = getActivityFactory().start(
@@ -153,7 +173,8 @@ const reconcileInstances = createActivityReconciler({
           expandedHomeUrl,
           quickSaveStatus: 'ready',
           showRecentQuickSaveLinks,
-          recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks),
+          recentQuickSaveLinksRevision: recentProps.revision,
+          recentQuickSaveLinks: recentProps.links,
         },
         composeUrl,
       );
@@ -167,36 +188,57 @@ const reconcileInstances = createActivityReconciler({
 });
 
 export async function updateSaveLinkActivityRecentLinksVisibility(visible: boolean): Promise<void> {
-  const factory = activityFactoryLoader.get();
-  if (!factory) return;
-  const showRecentQuickSaveLinks = visible && getQuickSaveLockScreenSettings()?.showRecentLinks === true;
-  const authorization = await readActivityLinkAuthorization();
-  if (!authorization?.activityId) return;
-  const activity = factory.getInstances().find((candidate) => candidate.getId() === authorization.activityId);
-  if (!activity) return;
+  await serializeActivityUpdate(async () => {
+    const factory = activityFactoryLoader.get();
+    if (!factory) return;
+    const authorization = await readActivityLinkAuthorization();
+    if (!authorization?.activityId) return;
+    const activity = factory.getInstances().find((candidate) => candidate.getId() === authorization.activityId);
+    if (!activity) return;
 
-  const [iconUri, recentQuickSaveLinks] = await Promise.all([
-    getSharedAppIconUri(),
-    makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks),
-  ]);
-  // The opt-in may be disabled while the icon/history are being loaded. Recheck
-  // immediately before submitting so an older async refresh cannot re-expose it.
-  const latestSettings = getQuickSaveLockScreenSettings();
-  const shouldShowRecentQuickSaveLinks = visible && latestSettings?.showRecentLinks === true;
-  const composeUrl = Linking.createURL('/links/compose', {
-    queryParams: { source: 'dynamic-island', activityToken: authorization.token },
-  });
-  const expandedHomeUrl = Linking.createURL('/', {
-    queryParams: { source: 'dynamic-island-expanded' },
-  });
-  const quickSaveStatus = latestSettings?.quickSaveStatus ?? 'ready';
-  await activity.update({
-    iconUri,
-    composeUrl,
-    expandedHomeUrl,
-    quickSaveStatus,
-    showRecentQuickSaveLinks: shouldShowRecentQuickSaveLinks,
-    recentQuickSaveLinks: shouldShowRecentQuickSaveLinks ? recentQuickSaveLinks : [],
+    const iconUri = await getSharedAppIconUri();
+    const composeUrl = Linking.createURL('/links/compose', {
+      queryParams: { source: 'dynamic-island', activityToken: authorization.token },
+    });
+    const expandedHomeUrl = Linking.createURL('/', {
+      queryParams: { source: 'dynamic-island-expanded' },
+    });
+
+    // A history/setting change while ActivityKit accepts an update is reconciled
+    // with a bounded follow-up. Invocations from the app are serialized above.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const latestSettings = getQuickSaveLockScreenSettings();
+      const shouldShowRecentQuickSaveLinks = visible && latestSettings?.showRecentLinks === true;
+      const snapshot = shouldShowRecentQuickSaveLinks
+        ? await readQuickSaveLockScreenHistorySnapshot()
+        : null;
+      if (shouldShowRecentQuickSaveLinks && !snapshot) return;
+
+      const confirmedSettings = getQuickSaveLockScreenSettings();
+      const confirmedVisibility = visible && confirmedSettings?.showRecentLinks === true;
+      if (confirmedVisibility !== shouldShowRecentQuickSaveLinks) continue;
+
+      const recentProps = makeRecentQuickSaveActivityProps(shouldShowRecentQuickSaveLinks, snapshot);
+      await activity.update({
+        iconUri,
+        composeUrl,
+        expandedHomeUrl,
+        quickSaveStatus: confirmedSettings?.quickSaveStatus ?? 'ready',
+        showRecentQuickSaveLinks: confirmedVisibility,
+        recentQuickSaveLinksRevision: recentProps.revision,
+        recentQuickSaveLinks: recentProps.links,
+      });
+
+      if (!confirmedVisibility) return;
+      const [afterSnapshot, afterSettings] = await Promise.all([
+        readQuickSaveLockScreenHistorySnapshot(),
+        Promise.resolve(getQuickSaveLockScreenSettings()),
+      ]);
+      if (
+        afterSnapshot?.revision === snapshot?.revision &&
+        afterSettings?.showRecentLinks === true
+      ) return;
+    }
   });
 }
 

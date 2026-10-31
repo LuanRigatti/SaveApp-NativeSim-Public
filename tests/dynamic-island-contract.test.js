@@ -40,6 +40,7 @@ const expoWidgetsFactorySource = readSource('../node_modules/expo-widgets/ios/Li
 const expoWidgetsTargetPluginSource = readSource('../node_modules/expo-widgets/plugin/src/ios/withIosWidgets.ts');
 const expoWidgetsProjectPluginSource = readSource('../node_modules/expo-widgets/plugin/src/ios/xcode/withTargetXcodeProject.ts');
 const expoWidgetsNativeTargetSource = readSource('../node_modules/expo-widgets/plugin/src/ios/xcode/addToPbxNativeTargetSection.ts');
+const expoUiTextViewSource = readSource('../node_modules/@expo/ui/ios/TextView.swift');
 
 describe('SaveApp Dynamic Island link-saving mode', () => {
   test('uses Expo Widgets with the private app group and no APNs or unrelated widgets', () => {
@@ -271,7 +272,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(managerSource).toContain('activityToken: token');
     expect(managerSource).toContain("quickSaveStatus: 'ready'");
     expect(managerSource).toContain('showRecentQuickSaveLinks,');
-    expect(managerSource).toContain('recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)');
+    expect(managerSource).toContain('recentQuickSaveLinks: recentProps.links');
+    expect(managerSource).toContain('recentQuickSaveLinksRevision: recentProps.revision');
     expect(layoutSource).toContain('compactLeading: (');
     expect(layoutSource).toContain('minimal: (');
     expect(banner).toContain('<Link destination={props.expandedHomeUrl}>');
@@ -301,7 +303,14 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(banner).toContain('systemName="globe"');
     expect(banner).toContain('uiImage={link.faviconUri}');
     expect(banner).toMatch(/link\.faviconUri\s*\?/);
-    expect(banner).toContain('dateStyle="relative"');
+    expect(banner).not.toContain('dateStyle="relative"');
+    expect(banner).not.toContain('ageMinutes');
+    expect(banner).toContain('date={new Date(link.createdAt)}');
+    expect(banner).toContain('dateStyle="time"');
+    expect(banner).toContain('monospacedDigit()');
+    expect(banner).toContain("frame({ width: 24, height: 24, alignment: 'center' })");
+    expect(banner).toContain("frame({ maxWidth: Infinity, alignment: 'leading' })");
+    expect(banner).toContain("frame({ minWidth: 56, alignment: 'trailing' })");
     expect(banner).toContain('lineLimit(1)');
     expect(linkRows).toContain('link.domain');
     expect(linkRows).not.toContain('<Link');
@@ -314,7 +323,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
   test('validates the capped recent-link summary and orders it without exposing URLs', () => {
     const digest = (character) => character.repeat(64);
     const data = {
-      formatVersion: 1,
+      formatVersion: 2,
+      revision: 3,
       links: [
         { id: digest('a'), domain: 'older.example', createdAt: 1_000 },
         { id: digest('b'), domain: 'newest.example', createdAt: 3_000 },
@@ -329,6 +339,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
       .toHaveLength(2);
     expect(lockScreenHistory.validateQuickSaveLockScreenHistory(data, 4_000).map(({ domain }) => domain))
       .toEqual(['newest.example', 'middle.example', 'older.example']);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistorySnapshot(data, 4_000)?.revision).toBe(3);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistorySnapshot({ formatVersion: 1, links: data.links }, 4_000)?.revision).toBe(0);
     expect(lockScreenHistory.validateQuickSaveLockScreenHistory({
       formatVersion: 1,
       links: [...data.links, { id: digest('d'), domain: 'extra.example', createdAt: 500 }],
@@ -341,7 +353,13 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
       formatVersion: 1,
       links: [{ id: digest('e'), domain: 'private.example/path?token=secret', createdAt: 1_000 }],
     }, 4_000)).toEqual([]);
-    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({ formatVersion: 2, links: [] }, 4_000)).toEqual([]);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({ formatVersion: 2, revision: 0, links: [] }, 4_000)).toEqual([]);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({ formatVersion: 2, revision: 4, links: [] }, 4_000)).toEqual([]);
+    expect(managerSource).not.toContain('getQuickSaveAgeMinutes');
+    expect(managerSource).not.toContain('ageMinutes');
+    expect(quickSaveQueueSwift).not.toContain('ageMinutes');
+    expect(expoUiTextViewSource).toContain('case .time: return .time');
+    expect(expoUiTextViewSource).toContain('Text(date, style: props.dateStyle?.toSwiftUI() ?? .date)');
   });
 
   test('validates shared favicon identity and the 96px PNG cache before passing file URIs to the widget', () => {
@@ -391,21 +409,25 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(providerSource).toContain('synchronizeQuickSaveLockScreenFavicons()');
     expect(providerSource).toContain('updateSaveLinkActivityRecentLinksVisibility(true)');
     expect(managerSource).toContain('...(faviconUri ? { faviconUri } : {})');
-    expect(managerSource).toContain('if (!visible) return []');
-    expect(managerSource).toContain('visible && getQuickSaveLockScreenSettings()?.showRecentLinks === true');
+    expect(managerSource).toContain('if (!visible || !snapshot) return { revision: snapshot?.revision ?? 0, links: [] }');
+    expect(managerSource).toContain('visible && latestSettings?.showRecentLinks === true');
     expect(managerSource).not.toMatch(/recentQuickSaveLinks[\s\S]{0,180}normalizedUrl|recentQuickSaveLinks[\s\S]{0,180}\.url/);
-    expect(quickSaveIntentSwift).toContain('SaveAppQuickSaveQueue.lockScreenRecentLinkActivityProps()');
+    expect(quickSaveIntentSwift).toContain('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
+    expect(quickSaveQueueSwift).toContain('func activityProps()');
     expect(quickSaveIntentSwift).not.toMatch(/URLSession|URLRequest|fetch\(/);
     expect(layoutSource).toContain('uiImage={link.faviconUri}');
     expect(layoutSource).toContain('systemName="globe"');
-    expect(clipboardSettingsSwift).toContain('flock(descriptor, LOCK_EX)');
+    expect(clipboardSettingsSwift).toContain('flock(descriptor, LOCK_EX | LOCK_NB)');
+    expect(clipboardSettingsSwift).toContain('fileLockTimeoutNanoseconds');
     expect(clipboardSettingsSwift).toContain('atomicWrite(pngData, to: imageURL, in: faviconDirectory)');
     expect(clipboardSettingsSwift).toContain('maximumSourceBytes = 256 * 1_024');
     expect(clipboardSettingsSwift).toContain('maximumFaviconBytes = 64 * 1_024');
     expect(clipboardSettingsSwift).toContain('UIGraphicsImageRenderer(size: CGSize(width: 96, height: 96)');
     expect(clipboardSettingsSwift).toContain('UserDefaults(suiteName: appGroupIdentifier)?.bool(forKey: visibleKey) == true');
     expect(quickSaveQueueSwift).toContain('pruneObsoleteFavicons');
-    expect(quickSaveQueueSwift).toContain('lockScreenRecentLinkActivityProps');
+    expect(quickSaveQueueSwift).toContain('lockScreenHistoryForActivityUpdate()');
+    expect(quickSaveQueueSwift).toContain('flock(descriptor, LOCK_EX | LOCK_NB)');
+    expect(quickSaveQueueSwift).toContain('fileLockTimeoutNanoseconds');
     expect(quickSaveQueueSwift).toContain('CGImageSourceCreateImageAtIndex(source, 0, nil) != nil');
     expect(linkPreviewSource).toContain('downloadLinkFaviconImage');
   });
@@ -415,19 +437,69 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     const queueVerifyIndex = quickSaveQueueSwift.indexOf('guard let persisted = try readAndValidateRecord(at: destination), persisted == record');
     const historyWriteIndex = quickSaveQueueSwift.indexOf('updateLockScreenRecentLinksBestEffort(record, in: directory)', queueVerifyIndex);
 
-    expect(quickSaveQueueSwift).toContain('lockScreenRecentLinksVersion = 1');
+    expect(quickSaveQueueSwift).toContain('lockScreenRecentLinksVersion = 2');
+    expect(quickSaveQueueSwift).toContain('let revision: Int64');
+    expect(quickSaveQueueSwift).toContain('addingReportingOverflow(1)');
     expect(quickSaveQueueSwift).toContain('maximumLockScreenRecentLinks = 3');
     expect(quickSaveQueueSwift).toContain('let id = String(queueFileName(for: record.normalizedURL).dropLast(".json".count))');
     expect(quickSaveQueueSwift).toContain('id: id');
-    expect(quickSaveQueueSwift).toContain('flock(descriptor, LOCK_EX)');
+    expect(quickSaveQueueSwift).toContain('flock(descriptor, LOCK_EX | LOCK_NB)');
     expect(queueVerifyIndex).toBeGreaterThan(queueWriteIndex);
     expect(historyWriteIndex).toBeGreaterThan(queueVerifyIndex);
     expect(quickSaveQueueSwift).not.toMatch(/URLSession|URLRequest|fetch\(|saveapp-photos\.db/);
-    expect(quickSaveIntentSwift).toContain('?? false');
-    expect(quickSaveIntentSwift).toContain('props["recentQuickSaveLinks"] = recentQuickSaveLinks');
+    expect(quickSaveQueueSwift).toContain('.bool(forKey: lockScreenRecentLinksVisibleKey) ?? false');
+    expect(quickSaveIntentSwift).toContain('props["recentQuickSaveLinks"] = showRecentLinks ? snapshot?.activityProps() ?? [] : []');
     expect(quickSaveIntentSwift).toContain('await activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntentSwift).not.toContain('recentQuickSaveLinksVisibleKey] ?? true');
     expect(layoutSource).toContain('showRecentQuickSaveLinks?: boolean');
+  });
+
+  test('renders each saved timestamp as native localized time instead of a stale elapsed-minute string', () => {
+    const recentPropsStart = managerSource.indexOf('function makeRecentQuickSaveActivityProps(');
+    const recentPropsEnd = managerSource.indexOf('\nasync function getSharedAppIconUri', recentPropsStart);
+    const recentPropsSource = managerSource.slice(recentPropsStart, recentPropsEnd);
+
+    expect(recentPropsSource).toContain('createdAt,');
+    expect(recentPropsSource).not.toContain('Date.now()');
+    expect(recentPropsSource).not.toContain('ageMinutes');
+    expect(layoutSource).toContain('date={new Date(link.createdAt)}');
+    expect(layoutSource).toContain('dateStyle="time"');
+    expect(layoutSource).not.toContain('dateStyle="relative"');
+    expect(layoutSource).not.toContain('ageMinutes');
+    expect(expoUiTextViewSource).toContain('case .time: return .time');
+    expect(expoUiTextViewSource).toContain('Text(date, style: props.dateStyle?.toSwiftUI() ?? .date)');
+  });
+
+  test('releases the shared file lock before ActivityKit awaits and bounds lock contention', () => {
+    const historyReaderStart = quickSaveQueueSwift.indexOf('static func lockScreenHistoryForActivityUpdate()');
+    const historyReaderEnd = quickSaveQueueSwift.indexOf('private static func updateLockScreenRecentLinksBestEffort', historyReaderStart);
+    const historyReaderSource = quickSaveQueueSwift.slice(historyReaderStart, historyReaderEnd);
+    const updateMethodStart = quickSaveIntentSwift.indexOf('private func updateActivity(');
+    const updateMethodEnd = quickSaveIntentSwift.indexOf('@MainActor', updateMethodStart);
+    const updateMethodSource = quickSaveIntentSwift.slice(updateMethodStart, updateMethodEnd);
+    const clipboardWithHistoryStart = clipboardSettingsSwift.indexOf('private static func withHistory(');
+    const clipboardWithHistoryEnd = clipboardSettingsSwift.indexOf('private static func acquireFileLock(', clipboardWithHistoryStart);
+    const clipboardWithHistorySource = clipboardSettingsSwift.slice(clipboardWithHistoryStart, clipboardWithHistoryEnd);
+    const privacyWriterStart = clipboardSettingsSwift.indexOf('static func setRecentHistoryVisible(');
+    const privacyWriterEnd = clipboardSettingsSwift.indexOf('static func associateContent(', privacyWriterStart);
+    const privacyWriterSource = clipboardSettingsSwift.slice(privacyWriterStart, privacyWriterEnd);
+
+    expect(historyReaderSource).toContain('withExclusiveFileLock(in: directory)');
+    expect(historyReaderSource).not.toContain('await');
+    expect(historyReaderSource).not.toContain('activity.update');
+    expect(clipboardWithHistorySource).toContain('flock(descriptor, LOCK_UN)');
+    expect(clipboardWithHistorySource).not.toContain('await');
+    expect(privacyWriterSource).toContain('flock(descriptor, LOCK_UN)');
+    expect(privacyWriterSource).not.toContain('await');
+    expect(updateMethodSource).toContain('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
+    expect(updateMethodSource).toContain('await activity.update(ActivityContent(state: state, staleDate: nil))');
+    expect(updateMethodSource).toContain('reconciliation_limit');
+    expect(quickSaveQueueSwift).toContain('LOCK_EX | LOCK_NB');
+    expect(quickSaveQueueSwift).toContain('fileLockTimeoutNanoseconds');
+    expect(clipboardSettingsSwift).toContain('LOCK_EX | LOCK_NB');
+    expect(clipboardSettingsSwift).toContain('fileLockTimeoutNanoseconds');
+    expect(quickSaveQueueSwift).not.toMatch(/while flock\(descriptor, LOCK_EX\)/);
+    expect(clipboardSettingsSwift).not.toMatch(/while flock\(descriptor, LOCK_EX\)/);
   });
 
   test('requires explicit lock-screen privacy opt-in and updates the existing authorized activity', () => {
@@ -440,23 +512,30 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(settingsSource).toContain('Links recentes na tela bloqueada');
     expect(settingsSource).toContain('Desativado por padrão');
     expect(updateSource).toContain('factory.getInstances().find((candidate) => candidate.getId() === authorization.activityId)');
-    expect(updateSource).toContain('const quickSaveStatus = latestSettings?.quickSaveStatus ?? \'ready\'');
     expect(updateSource).toContain('await activity.update({');
-    expect(updateSource).toContain('quickSaveStatus,');
-    expect(updateSource).toContain('visible && getQuickSaveLockScreenSettings()?.showRecentLinks === true');
+    expect(updateSource).toContain("quickSaveStatus: confirmedSettings?.quickSaveStatus ?? 'ready'");
+    expect(updateSource).toContain('visible && latestSettings?.showRecentLinks === true');
     expect(updateSource).toContain('const latestSettings = getQuickSaveLockScreenSettings()');
     expect(updateSource).toContain('const shouldShowRecentQuickSaveLinks = visible && latestSettings?.showRecentLinks === true');
-    expect(updateSource).toContain('recentQuickSaveLinks: shouldShowRecentQuickSaveLinks ? recentQuickSaveLinks : []');
-    expect(updateSource.indexOf('await Promise.all([')).toBeLessThan(updateSource.indexOf('const latestSettings = getQuickSaveLockScreenSettings()'));
-    expect(updateSource.indexOf('const latestSettings = getQuickSaveLockScreenSettings()')).toBeLessThan(updateSource.indexOf('await activity.update({'));
-    expect(updateSource).toContain('makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)');
+    expect(updateSource).toContain('recentQuickSaveLinks: recentProps.links');
+    expect(updateSource).toContain('serializeActivityUpdate(async () =>');
+    expect(updateSource).toContain('attempt < 3');
+    expect(updateSource).toContain('readQuickSaveLockScreenHistorySnapshot()');
+    expect(updateSource).toContain('makeRecentQuickSaveActivityProps(shouldShowRecentQuickSaveLinks, snapshot)');
     expect(updateSource).toContain('activityToken: authorization.token');
     expect(updateSource).toContain("source: 'dynamic-island-expanded'");
     expect(updateSource).not.toContain('factory.start(');
     expect(managerSource.indexOf("setQuickSaveActivityStatus('ready')"))
       .toBeLessThan(managerSource.indexOf('activity = getActivityFactory().start('));
-    expect(quickSaveIntentSwift).toContain('let showRecentLinks = defaults?.bool(forKey: SaveAppQuickSaveQueue.lockScreenRecentLinksVisibleKey) ?? false');
-    expect(quickSaveIntentSwift).toContain('defaults?.set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)');
+    expect(quickSaveIntentSwift).toContain('props["recentQuickSaveLinksRevision"]');
+    expect(quickSaveIntentSwift).toContain('props["quickSaveStatus"] = status.rawValue');
+    expect(quickSaveIntentSwift).toContain('maximumActivityContentStateBytes = 4 * 1_024');
+    expect(quickSaveIntentSwift).toContain('encodedState.count <= Self.maximumActivityContentStateBytes');
+    expect(quickSaveIntentSwift).toContain('.set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)');
+    expect(quickSaveIntentSwift).toContain('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
+    expect(clipboardSettingsSwift).toContain('static func setRecentHistoryVisible(_ visible: Bool) -> Bool');
+    expect(clipboardSettingsSwift).toContain('defaults.set(visible, forKey: visibleKey)');
+    expect(clipboardSettingsSwift).toContain('defaults.synchronize()');
     expect(clipboardSettingsSwift).toContain('Function("setQuickSaveActivityStatus")');
     expect(clipboardSettingsSwift).toContain('allowedStatuses.contains(status)');
     expect(clipboardSettingsTypeScript).toContain('export function setQuickSaveActivityStatus(');

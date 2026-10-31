@@ -1,7 +1,7 @@
 require 'json'
 require 'pathname'
 
-SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.25'.freeze
+SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.26'.freeze
 SAVEAPP_EXPO_WIDGETS_POD_TARGET = 'ExpoWidgets'.freeze
 SAVEAPP_EXPO_WIDGETS_ALLOWED_PRODUCT_TYPES = [
   'com.apple.product-type.library.static',

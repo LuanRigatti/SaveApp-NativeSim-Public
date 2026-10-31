@@ -67,27 +67,34 @@ private enum SaveLinkQuickSaveStatus: String {
 private actor SaveLinkQuickSaveCoordinator {
   static let shared = SaveLinkQuickSaveCoordinator()
   private static let terminalStatusDisplayNanoseconds: UInt64 = 5_000_000_000
+  private static let maximumActivityContentStateBytes = 4 * 1_024
 
-  private var activeActivityIDs = Set<String>()
+  private var pendingOperations: [String: Task<Void, Never>] = [:]
+  private var pendingOperationTickets: [String: UUID] = [:]
+  private var pendingActivityUpdates: [String: Task<Void, Never>] = [:]
+  private var pendingActivityUpdateTickets: [String: UUID] = [:]
   private var requestGenerationByActivity: [String: UInt64] = [:]
 
   func perform(activityID: String, operationID: String) async {
-    guard activeActivityIDs.insert(activityID).inserted else {
-      SaveAppQuickSaveLog.logger.notice("event=intent.rejected reason=already_processing operation=\(operationID, privacy: .public)")
-      return
-    }
     let generation = (requestGenerationByActivity[activityID] ?? 0) &+ 1
     requestGenerationByActivity[activityID] = generation
-    defer {
-      // A prior request can resume from its result-display sleep after a newer tap.
-      // Only its own generation may release the in-flight guard.
-      if requestGenerationByActivity[activityID] == generation {
-        activeActivityIDs.remove(activityID)
-      }
+    let ticket = UUID()
+    let previous = pendingOperations[activityID]
+    let operation = Task { [self] in
+      await previous?.value
+      await performSerially(activityID: activityID, operationID: operationID, generation: generation)
     }
+    pendingOperations[activityID] = operation
+    pendingOperationTickets[activityID] = ticket
+    await operation.value
+    if pendingOperationTickets[activityID] == ticket {
+      pendingOperations.removeValue(forKey: activityID)
+      pendingOperationTickets.removeValue(forKey: activityID)
+    }
+  }
 
+  private func performSerially(activityID: String, operationID: String, generation: UInt64) async {
     SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.accepted operation=\(operationID, privacy: .public)")
-    _ = await updateActivity(activityID: activityID, status: .processing, operationID: operationID)
 
     let clipboard: ClipboardQuickSaveInput
     switch await readClipboardAfterExplicitAction(operationID: operationID) {
@@ -95,20 +102,35 @@ private actor SaveLinkQuickSaveCoordinator {
       clipboard = input
     case .empty:
       SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=clipboard_empty operation=\(operationID, privacy: .public)")
-      await finish(activityID: activityID, status: .invalid, generation: generation, operationID: operationID)
+      enqueueActivityStatusSequence(
+        activityID: activityID,
+        statuses: [.invalid],
+        generation: generation,
+        operationID: operationID
+      )
       return
     case .unavailable:
       // The system may deny or defer pasteboard access. Keep this distinct from
       // an invalid URL so the UI offers a truthful retry state.
       SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=clipboard_read reason=unavailable operation=\(operationID, privacy: .public)")
-      await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
+      enqueueActivityStatusSequence(
+        activityID: activityID,
+        statuses: [.failed],
+        generation: generation,
+        operationID: operationID
+      )
       return
     }
 
     guard let normalized = SaveLinkQuickSaveSQLite.normalize(clipboard.value) else {
       SaveAppQuickSaveLog.logger.notice("event=clipboard.validation.result=invalid operation=\(operationID, privacy: .public)")
       SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=url_invalid operation=\(operationID, privacy: .public)")
-      await finish(activityID: activityID, status: .invalid, generation: generation, operationID: operationID)
+      enqueueActivityStatusSequence(
+        activityID: activityID,
+        statuses: [.invalid],
+        generation: generation,
+        operationID: operationID
+      )
       return
     }
 
@@ -116,53 +138,139 @@ private actor SaveLinkQuickSaveCoordinator {
     do {
       let result = try SaveAppQuickSaveQueue.enqueue(normalized)
       switch result {
-      case .enqueued:
+      case .enqueued(let lockScreenHistoryUpdated):
         SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=queue_write_confirmed operation=\(operationID, privacy: .public)")
         ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)
-        await finish(activityID: activityID, status: .queued, generation: generation, operationID: operationID)
-      case .alreadyQueued:
+        guard lockScreenHistoryUpdated else {
+          SaveAppQuickSaveLog.logger.error("event=quick_save.operation.visual_update_unavailable reason=history_write_failed operation=\(operationID, privacy: .public)")
+          return
+        }
+        // The queue and recent-link summary are durable before ActivityKit is
+        // scheduled. The App Intent returns without waiting for renderer delivery.
+        enqueueActivityStatusSequence(
+          activityID: activityID,
+          statuses: [.processing, .queued],
+          generation: generation,
+          operationID: operationID
+        )
+      case .alreadyQueued(let lockScreenHistoryUpdated):
         SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=already_queued operation=\(operationID, privacy: .public)")
         ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)
-        await finish(activityID: activityID, status: .alreadyQueued, generation: generation, operationID: operationID)
+        guard lockScreenHistoryUpdated else {
+          SaveAppQuickSaveLog.logger.error("event=quick_save.operation.visual_update_unavailable reason=history_write_failed operation=\(operationID, privacy: .public)")
+          return
+        }
+        enqueueActivityStatusSequence(
+          activityID: activityID,
+          statuses: [.processing, .alreadyQueued],
+          generation: generation,
+          operationID: operationID
+        )
       }
     } catch let error as QuickSaveQueueFailure {
       SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=queue reason=\(error.diagnosticCode, privacy: .public) operation=\(operationID, privacy: .public)")
-      await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
+      enqueueActivityStatusSequence(
+        activityID: activityID,
+        statuses: [.failed],
+        generation: generation,
+        operationID: operationID
+      )
     } catch {
       SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=queue_unexpected operation=\(operationID, privacy: .public)")
-      await finish(activityID: activityID, status: .failed, generation: generation, operationID: operationID)
+      enqueueActivityStatusSequence(
+        activityID: activityID,
+        statuses: [.failed],
+        generation: generation,
+        operationID: operationID
+      )
     }
   }
 
-  private func finish(
+  private func enqueueActivityStatusSequence(
     activityID: String,
-    status: SaveLinkQuickSaveStatus,
+    statuses: [SaveLinkQuickSaveStatus],
     generation: UInt64,
+    operationID: String,
+    requiresCurrentGeneration: Bool = false
+  ) {
+    let previous = pendingActivityUpdates[activityID]
+    let ticket = UUID()
+    let update = Task { [weak self] in
+      await previous?.value
+      guard let self else { return }
+      await self.submitActivityStatusSequence(
+        activityID: activityID,
+        statuses: statuses,
+        generation: generation,
+        requiresCurrentGeneration: requiresCurrentGeneration,
+        operationID: operationID
+      )
+      if self.pendingActivityUpdateTickets[activityID] == ticket {
+        self.pendingActivityUpdates.removeValue(forKey: activityID)
+        self.pendingActivityUpdateTickets.removeValue(forKey: activityID)
+      }
+    }
+    pendingActivityUpdates[activityID] = update
+    pendingActivityUpdateTickets[activityID] = ticket
+  }
+
+  private func submitActivityStatusSequence(
+    activityID: String,
+    statuses: [SaveLinkQuickSaveStatus],
+    generation: UInt64,
+    requiresCurrentGeneration: Bool,
     operationID: String
   ) async {
-    let didSubmitResultStatus = await updateActivity(activityID: activityID, status: status, operationID: operationID)
-    activeActivityIDs.remove(activityID)
-    guard didSubmitResultStatus else {
-      SaveAppQuickSaveLog.logger.error("event=quick_save.operation.visual_update_unavailable operation=\(operationID, privacy: .public)")
+    guard !requiresCurrentGeneration || requestGenerationByActivity[activityID] == generation else {
+      SaveAppQuickSaveLog.logger.notice("event=activity.update.skipped reason=newer_operation operation=\(operationID, privacy: .public)")
       return
     }
 
-    // Keep the committed result on screen longer to give ActivityKit time to render it.
-    // This is best-effort; ActivityKit does not confirm that a submitted update was displayed.
-    SaveAppQuickSaveLog.logger.notice("event=activity.result_display.wait_started operation=\(operationID, privacy: .public)")
-    do {
-      try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)
-    } catch {
-      SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.skipped reason=wait_cancelled operation=\(operationID, privacy: .public)")
+    for status in statuses {
+      guard !requiresCurrentGeneration || requestGenerationByActivity[activityID] == generation else {
+        SaveAppQuickSaveLog.logger.notice("event=activity.update.skipped reason=newer_operation operation=\(operationID, privacy: .public)")
+        return
+      }
+      let submitted = await updateActivity(activityID: activityID, status: status, operationID: operationID)
+      guard status == .queued || status == .alreadyQueued || status == .invalid || status == .failed else { continue }
+      guard submitted else {
+        SaveAppQuickSaveLog.logger.error("event=quick_save.operation.visual_update_unavailable operation=\(operationID, privacy: .public)")
+        return
+      }
+
+      // This timer only restores the ready label after a real terminal result;
+      // it is not used to update link times or run while the app is suspended.
+      SaveAppQuickSaveLog.logger.notice("event=activity.result_display.wait_started operation=\(operationID, privacy: .public)")
+      Task { [weak self] in
+        do {
+          try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)
+        } catch {
+          SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.skipped reason=wait_cancelled operation=\(operationID, privacy: .public)")
+          return
+        }
+        await self?.enqueueReadyRestoreIfCurrent(
+          activityID: activityID,
+          generation: generation,
+          operationID: operationID
+        )
+      }
       return
     }
-    guard requestGenerationByActivity[activityID] == generation,
-          !activeActivityIDs.contains(activityID) else {
+  }
+
+  private func enqueueReadyRestoreIfCurrent(activityID: String, generation: UInt64, operationID: String) {
+    guard requestGenerationByActivity[activityID] == generation else {
       SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.skipped reason=newer_operation operation=\(operationID, privacy: .public)")
       return
     }
     SaveAppQuickSaveLog.logger.notice("event=activity.ready_restore.started operation=\(operationID, privacy: .public)")
-    _ = await updateActivity(activityID: activityID, status: .ready, operationID: operationID)
+    enqueueActivityStatusSequence(
+      activityID: activityID,
+      statuses: [.ready],
+      generation: generation,
+      operationID: operationID,
+      requiresCurrentGeneration: true
+    )
   }
 
   private func updateActivity(
@@ -176,7 +284,6 @@ private actor SaveLinkQuickSaveCoordinator {
       SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=no_activity_available operation=\(operationID, privacy: .public)")
       return false
     }
-
     let matchingActivities = activities.filter { $0.id == activityID }
     guard !matchingActivities.isEmpty else {
       SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=activity_id_not_found operation=\(operationID, privacy: .public)")
@@ -187,47 +294,117 @@ private actor SaveLinkQuickSaveCoordinator {
       return false
     }
     guard let activity = matchingActivities.first,
+          activity.activityState == .active,
           activity.content.state.name == "SaveAppSaveLink" else {
       SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=state_name_mismatch operation=\(operationID, privacy: .public)")
       return false
     }
-
-    SaveAppQuickSaveLog.logger.notice("event=activity.lookup.result=found operation=\(operationID, privacy: .public)")
     guard let propsJSON = activity.content.state.props,
-          let propsData = propsJSON.data(using: .utf8) else {
-      SaveAppQuickSaveLog.logger.error("event=activity.props.result=missing operation=\(operationID, privacy: .public)")
-      return false
-    }
-    guard var props = (try? JSONSerialization.jsonObject(with: propsData)) as? [String: Any] else {
+          let propsData = propsJSON.data(using: .utf8),
+          let baseProps = (try? JSONSerialization.jsonObject(with: propsData)) as? [String: Any] else {
       SaveAppQuickSaveLog.logger.error("event=activity.props.result=decode_failed operation=\(operationID, privacy: .public)")
       return false
     }
-    let previousStatus = props["quickSaveStatus"] as? String ?? "unknown"
+    let previousStatus = baseProps["quickSaveStatus"] as? String ?? "unknown"
     SaveAppQuickSaveLog.logger.notice("event=activity.state.transition previous=\(previousStatus, privacy: .public) requested=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
 
-    props["quickSaveStatus"] = status.rawValue
-    let defaults = UserDefaults(suiteName: SaveAppQuickSaveQueue.appGroupIdentifier)
-    let showRecentLinks = defaults?.bool(forKey: SaveAppQuickSaveQueue.lockScreenRecentLinksVisibleKey) ?? false
-    let recentQuickSaveLinks: [[String: Any]] = showRecentLinks
-      ? SaveAppQuickSaveQueue.lockScreenRecentLinkActivityProps()
-      : []
-    props["showRecentQuickSaveLinks"] = showRecentLinks
-    props["recentQuickSaveLinks"] = recentQuickSaveLinks
-    guard let updatedData = try? JSONSerialization.data(withJSONObject: props, options: [.sortedKeys]),
-          let updatedProps = String(data: updatedData, encoding: .utf8) else {
-      SaveAppQuickSaveLog.logger.error("event=activity.update.result=serialization_failed operation=\(operationID, privacy: .public)")
-      return false
+    func makeState(
+      snapshot: QuickSaveLockScreenRecentLinksSnapshot?,
+      showRecentLinks: Bool,
+      removingFaviconsIfOversized: Bool = false
+    ) -> LiveActivityAttributes.ContentState? {
+      var props = baseProps
+      props["quickSaveStatus"] = status.rawValue
+      props["showRecentQuickSaveLinks"] = showRecentLinks
+      props["recentQuickSaveLinksRevision"] = snapshot?.revision ?? (baseProps["recentQuickSaveLinksRevision"] as? Int64 ?? 0)
+      props["recentQuickSaveLinks"] = showRecentLinks ? snapshot?.activityProps() ?? [] : []
+
+      func encode(_ value: [String: Any]) -> LiveActivityAttributes.ContentState? {
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              let encodedProps = String(data: data, encoding: .utf8) else { return nil }
+        return LiveActivityAttributes.ContentState(name: activity.content.state.name, props: encodedProps)
+      }
+
+      guard var state = encode(props) else { return nil }
+      let encoder = JSONEncoder()
+      if let encoded = try? encoder.encode(state),
+         encoded.count > Self.maximumActivityContentStateBytes,
+         showRecentLinks,
+         removingFaviconsIfOversized {
+        let compactLinks = (props["recentQuickSaveLinks"] as? [[String: Any]] ?? []).map { link -> [String: Any] in
+          var compact = link
+          compact.removeValue(forKey: "faviconUri")
+          return compact
+        }
+        props["recentQuickSaveLinks"] = compactLinks
+        guard let compactState = encode(props) else { return nil }
+        state = compactState
+      }
+      guard let encodedState = try? encoder.encode(state),
+            encodedState.count <= Self.maximumActivityContentStateBytes else { return nil }
+      return state
     }
 
-    let state = LiveActivityAttributes.ContentState(
-      name: activity.content.state.name,
-      props: updatedProps
-    )
-    SaveAppQuickSaveLog.logger.notice("event=activity.update.started state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
-    await activity.update(ActivityContent(state: state, staleDate: nil))
-    defaults?.set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)
-    SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
-    return true
+    for attempt in 0..<3 {
+      guard activity.activityState == .active else {
+        SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=activity_no_longer_active operation=\(operationID, privacy: .public)")
+        return false
+      }
+      guard let history = SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate() else {
+        SaveAppQuickSaveLog.logger.error("event=activity.update.result=history_unavailable operation=\(operationID, privacy: .public)")
+        return false
+      }
+      guard !history.showRecentLinks || history.snapshot != nil else {
+        SaveAppQuickSaveLog.logger.error("event=activity.update.result=history_unavailable operation=\(operationID, privacy: .public)")
+        return false
+      }
+      guard let state = makeState(
+        snapshot: history.snapshot,
+        showRecentLinks: history.showRecentLinks,
+        removingFaviconsIfOversized: true
+      ) else {
+        SaveAppQuickSaveLog.logger.error("event=activity.update.result=content_state_invalid_or_too_large operation=\(operationID, privacy: .public)")
+        return false
+      }
+
+      SaveAppQuickSaveLog.logger.notice("event=activity.update.started state=\(status.rawValue, privacy: .public) history_revision=\(history.snapshot?.revision ?? 0, privacy: .public) operation=\(operationID, privacy: .public)")
+      await activity.update(ActivityContent(state: state, staleDate: nil))
+
+      guard let latestHistory = SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate() else {
+        SaveAppQuickSaveLog.logger.error("event=activity.update.result=reconciliation_unavailable operation=\(operationID, privacy: .public)")
+        return false
+      }
+      let privacyChanged = latestHistory.showRecentLinks != history.showRecentLinks
+      let revisionChanged = history.showRecentLinks &&
+        latestHistory.snapshot?.revision != history.snapshot?.revision
+      if !privacyChanged && !revisionChanged {
+        UserDefaults(suiteName: SaveAppQuickSaveQueue.appGroupIdentifier)?
+          .set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)
+        SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) history_revision=\(history.snapshot?.revision ?? 0, privacy: .public) delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
+        return true
+      }
+      SaveAppQuickSaveLog.logger.notice("event=activity.update.reconcile attempt=\(attempt + 1, privacy: .public) privacy_changed=\(privacyChanged, privacy: .public) revision_changed=\(revisionChanged, privacy: .public) operation=\(operationID, privacy: .public)")
+      if attempt == 2 && history.showRecentLinks && !latestHistory.showRecentLinks {
+        // Privacy revocation takes priority over a revision retry limit: submit
+        // one final redacted state instead of leaving an older visible summary.
+        guard let redactedState = makeState(
+          snapshot: latestHistory.snapshot,
+          showRecentLinks: false
+        ) else { return false }
+        await activity.update(ActivityContent(state: redactedState, staleDate: nil))
+        guard let privacyCheck = SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate() else {
+          return false
+        }
+        if !privacyCheck.showRecentLinks {
+          UserDefaults(suiteName: SaveAppQuickSaveQueue.appGroupIdentifier)?
+            .set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)
+          SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) history_redacted=true delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
+          return true
+        }
+      }
+    }
+    SaveAppQuickSaveLog.logger.error("event=activity.update.result=reconciliation_limit operation=\(operationID, privacy: .public)")
+    return false
   }
 
   @MainActor

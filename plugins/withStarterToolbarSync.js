@@ -1160,8 +1160,8 @@ function patchSharedToolbarHeaderRegistration(screensRoot) {
 function patchRNScreens(
   screensRoot = path.dirname(require.resolve('react-native-screens/package.json')),
 ) {
-  if (require(path.join(screensRoot, 'package.json')).version !== '4.30.0') {
-    throw new Error('A integração de toolbar foi validada para react-native-screens 4.30.0.');
+  if (require(path.join(screensRoot, 'package.json')).version !== '4.30.1') {
+    throw new Error('A integração de toolbar foi validada para react-native-screens 4.30.1.');
   }
 
   patchFile(

@@ -49,7 +49,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSavePlugin).toContain('saveapp_configure_expo_widgets_quick_save');
     expect(quickSavePlugin).toContain('refusing an incomplete or ambiguous native integration');
     expect(quickSavePlugin).not.toMatch(/path\.(?:join|resolve)\([^)]*node_modules|writeFileSync\([^,\n]*node_modules/);
-    expect(quickSavePodHelper).toContain("SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.25'");
+    expect(quickSavePodHelper).toContain("SAVEAPP_EXPO_WIDGETS_VERSION = '58.0.26'");
     expect(quickSavePodHelper).toContain('Widgets/Buttons.swift');
     expect(quickSavePodHelper).toContain('renderer replacement is incomplete');
     expect(quickSavePodHelper).toContain('SaveAppQuickSaveIntent.swift');
@@ -189,13 +189,14 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntent).not.toMatch(/console\.|print\(|clipboard\.value.*(props|ContentState)/i);
     expect(activityManager).toContain("quickSaveStatus: 'ready'");
-    expect(activityManager).toContain('recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)');
+    expect(activityManager).toContain('recentQuickSaveLinksRevision: recentProps.revision');
+    expect(activityManager).toContain('recentQuickSaveLinks: recentProps.links');
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("source: 'dynamic-island-expanded'");
     expect(activityLayout).toContain("<Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>" );
     expect(activityLayout.match(/<Link destination=\{props\.expandedHomeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
-    expect(activityLayout).toContain('import { Button, Divider, HStack, Image, Link, Spacer, Text, VStack }');
+    expect(activityLayout).toContain('monospacedDigit');
   });
 
   test('renders icon-only quick-save states in the same fixed accessible button', () => {
@@ -245,13 +246,11 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).not.toContain('.padding(.top, 8)');
     expect(quickSaveBranch).not.toMatch(/\b(?:Text|Label)\(/);
     expect(quickSaveIntent).toContain('terminalStatusDisplayNanoseconds: UInt64 = 5_000_000_000');
-    expect(quickSaveIntent).toContain('guard didSubmitResultStatus else {');
+    expect(quickSaveIntent).toContain('guard submitted else {');
     expect(quickSaveIntent).toContain('try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
-    const resultSubmitIndex = quickSaveIntent.indexOf('let didSubmitResultStatus = await updateActivity');
     const displayWindowIndex = quickSaveIntent.indexOf('Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
-    const readyResetIndex = quickSaveIntent.indexOf('status: .ready', displayWindowIndex);
-    expect(resultSubmitIndex).toBeGreaterThanOrEqual(0);
-    expect(displayWindowIndex).toBeGreaterThan(resultSubmitIndex);
+    const readyResetIndex = quickSaveIntent.indexOf('statuses: [.ready]', displayWindowIndex);
+    expect(displayWindowIndex).toBeGreaterThanOrEqual(0);
     expect(readyResetIndex).toBeGreaterThan(displayWindowIndex);
   });
 
@@ -263,11 +262,12 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     const lookupFailureEvents = quickSaveIntent
       .split('\n')
       .filter((line) => line.includes('event=activity.lookup.result=not_found'));
-    expect(lookupFailureEvents).toHaveLength(4);
+    expect(lookupFailureEvents).toHaveLength(5);
     expect(lookupFailureEvents.join('\n')).toContain('reason=no_activity_available');
     expect(lookupFailureEvents.join('\n')).toContain('reason=activity_id_not_found');
     expect(lookupFailureEvents.join('\n')).toContain('reason=activity_id_ambiguous');
     expect(lookupFailureEvents.join('\n')).toContain('reason=state_name_mismatch');
+    expect(lookupFailureEvents.join('\n')).toContain('reason=activity_no_longer_active');
     expect(lookupFailureEvents.join('\n')).not.toMatch(/activityID|bundleIdentifier|bundleURL|\.path/);
     expect(lookupFailureEvents.join('\n')).not.toMatch(/(?:available|matching)_count=/);
     expect(quickSaveIntent).toContain('let matchingActivities = activities.filter { $0.id == activityID }');
@@ -278,10 +278,13 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
   test('reads clipboard after explicit action and confirms only durable App Group queue writes', () => {
     const intentReadIndex = quickSaveIntent.indexOf('readClipboardAfterExplicitAction(operationID: operationID)');
     const queueWriteIndex = quickSaveIntent.indexOf('SaveAppQuickSaveQueue.enqueue(normalized)');
-    const queuedStatusIndex = quickSaveIntent.indexOf('status: .queued');
+    const queuedStatusIndex = quickSaveIntent.indexOf('statuses: [.processing, .queued]');
     expect(intentReadIndex).toBeGreaterThanOrEqual(0);
     expect(queueWriteIndex).toBeGreaterThan(intentReadIndex);
     expect(queuedStatusIndex).toBeGreaterThan(queueWriteIndex);
+    expect(quickSaveIntent).toContain('case .enqueued(let lockScreenHistoryUpdated)');
+    expect(quickSaveIntent).toContain('case .alreadyQueued(let lockScreenHistoryUpdated)');
+    expect(quickSaveIntent).toContain('guard lockScreenHistoryUpdated else {');
     expect(quickSaveIntent).not.toContain('SaveLinkQuickSaveSQLite.insertOrFindExisting');
     expect(quickSaveIntent).toContain('UIPasteboard.general');
     expect(quickSaveIntent).toContain('let hasURL = pasteboard.hasURLs');
@@ -330,18 +333,18 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveSQLite).not.toMatch(/URLSession|URLRequest|withTask\(|fetch\(/);
     expect(quickSaveSQLite).not.toMatch(/CREATE TABLE|ALTER TABLE|DROP TABLE/);
 
-    expect(quickSaveIntent).toContain('status: .queued');
-    expect(quickSaveIntent).toContain('status: .alreadyQueued');
-    expect(quickSaveIntent).toContain('status: .invalid');
-    expect(quickSaveIntent).toContain('status: .failed');
-    expect(quickSaveIntent).toContain('status: .processing');
+    expect(quickSaveIntent).toContain('statuses: [.processing, .queued]');
+    expect(quickSaveIntent).toContain('statuses: [.processing, .alreadyQueued]');
+    expect(quickSaveIntent).toContain('statuses: [.invalid]');
+    expect(quickSaveIntent).toContain('statuses: [.failed]');
     expect(quickSaveIntent).toContain('requestGenerationByActivity');
-    expect(quickSaveIntent).toContain('activeActivityIDs.insert(activityID).inserted');
-    expect(quickSaveIntent).toContain('if requestGenerationByActivity[activityID] == generation');
+    expect(quickSaveIntent).toContain('pendingOperations[activityID] = operation');
+    expect(quickSaveIntent).toContain('await previous?.value');
+    expect(quickSaveIntent).toContain('requestGenerationByActivity[activityID] == generation');
     expect(quickSaveIntent).toContain('stage=queue');
     expect(quickSaveIntent).not.toContain('sqlite_code=');
     expect(quickSaveIntent).toContain('event=intent.perform.entered');
-    expect(quickSaveIntent).toContain('event=intent.rejected reason=already_processing');
+    expect(quickSaveIntent).not.toContain('event=intent.rejected reason=already_processing');
     expect(quickSaveIntent).toContain('generation: generation');
     expect(quickSaveIntent).toContain('$0.id == activityID');
     expect(quickSaveIntent).toContain('activity.content.state.name == "SaveAppSaveLink"');
@@ -350,7 +353,8 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveQueueSwift).toContain('forSecurityApplicationGroupIdentifier: appGroupIdentifier');
     expect(quickSaveQueueSwift).toContain('operationID: UUID().uuidString');
     expect(quickSaveQueueSwift).not.toContain('UUID(uuidString: operationID)');
-    expect(quickSaveQueueSwift).toContain('flock(descriptor, LOCK_EX)');
+    expect(quickSaveQueueSwift).toContain('flock(descriptor, LOCK_EX | LOCK_NB)');
+    expect(quickSaveQueueSwift).toContain('fileLockTimeoutNanoseconds');
     expect(quickSaveQueueSwift).toContain('Darwin.rename(sourcePath, destinationPath)');
     expect(quickSaveQueueSwift).toContain('fsync(descriptor)');
     expect(quickSaveQueueSwift).toContain('completeUntilFirstUserAuthentication');
@@ -422,7 +426,8 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(clipboardModule).toContain('storeQuickSaveLockScreenFavicon');
     expect(clipboardNative).toContain('QuickSaveLockScreenRecentLinks.json');
     expect(clipboardNative).toContain('Favicons');
-    expect(clipboardNative).toContain('flock(descriptor, LOCK_EX)');
+    expect(clipboardNative).toContain('flock(descriptor, LOCK_EX | LOCK_NB)');
+    expect(clipboardNative).toContain('fileLockTimeoutNanoseconds');
     expect(clipboardNative).toContain('atomicWrite(pngData, to: imageURL, in: faviconDirectory)');
     expect(clipboardNative).toContain('CGImageSourceCreateThumbnailAtIndex');
     expect(clipboardNative).toContain('maximumSourceBytes = 256 * 1_024');
@@ -432,10 +437,16 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityManager).toContain('faviconUri');
     expect(activityLayout).toContain('uiImage={link.faviconUri}');
     expect(activityLayout).toContain('systemName="globe"');
-    expect(quickSaveIntent).toContain('SaveAppQuickSaveQueue.lockScreenRecentLinkActivityProps()');
+    expect(quickSaveIntent).toContain('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
     expect(quickSaveIntent).not.toMatch(/URLSession|URLRequest|fetch\(/);
-    expect(quickSaveQueueSwift).toContain('validFaviconURL(fileName: fileName, id: link.id)');
+    expect(quickSaveQueueSwift).toContain('validFaviconURLForActivity(fileName: fileName, id: link.id)');
     expect(quickSaveQueueSwift).toContain('pruneObsoleteFavicons');
+    expect(quickSaveQueueSwift).toContain('lockScreenRecentLinksVersion = 2');
+    expect(quickSaveQueueSwift).toContain('lockScreenHistoryForActivityUpdate()');
+    expect(quickSaveQueueSwift).toContain('return .enqueued(lockScreenHistoryUpdated: historyUpdated)');
+    expect(quickSaveQueueSwift).toContain('return .alreadyQueued(lockScreenHistoryUpdated: historyUpdated)');
+    expect(quickSaveQueueSwift).toContain('private static func updateLockScreenRecentLinksBestEffort(');
+    expect(quickSaveQueueSwift).toContain(') -> Bool {');
     expect(quickSaveQueueSwift).toContain('faviconUri');
     expect(quickSaveQueueSwift.indexOf('var links = readLockScreenRecentLinks(in: directory)?.links ?? []'))
       .toBeLessThan(quickSaveQueueSwift.indexOf('let entry = QuickSaveLockScreenRecentLink('));
@@ -444,6 +455,64 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(savedContentLibrary).toContain('LIMIT 256;');
     expect(activityManager).toContain('activity.update({');
     expect(activityManager).not.toContain('factory.start({');
+  });
+
+  test('serializes nearby intents and updates the existing Activity from the latest versioned App Group snapshot', () => {
+    const queueConfirm = quickSaveIntent.indexOf('SaveAppQuickSaveQueue.enqueue(normalized)');
+    const historyLockedUpdate = quickSaveIntent.indexOf('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
+    const activitySubmission = quickSaveIntent.indexOf('await activity.update(ActivityContent(state: state, staleDate: nil))');
+    expect(queueConfirm).toBeGreaterThanOrEqual(0);
+    expect(historyLockedUpdate).toBeGreaterThan(queueConfirm);
+    expect(activitySubmission).toBeGreaterThan(historyLockedUpdate);
+    expect(quickSaveQueueSwift).toContain('let revision: Int64');
+    expect(quickSaveQueueSwift).toContain('addingReportingOverflow(1)');
+    expect(quickSaveIntent).toContain('props["recentQuickSaveLinksRevision"]');
+    expect(quickSaveIntent).toContain('activity.activityState == .active');
+    expect(quickSaveIntent).toContain('maximumActivityContentStateBytes = 4 * 1_024');
+    expect(quickSaveIntent).toContain('encodedState.count <= Self.maximumActivityContentStateBytes');
+    expect(quickSaveIntent).toContain('enqueueReadyRestoreIfCurrent');
+    expect(quickSaveIntent).toContain('requestGenerationByActivity[activityID] == generation');
+    expect(activityManager).toContain('serializeActivityUpdate');
+    expect(activityManager).toContain('attempt < 3');
+    expect(clipboardNative).toContain('static func setRecentHistoryVisible(_ visible: Bool) -> Bool');
+  });
+
+  test('returns after durable Quick Save and serializes best-effort ActivityKit updates without holding the file lock', () => {
+    const queueWrite = quickSaveIntent.indexOf('SaveAppQuickSaveQueue.enqueue(normalized)');
+    const processingUpdate = quickSaveIntent.indexOf('statuses: [.processing, .queued]');
+    const historyRead = quickSaveIntent.indexOf('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
+    const activityAwait = quickSaveIntent.indexOf('await activity.update(ActivityContent(state: state, staleDate: nil))');
+    const performSeriallyStart = quickSaveIntent.indexOf('private func performSerially(');
+    const performSeriallyEnd = quickSaveIntent.indexOf('private func enqueueActivityStatusSequence(', performSeriallyStart);
+    const performSerially = quickSaveIntent.slice(performSeriallyStart, performSeriallyEnd);
+    const historyReaderStart = quickSaveQueueSwift.indexOf('static func lockScreenHistoryForActivityUpdate()');
+    const historyReaderEnd = quickSaveQueueSwift.indexOf('private static func updateLockScreenRecentLinksBestEffort', historyReaderStart);
+    const historyReader = quickSaveQueueSwift.slice(historyReaderStart, historyReaderEnd);
+    const updateMethodStart = quickSaveIntent.indexOf('private func updateActivity(');
+    const updateMethodEnd = quickSaveIntent.indexOf('@MainActor', updateMethodStart);
+    const updateMethod = quickSaveIntent.slice(updateMethodStart, updateMethodEnd);
+
+    expect(queueWrite).toBeGreaterThanOrEqual(0);
+    expect(processingUpdate).toBeGreaterThan(queueWrite);
+    expect(historyRead).toBeGreaterThan(processingUpdate);
+    expect(activityAwait).toBeGreaterThan(historyRead);
+    expect(performSerially).not.toContain('await updateActivity(');
+    expect(performSerially).toContain('enqueueActivityStatusSequence(');
+    expect(performSerially).toContain('guard lockScreenHistoryUpdated else {');
+    expect(quickSaveIntent).toContain('pendingActivityUpdates[activityID] = update');
+    expect(quickSaveIntent).toContain('await previous?.value');
+    expect(quickSaveIntent).toContain('requiresCurrentGeneration: true');
+    expect(historyReader).toContain('withExclusiveFileLock(in: directory)');
+    expect(historyReader).not.toContain('await');
+    expect(historyReader).not.toContain('activity.update');
+    expect(updateMethod).toContain('latestHistory.snapshot?.revision != history.snapshot?.revision');
+    expect(updateMethod).toContain('privacyChanged');
+    expect(updateMethod).toContain('for attempt in 0..<3');
+    expect(updateMethod).toContain('reconciliation_limit');
+    expect(quickSaveQueueSwift).toContain('LOCK_EX | LOCK_NB');
+    expect(quickSaveQueueSwift).toContain('fileLockTimeoutNanoseconds');
+    expect(clipboardNative).toContain('LOCK_EX | LOCK_NB');
+    expect(clipboardNative).toContain('fileLockTimeoutNanoseconds');
   });
 
   test('uses persistent App Group metadata only to suppress the same automatic clipboard offer', () => {

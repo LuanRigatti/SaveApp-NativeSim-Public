@@ -25,21 +25,26 @@ describe('SaveApp identity and template boundary', () => {
     expect(rootPackage.dependencies).toEqual(packageJson.dependencies);
     expect(rootPackage.devDependencies).toEqual(packageJson.devDependencies);
     const expoPatches = {
-      '@expo/ui': ['~58.0.25', '58.0.25'],
-      expo: ['~58.0.21', '58.0.21'],
+      '@expo/metro-runtime': ['~58.0.16', '58.0.16'],
+      '@expo/ui': ['~58.0.26', '58.0.26'],
+      expo: ['~58.0.22', '58.0.22'],
+      'expo-blur': ['~58.0.5', '58.0.5'],
       'expo-asset': ['~58.0.19', '58.0.19'],
       'expo-constants': ['~58.0.14', '58.0.14'],
-      'expo-dev-client': ['~58.0.17', '58.0.17'],
+      'expo-dev-client': ['~58.0.18', '58.0.18'],
       'expo-file-system': ['~58.0.13', '58.0.13'],
       'expo-font': ['~58.0.11', '58.0.11'],
+      'expo-haptics': ['~58.0.7', '58.0.7'],
       'expo-image': ['~58.0.18', '58.0.18'],
       'expo-image-manipulator': ['~58.0.16', '58.0.16'],
       'expo-linking': ['~58.0.15', '58.0.15'],
       'expo-media-library': ['~58.0.13', '58.0.13'],
-      'expo-router': ['~58.0.28', '58.0.28'],
+      'expo-router': ['~58.0.29', '58.0.29'],
+      'expo-sqlite': ['~58.0.15', '58.0.15'],
       'expo-splash-screen': ['~58.0.12', '58.0.12'],
+      'expo-status-bar': ['~58.0.4', '58.0.4'],
       'expo-video': ['~58.0.13', '58.0.13'],
-      'expo-widgets': ['~58.0.25', '58.0.25'],
+      'expo-widgets': ['~58.0.26', '58.0.26'],
       'jest-expo': ['~58.0.13', '58.0.13'],
     };
 
@@ -49,12 +54,16 @@ describe('SaveApp identity and template boundary', () => {
       expect(lockfile.packages[`node_modules/${name}`]?.version).toBe(resolved);
     }
 
-    expect(packageJson.dependencies.expo).toBe('~58.0.21');
+    expect(packageJson.dependencies.expo).toBe('~58.0.22');
     expect(packageJson.dependencies['react-native']).toBe('0.88.1');
     expect(lockfile.packages['node_modules/react-native']?.version).toBe('0.88.1');
-    expect(packageJson.dependencies['react-native-screens']).toBe('4.30.0');
+    expect(packageJson.dependencies['react-native-screens']).toBe('~4.30.1');
+    expect(lockfile.packages['node_modules/react-native-screens']?.version).toBe('4.30.1');
+    const toolbarSyncPlugin = fs.readFileSync(path.join(root, 'plugins/withStarterToolbarSync.js'), 'utf8');
+    expect(toolbarSyncPlugin).toContain("version !== '4.30.1'");
+    expect(toolbarSyncPlugin).toContain('A integração de toolbar foi validada para react-native-screens 4.30.1.');
     const bottomSheetPatch = fs.readFileSync(path.join(root, 'scripts/patch-expo-ui-bottom-sheet.js'), 'utf8');
-    expect(bottomSheetPatch).toContain("EXPECTED_UI_VERSION = '58.0.25'");
+    expect(bottomSheetPatch).toContain("EXPECTED_UI_VERSION = '58.0.26'");
     expect(bottomSheetPatch).toContain("uiVersion !== EXPECTED_UI_VERSION");
   });
 
