@@ -28,6 +28,14 @@ struct SaveLinkQuickSaveIntent: LiveActivityIntent {
   static var isDiscoverable = false
   static var openAppWhenRun = false
 
+#if compiler(>=6.3)
+  // ExpoWidgets is linked into both SaveApp and ExpoWidgetsTarget. On iOS 27,
+  // explicitly keep this shared-framework intent in the process that owns the
+  // ActivityKit activity instead of relying on the system's target heuristic.
+  @available(iOS 27.0, *)
+  static var allowedExecutionTargets: IntentExecutionTargets { .main }
+#endif
+
   @Parameter(title: "Activity ID")
   var activityID: String?
 

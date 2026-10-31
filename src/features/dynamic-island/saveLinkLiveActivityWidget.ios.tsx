@@ -5,8 +5,10 @@ import {
   font,
   foregroundStyle,
   frame,
+  layoutPriority,
   lineLimit,
   monospacedDigit,
+  minimumScaleFactor,
   padding,
   resizable,
   shapes,
@@ -72,8 +74,8 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
     ? (props.recentQuickSaveLinks ?? []).slice(0, 3)
     : [];
   const recentQuickSaveLinksCountLabel = recentQuickSaveLinks.length === 1
-    ? '1 recente'
-    : `${recentQuickSaveLinks.length} recentes`;
+    ? '1 link'
+    : `${recentQuickSaveLinks.length} links`;
 
   return {
     banner: (
@@ -177,12 +179,20 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
     ),
     expandedCenter: (
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
-        <VStack alignment="leading" spacing={2} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
+        <VStack
+          alignment="leading"
+          spacing={2}
+          modifiers={[
+            frame({ height: 48, alignment: 'center' }),
+            frame({ maxWidth: Infinity, alignment: 'leading' }),
+          ]}
+        >
           <Text
             modifiers={[
               font({ weight: 'semibold', textStyle: 'headline' }),
               foregroundStyle('#FFFFFF'),
               lineLimit(1),
+              minimumScaleFactor(0.9),
             ]}
           >
             {quickSaveCenterTitle}
@@ -193,6 +203,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
                 font({ textStyle: 'caption' }),
                 foregroundStyle('#8E8E93'),
                 lineLimit(1),
+                minimumScaleFactor(0.9),
               ]}
             >
               {quickSaveCenterSubtitle}
@@ -227,6 +238,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
               font({ textStyle: 'caption2' }),
               foregroundStyle('#8E8E93'),
               lineLimit(1),
+              minimumScaleFactor(0.85),
             ]}
           >
             {recentQuickSaveLinksCountLabel}
@@ -237,6 +249,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
               alignment="center"
               spacing={3}
               modifiers={[
+                layoutPriority(1),
                 padding({ horizontal: 5, vertical: 4 }),
                 background('#1C1C1E', shapes.capsule()),
               ]}

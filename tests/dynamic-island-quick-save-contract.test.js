@@ -105,6 +105,19 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(appIntentsVerifier).toContain('verifySaveAppQuickSaveAppIntentsPackage(');
   });
 
+  test('pins the shared Quick Save intent to the app process on iOS 27 without duplicating its implementation', () => {
+    const executionTargetBlock = quickSaveIntent.match(/#if compiler\(>=6\.3\)([\s\S]*?)#endif/)?.[1] ?? '';
+
+    expect(executionTargetBlock).toContain('@available(iOS 27.0, *)');
+    expect(executionTargetBlock).toContain('static var allowedExecutionTargets: IntentExecutionTargets { .main }');
+    expect(quickSaveIntent).toContain('static var openAppWhenRun = false');
+    expect((quickSaveIntent.match(/struct SaveLinkQuickSaveIntent:\s*LiveActivityIntent/g) ?? [])).toHaveLength(1);
+    expect((quickSavePodHelper.match(/'modules\/dynamic-island-quick-save\/ios\/SaveAppQuickSaveIntent\.swift'/g) ?? [])).toHaveLength(1);
+    expect(quickSaveAppIntentsPackage).toContain('ExpoWidgetsQuickSaveAppIntentsPackage.self');
+    expect(quickSaveAppIntentsPackage).toContain('struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage');
+    expect(quickSaveIntent).toContain('Activity<LiveActivityAttributes>.activities');
+  });
+
   test('Swift Preflight tests Xcodeproj, AppIntents target membership, and Swift syntax before the native compile', () => {
     const preflightWorkflow = readSource('../.github/workflows/swift-preflight.yml');
     const fixtureTest = preflightWorkflow.indexOf('ruby tests/quick-save-xcodeproj-contract.rb');
@@ -185,6 +198,9 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveButton).toContain('LiveActivityUserInteraction(');
     expect(quickSaveIntent).toContain('struct SaveLinkQuickSaveIntent: LiveActivityIntent');
     expect(quickSaveIntent).toContain('static var openAppWhenRun = false');
+    expect(quickSaveIntent).toContain('#if compiler(>=6.3)');
+    expect(quickSaveIntent).toContain('@available(iOS 27.0, *)');
+    expect(quickSaveIntent).toContain('static var allowedExecutionTargets: IntentExecutionTargets { .main }');
     expect(quickSaveIntent).toContain('Activity<LiveActivityAttributes>.activities');
     expect(quickSaveIntent).toContain('activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntent).not.toMatch(/console\.|print\(|clipboard\.value.*(props|ContentState)/i);

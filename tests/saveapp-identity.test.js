@@ -89,10 +89,44 @@ describe('SaveApp identity and template boundary', () => {
     expect(fs.existsSync(path.join(root, 'plugins/withStarterToolbarSync.js'))).toBe(true);
   });
 
-  test('uses a SaveApp-owned opt-in for EAS project linking', () => {
+  test('permanently links the SaveApp EAS project and rejects a mismatched override', () => {
     const configPath = path.join(root, 'app.config.js');
     const appConfigSource = fs.readFileSync(configPath, 'utf8');
     expect(appConfigSource).toContain('process.env.SAVEAPP_EAS_PROJECT_ID');
     expect(appConfigSource).not.toMatch(/process\.env\.(?:STARTER_)?EAS_PROJECT_ID\b/);
+
+    const expectedProjectId = 'dfbb0a6a-a41f-4b57-a956-583264e6e162';
+    const previousProjectId = process.env.SAVEAPP_EAS_PROJECT_ID;
+    try {
+      process.env.SAVEAPP_EAS_PROJECT_ID = expectedProjectId;
+      let resolvedConfig;
+      jest.isolateModules(() => {
+        resolvedConfig = require(configPath).expo;
+      });
+      expect(resolvedConfig.owner).toBe('luanrigattis1-team');
+      expect(resolvedConfig.extra.eas.projectId).toBe(expectedProjectId);
+
+      process.env.SAVEAPP_EAS_PROJECT_ID = '00000000-0000-4000-8000-000000000000';
+      expect(() =>
+        jest.isolateModules(() => {
+          require(configPath);
+        }),
+      ).toThrow('must match the permanently linked SaveApp EAS project');
+    } finally {
+      if (previousProjectId === undefined) delete process.env.SAVEAPP_EAS_PROJECT_ID;
+      else process.env.SAVEAPP_EAS_PROJECT_ID = previousProjectId;
+    }
+  });
+
+  test('keeps the preview simulator profile as an internal Release app with bundled JavaScript', () => {
+    const easConfig = JSON.parse(fs.readFileSync(path.join(root, 'eas.json'), 'utf8'));
+    const preview = easConfig.build['preview-simulator'];
+    const development = easConfig.build['development-simulator'];
+
+    expect(preview.distribution).toBe('internal');
+    expect(preview.ios).toEqual({ simulator: true, buildConfiguration: 'Release' });
+    expect(preview.developmentClient).not.toBe(true);
+    expect(development.developmentClient).toBe(true);
+    expect(development.ios.simulator).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const pkg = require(path.join(root, 'package.json'));
+const expectedEasProjectId = 'dfbb0a6a-a41f-4b57-a956-583264e6e162';
 const prohibitedDependencies = [
   'firebase',
   '@react-native-google-signin/google-signin',
@@ -438,8 +439,11 @@ if (resolvedAppConfig) {
   ) {
     fail('app.config.js must use the coordinated SaveApp identity');
   }
-  if (resolvedAppConfig.extra?.eas?.projectId) {
-    fail('app.config.js must remain unlinked until a SaveApp-owned EAS project is explicitly configured');
+  if (
+    resolvedAppConfig.owner !== 'luanrigattis1-team' ||
+    resolvedAppConfig.extra?.eas?.projectId !== expectedEasProjectId
+  ) {
+    fail('app.config.js must link the independent SaveApp EAS project owned by luanrigattis1-team');
   }
   if (resolvedAppConfig.extra?.saveAppDemo !== true) {
     fail('app.config.js must identify the UI demonstration app');
@@ -461,6 +465,29 @@ if (resolvedAppConfig) {
   ) {
     fail('expo-widgets must use the SaveApp App Group without APNs, frequent updates, or unrelated widgets');
   }
+}
+
+try {
+  const easConfig = JSON.parse(fs.readFileSync(path.join(root, 'eas.json'), 'utf8'));
+  const previewSimulator = easConfig.build?.['preview-simulator'];
+  const developmentSimulator = easConfig.build?.['development-simulator'];
+  if (
+    previewSimulator?.distribution !== 'internal' ||
+    previewSimulator?.ios?.simulator !== true ||
+    previewSimulator?.ios?.buildConfiguration !== 'Release' ||
+    previewSimulator?.developmentClient === true
+  ) {
+    fail('preview-simulator must produce an internal Release build for iOS Simulator without a development client');
+  }
+  if (
+    developmentSimulator?.developmentClient !== true ||
+    developmentSimulator?.distribution !== 'internal' ||
+    developmentSimulator?.ios?.simulator !== true
+  ) {
+    fail('development-simulator profile must remain an internal iOS Simulator development client');
+  }
+} catch (error) {
+  fail('eas.json could not be validated: ' + error.message);
 }
 
 const quickSaveNativeSources = [
@@ -557,6 +584,8 @@ const queueHistoryConfirmationIndex = quickSaveQueueSource.indexOf(
 );
 if (
   !quickSaveIntentSource.includes('LiveActivityIntent') ||
+  !quickSaveIntentSource.includes('#if compiler(>=6.3)') ||
+  !quickSaveIntentSource.includes('static var allowedExecutionTargets: IntentExecutionTargets { .main }') ||
   !quickSaveIntentSource.includes('public struct ExpoWidgetsQuickSaveAppIntentsPackage: AppIntentsPackage') ||
   !quickSaveAppIntentsPackageSource.includes('struct SaveAppQuickSaveAppIntentsPackage: AppIntentsPackage') ||
   !quickSaveAppIntentsPackageSource.includes('ExpoWidgetsQuickSaveAppIntentsPackage.self') ||
@@ -621,8 +650,9 @@ if (
   expandedLeadingLayout.includes('<Divider') ||
   liveActivityLayoutSource.includes('square.on.square') ||
   !liveActivityLayoutSource.includes('expandedBottom: recentQuickSaveLinks.length > 0 ? (') ||
-  !liveActivityLayoutSource.includes("? '1 recente'") ||
-  !liveActivityLayoutSource.includes(': `${recentQuickSaveLinks.length} recentes`') ||
+  !liveActivityLayoutSource.includes("? '1 link'") ||
+  !liveActivityLayoutSource.includes(': `${recentQuickSaveLinks.length} links`') ||
+  !liveActivityLayoutSource.includes('frame({ height: 48, alignment: \'center\' })') ||
   !liveActivityLayoutSource.includes("? 'Pronto para salvar'") ||
   !liveActivityLayoutSource.includes('date={new Date(link.createdAt)}') ||
   !liveActivityLayoutSource.includes('dateStyle="time"') ||

@@ -229,7 +229,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(expandedLeading).not.toContain('padding({ top: 8 })');
     expect(layoutSource).toContain('Salvar link');
     expect(layoutSource).toContain("? 'Pronto para salvar'");
-    expect(expandedCenter).toContain('VStack alignment="leading"');
+    expect(expandedCenter).toMatch(/<VStack\s+alignment="leading"/);
+    expect(expandedCenter).toContain('frame({ height: 48, alignment: \'center\' })');
     expect(expandedCenter).toContain("foregroundStyle('#FFFFFF')");
     expect(expandedCenter).not.toContain('Toque para salvar');
     expect(expandedCenter).not.toContain('Toque para abrir');
@@ -252,8 +253,10 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(expandedBottom).toContain('{recentQuickSaveLinksCountLabel}');
     expect(expandedBottom).toContain('frame({ maxWidth: 56 })');
     expect(layoutSource).toContain("const recentQuickSaveLinksCountLabel = recentQuickSaveLinks.length === 1");
-    expect(layoutSource).toContain("? '1 recente'");
-    expect(layoutSource).toContain(': `${recentQuickSaveLinks.length} recentes`');
+    expect(layoutSource).toContain("? '1 link'");
+    expect(layoutSource).toContain(': `${recentQuickSaveLinks.length} links`');
+    expect(expandedBottom).toContain('layoutPriority(1)');
+    expect(expandedBottom).toContain('minimumScaleFactor(0.85)');
     expect(expandedBottom).toContain('link.faviconUri');
     expect(expandedBottom).toContain('systemName="globe"');
     expect(expandedBottom).toContain("background('#1C1C1E', shapes.capsule())");

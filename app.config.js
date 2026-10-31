@@ -1,17 +1,16 @@
 const toolbarVariant = process.env.SAVEAPP_TOOLBAR_MORPH_VARIANT === 'B' ? 'B' : 'A';
-const saveAppEasProjectId = process.env.SAVEAPP_EAS_PROJECT_ID;
+const saveAppEasProjectId = 'dfbb0a6a-a41f-4b57-a956-583264e6e162';
+const saveAppEasProjectIdOverride = process.env.SAVEAPP_EAS_PROJECT_ID;
 
-if (
-  saveAppEasProjectId &&
-  !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(saveAppEasProjectId)
-) {
-  throw new Error('SAVEAPP_EAS_PROJECT_ID must be a UUID for the independently created SaveApp EAS project.');
+if (saveAppEasProjectIdOverride && saveAppEasProjectIdOverride !== saveAppEasProjectId) {
+  throw new Error('SAVEAPP_EAS_PROJECT_ID must match the permanently linked SaveApp EAS project.');
 }
 
 module.exports = {
   expo: {
     name: 'SaveApp',
     slug: 'saveapp',
+    owner: 'luanrigattis1-team',
     scheme: 'saveapp',
     version: '1.0.0',
     orientation: 'portrait',
@@ -86,7 +85,7 @@ module.exports = {
     },
     extra: {
       saveAppDemo: true,
-      ...(saveAppEasProjectId ? { eas: { projectId: saveAppEasProjectId } } : {}),
+      eas: { projectId: saveAppEasProjectId },
     },
   },
 };
