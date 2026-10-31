@@ -1,14 +1,15 @@
 import { Button, Divider, HStack, Image, Link, Spacer, Text, VStack } from '@expo/ui/swift-ui';
 import {
   clipShape,
+  background,
   font,
   foregroundStyle,
   frame,
   lineLimit,
   monospacedDigit,
-  multilineTextAlignment,
   padding,
   resizable,
+  shapes,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
 import { createLiveActivity } from 'expo-widgets';
@@ -64,6 +65,8 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
       ? 'Adicionado anteriormente'
       : quickSaveStatus === 'alreadySaved'
         ? 'Confirmado na biblioteca'
+        : quickSaveStatus === 'ready'
+          ? 'Pronto para salvar'
         : undefined;
   const recentQuickSaveLinks = props.showRecentQuickSaveLinks
     ? (props.recentQuickSaveLinks ?? []).slice(0, 3)
@@ -163,23 +166,32 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
     ),
     expandedLeading: (
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
-        <Image
-          uiImage={props.iconUri}
-          modifiers={[
-            resizable(),
-            frame({ width: 48, height: 48 }),
-            clipShape('circle'),
-          ]}
-        />
+        <HStack alignment="center" spacing={7}>
+          <Image
+            systemName="square.on.square"
+            size={22}
+            modifiers={[
+              foregroundStyle('#FFFFFF'),
+              frame({ width: 42, height: 42 }),
+              background('#1C1C1E', shapes.roundedRectangle({ cornerRadius: 12 })),
+            ]}
+          />
+          <Divider
+            modifiers={[
+              foregroundStyle('#48484A'),
+              frame({ height: 30 }),
+            ]}
+          />
+        </HStack>
       </Link>
     ),
     expandedCenter: (
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
-        <VStack alignment="center" spacing={2}>
+        <VStack alignment="leading" spacing={2} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
           <Text
             modifiers={[
               font({ weight: 'semibold', textStyle: 'headline' }),
-              multilineTextAlignment('center'),
+              foregroundStyle('#FFFFFF'),
               lineLimit(1),
             ]}
           >
@@ -190,7 +202,6 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
               modifiers={[
                 font({ textStyle: 'caption' }),
                 foregroundStyle('#8E8E93'),
-                multilineTextAlignment('center'),
                 lineLimit(1),
               ]}
             >
@@ -208,6 +219,65 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
         target="saveapp.quickSave"
       />
     ),
+    expandedBottom: recentQuickSaveLinks.length > 0 ? (
+      <VStack
+        alignment="leading"
+        spacing={4}
+        modifiers={[frame({ maxWidth: Infinity }), padding({ top: 2 })]}
+      >
+        <Divider modifiers={[foregroundStyle('#38383A')]} />
+        <HStack alignment="center" spacing={5} modifiers={[frame({ maxWidth: Infinity })]}>
+          <Image
+            systemName="clock"
+            size={14}
+            modifiers={[foregroundStyle('#8E8E93')]}
+          />
+          <Text
+            modifiers={[
+              font({ textStyle: 'caption2' }),
+              foregroundStyle('#8E8E93'),
+              lineLimit(1),
+            ]}
+          >
+            {`${recentQuickSaveLinks.length} ${recentQuickSaveLinks.length === 1 ? 'link recente' : 'links recentes'}`}
+          </Text>
+          {recentQuickSaveLinks.map((link) => (
+            <HStack
+              key={`${link.domain}-${link.createdAt}`}
+              alignment="center"
+              spacing={4}
+              modifiers={[
+                padding({ horizontal: 6, vertical: 4 }),
+                background('#1C1C1E', shapes.capsule()),
+              ]}
+            >
+              {link.faviconUri ? (
+                <Image
+                  uiImage={link.faviconUri}
+                  modifiers={[resizable(), frame({ width: 14, height: 14 }), clipShape('roundedRectangle', 3)]}
+                />
+              ) : (
+                <Image
+                  systemName="globe"
+                  size={12}
+                  modifiers={[foregroundStyle('#A1A1A6'), frame({ width: 14, height: 14, alignment: 'center' })]}
+                />
+              )}
+              <Text
+                modifiers={[
+                  font({ textStyle: 'caption2' }),
+                  foregroundStyle('#D1D1D6'),
+                  lineLimit(1),
+                  frame({ maxWidth: 66 }),
+                ]}
+              >
+                {link.domain}
+              </Text>
+            </HStack>
+          ))}
+        </HStack>
+      </VStack>
+    ) : undefined,
   };
 }
 

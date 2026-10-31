@@ -166,7 +166,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityLayout).toContain('target="saveapp.quickSave"');
     expect(activityLayout).toContain('expandedTrailing:');
     expect(activityLayout).toContain('quickSaveStatus');
-    expect(activityLayout).toContain('frame({ width: 48, height: 48 })');
+    expect(activityLayout).toContain('frame({ width: 42, height: 42 })');
     expect(activityLayout).not.toContain('Toque para salvar');
     expect(activityLayout).not.toMatch(/https?:|normalizedUrl|clipboard/i);
 
@@ -199,7 +199,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityLayout).toContain('monospacedDigit');
   });
 
-  test('renders icon-only quick-save states in the same fixed accessible button', () => {
+  test('renders icon-only quick-save states inside the fixed accessible button', () => {
     const quickSaveBranch = quickSaveButton.match(
       /if props\.target == saveAppQuickSaveTarget \{([\s\S]*?)\n    \} else \{/,
     )?.[1] ?? '';
@@ -229,8 +229,9 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).toContain('SaveLinkQuickSaveIntent(activityID: props.source)');
     expect(quickSaveBranch).toContain('Circle()');
     expect(quickSaveBranch).toContain('.frame(width: 48, height: 48)');
-    expect(expandedLeadingFrame?.slice(1)).toEqual(quickSaveButtonFrame?.slice(1));
-    expect(quickSaveBranch).toContain('.strokeBorder(Color.white, lineWidth: 2)');
+    expect(expandedLeadingFrame?.slice(1)).toEqual(['42', '42']);
+    expect(quickSaveButtonFrame?.slice(1)).toEqual(['48', '48']);
+    expect(quickSaveBranch).toContain('.strokeBorder(Color.white, lineWidth: 2.5)');
     expect(quickSaveBranch).toContain('.font(.system(size: 18, weight: .semibold))');
     expect(quickSaveBranch).toContain('.foregroundStyle(.white)');
     expect(quickSaveButton).toContain('Color(red: 0.13, green: 0.45, blue: 0.27)');
@@ -597,7 +598,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
   test('restores the tokenized composer as the island fallback while expanded regions link to Home', () => {
     const compactLeading = activityLayout.match(/compactLeading: \(([\s\S]*?)\n\s*\),\n\s*minimal:/)?.[1] ?? '';
     const minimal = activityLayout.match(/minimal: \(([\s\S]*?)\n\s*\),\n\s*expandedLeading:/)?.[1] ?? '';
-    const expandedTrailing = activityLayout.match(/expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*\};/)?.[1] ?? '';
+    const expandedTrailing = activityLayout.match(/expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*expandedBottom:/)?.[1] ?? '';
 
     expect(compactLeading).not.toContain('<Link');
     expect(minimal).not.toContain('<Link');

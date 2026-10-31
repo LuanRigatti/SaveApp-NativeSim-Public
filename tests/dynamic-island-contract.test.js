@@ -203,7 +203,10 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
       /expandedLeading: \(([\s\S]*?)\n\s*\),\n\s*expandedCenter:/,
     )?.[1] ?? '';
     const expandedCenter = layoutSource.match(
-      /expandedCenter: \(([\s\S]*?)\n\s*\),\n\s*\};/,
+      /expandedCenter: \(([\s\S]*?)\n\s*\),\n\s*expandedTrailing:/,
+    )?.[1] ?? '';
+    const expandedBottom = layoutSource.match(
+      /expandedBottom: ([\s\S]*?)\n\s*\};/,
     )?.[1] ?? '';
 
     expect(layoutSource).toContain("'widget'");
@@ -211,19 +214,23 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource).toContain('minimal:');
     expect(layoutSource).toContain('expandedLeading:');
     expect(layoutSource).toContain('expandedTrailing:');
+    expect(layoutSource).toContain('expandedBottom: recentQuickSaveLinks.length > 0 ? (');
     expect(layoutSource).toContain('target="saveapp.quickSave"');
     expect(layoutSource).toContain('expandedCenter: (');
     expect(layoutSource).toContain("<Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>" );
     expect(layoutSource.match(/<Link destination=\{props\.expandedHomeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
     expect(layoutSource).not.toContain('compactTrailing:');
-    expect(layoutSource).not.toContain('expandedBottom:');
     expect(layoutSource).toContain("clipShape('roundedRectangle'");
-    expect(expandedLeading).toContain('frame({ width: 48, height: 48 })');
-    expect(expandedLeading).toContain("clipShape('circle')");
-    expect(expandedLeading).not.toContain("clipShape('roundedRectangle'");
+    expect(expandedLeading).toContain('systemName="square.on.square"');
+    expect(expandedLeading).toContain('frame({ width: 42, height: 42 })');
+    expect(expandedLeading).toContain("shapes.roundedRectangle({ cornerRadius: 12 })");
+    expect(expandedLeading).toContain('<Divider');
+    expect(expandedLeading).not.toContain('uiImage={props.iconUri}');
     expect(expandedLeading).not.toContain('padding({ top: 8 })');
-    expect(layoutSource).toContain("multilineTextAlignment('center')");
     expect(layoutSource).toContain('Salvar link');
+    expect(layoutSource).toContain("? 'Pronto para salvar'");
+    expect(expandedCenter).toContain('VStack alignment="leading"');
+    expect(expandedCenter).toContain("foregroundStyle('#FFFFFF')");
     expect(expandedCenter).not.toContain('Toque para salvar');
     expect(expandedCenter).not.toContain('Toque para abrir');
     expect(expandedCenter).toContain('{quickSaveCenterSubtitle ? (');
@@ -235,6 +242,17 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource).not.toContain('34C759');
     expect(layoutSource).not.toContain('circle.fill');
     expect(layoutSource).not.toMatch(/clipboard|https?:|normalizedUrl|props\.url/i);
+    expect(nativeVerificationSource).toContain('(liveActivityLayoutSource.match(/uiImage=\\{props\\.iconUri\\}/g) ?? []).length !== 3');
+    expect(nativeVerificationSource).toContain("!liveActivityLayoutSource.includes('expandedBottom: recentQuickSaveLinks.length > 0 ? (')");
+    expect(nativeVerificationSource).toContain("!liveActivityLayoutSource.includes('systemName=\"square.on.square\"')");
+    expect(expandedBottom).toContain('recentQuickSaveLinks.length > 0');
+    expect(expandedBottom).toContain('recentQuickSaveLinks.map((link) => (');
+    expect(expandedBottom).toContain('link.faviconUri');
+    expect(expandedBottom).toContain('systemName="globe"');
+    expect(expandedBottom).toContain("background('#1C1C1E', shapes.capsule())");
+    expect(expandedBottom).toContain('{link.domain}');
+    expect(layoutSource).toContain('(props.recentQuickSaveLinks ?? []).slice(0, 3)');
+    expect(expandedBottom).not.toMatch(/https?:|normalizedUrl|clipboard/i);
     expect(managerSource).toContain("Linking.createURL('/links/compose'");
     expect(managerSource).toContain("Linking.createURL('/',");
     expect(managerSource).toContain("source: 'dynamic-island-expanded'");
@@ -252,7 +270,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     const banner = layoutSource.match(/banner: \(([\s\S]*?)\n\s*\),\n\s*compactLeading:/)?.[1] ?? '';
     const compactLeading = layoutSource.match(/compactLeading: \(([\s\S]*?)\n\s*\),\n\s*minimal:/)?.[1] ?? '';
     const minimal = layoutSource.match(/minimal: \(([\s\S]*?)\n\s*\),\n\s*expandedLeading:/)?.[1] ?? '';
-    const expandedTrailing = layoutSource.match(/expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*\};/)?.[1] ?? '';
+    const expandedTrailing = layoutSource.match(/expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*expandedBottom:/)?.[1] ?? '';
 
     expect(homeSource).toContain("routeSource === 'dynamic-island-expanded'");
     expect(homeSource).toContain('beginDynamicIslandClipboardFlow()');
@@ -591,17 +609,22 @@ describe('Dynamic Island SaveApp icon assets and expanded layout', () => {
     expect(managerSource).toContain('areBytesEqual(sourceBytes, copiedBytes)');
     expect(managerSource).toContain("destination.uri.startsWith('file://')");
     expect(managerSource).toContain('iconUri: string');
-    expect(layoutSource.match(/uiImage=\{props\.iconUri\}/g)).toHaveLength(4);
+    expect(layoutSource.match(/uiImage=\{props\.iconUri\}/g)).toHaveLength(3);
     expect(layoutSource).not.toContain('assetName=');
     expect(layoutSource).not.toContain('environment.colorScheme');
     expect(quickSavePluginSource).not.toMatch(/SaveAppLiveActivityIcons|withSaveAppLiveActivityIconAssets|folder\.assetcatalog/);
     expect(quickSavePluginSource).toContain('withSaveAppQuickSaveAppIntentsPackage(config)');
   });
 
-  test('uses equal 48 point circles in expanded regions and keeps the check ring inside its frame', () => {
-    expect(layoutSource).toContain('frame({ width: 48, height: 48 })');
+  test('uses a dark rounded-square expanded icon and keeps the functional check ring inside its 48 point frame', () => {
+    const expandedLeading = layoutSource.match(
+      /expandedLeading: \(([\s\S]*?)\n\s*\),\n\s*expandedCenter:/,
+    )?.[1] ?? '';
+
+    expect(expandedLeading).toContain('frame({ width: 42, height: 42 })');
     expect(nativeQuickSaveButtonSource.match(/\.frame\(width: 48, height: 48\)/g)).toHaveLength(2);
-    expect(nativeQuickSaveButtonSource).toContain('.strokeBorder(Color.white, lineWidth: 2)');
+    expect(nativeQuickSaveButtonSource).toContain('.strokeBorder(Color.white, lineWidth: 2.5)');
+    expect(nativeQuickSaveButtonSource).toContain('.font(.system(size: 18, weight: .semibold))');
     expect(nativeQuickSaveButtonSource).toContain('.contentShape(Circle())');
     expect(nativeQuickSaveButtonSource).toContain('quickSaveIsProcessing');
     expect(nativeQuickSaveButtonSource).toContain('quickSaveIsFailure');

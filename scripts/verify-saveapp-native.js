@@ -611,7 +611,10 @@ if (
   !quickSaveIntentSource.includes('maximumActivityContentStateBytes = 4 * 1_024') ||
   !quickSaveIntentSource.includes('encodedState.count <= Self.maximumActivityContentStateBytes') ||
   !quickSaveQueueSource.includes('.bool(forKey: lockScreenRecentLinksVisibleKey) ?? false') ||
-  (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 4 ||
+  (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 3 ||
+  !liveActivityLayoutSource.includes('expandedBottom: recentQuickSaveLinks.length > 0 ? (') ||
+  !liveActivityLayoutSource.includes('systemName="square.on.square"') ||
+  !liveActivityLayoutSource.includes("? 'Pronto para salvar'") ||
   !liveActivityLayoutSource.includes('date={new Date(link.createdAt)}') ||
   !liveActivityLayoutSource.includes('dateStyle="time"') ||
   liveActivityLayoutSource.includes('ageMinutes') ||

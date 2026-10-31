@@ -36,6 +36,7 @@ import { confirmSavedLinkOpen } from '@/features/home-content/savedLinkOpenConfi
 import { getRichNoteAssetUri } from '@/features/home-content/richNoteAssets';
 import { getBoundedChecklistTaskInputHeight } from '@/features/home-content/checklistTaskRowLayout';
 import { getRichNoteInputHeight } from '@/features/home-content/richNoteEditorLayout';
+import { getRichNoteBodyPlaceholderBlockId } from '@/features/home-content/richNotePlaceholder';
 import { isTouchWithinRichNoteTextLine } from '@/features/home-content/richNoteTextLineHitTest';
 import { useAppTheme } from '@/theme';
 
@@ -160,6 +161,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   const [imageRetryRequest, setImageRetryRequest] = useState<{ blockId: string } | null>(null);
   const [measuredInputHeights, setMeasuredInputHeights] = useState<Record<string, number>>({});
   const [editorContentWidth, setEditorContentWidth] = useState(0);
+  const [placeholderFocusInput, setPlaceholderFocusInput] = useState<EditorInput | null>(null);
 
   const hasLinkComposer = linkComposer !== null;
   useLayoutEffect(() => {
@@ -207,6 +209,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
 
   const focusInput = useCallback((input: EditorInput, selection?: { start: number; end: number }) => {
     activeInputRef.current = input;
+    setPlaceholderFocusInput(input);
     if (selection) {
       const inputId = input.kind === 'paragraph' ? input.blockId : input.itemId;
       selectionByInputRef.current.set(inputId, selection);
@@ -573,6 +576,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   }, [updateBlock]);
 
   const toggleChecklistItem = useCallback((blockId: string, itemId: string) => {
+    setPlaceholderFocusInput({ kind: 'checklist', blockId, itemId });
     updateChecklistItem(blockId, itemId, (item) => ({ ...item, checked: !item.checked }));
   }, [updateChecklistItem]);
 
@@ -752,12 +756,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   const paragraphLineHeight = (style: RichNoteParagraphStyle, fontSize: number) => style === 'title'
     ? theme.typography.largeTitle.lineHeight
     : fontSize * 1.45;
-  const lastBlock = document.blocks[document.blocks.length - 1];
-  const bodyPlaceholderBlockId = lastBlock?.type === 'paragraph'
-    && lastBlock.style === 'body'
-    && lastBlock.text.length === 0
-    ? lastBlock.id
-    : null;
+  const bodyPlaceholderBlockId = getRichNoteBodyPlaceholderBlockId(document.blocks, placeholderFocusInput);
 
   const renderParagraph = (block: RichNoteParagraphBlock, index: number) => {
     const marker = block.listStyle === 'bullet' ? '•' : block.listStyle === 'numbered' ? `${listNumber(document.blocks, block.id)}.` : null;
@@ -796,6 +795,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
               const input = { kind: 'paragraph' as const, blockId: block.id };
               editorHasFocusRef.current = true;
               activeInputRef.current = input;
+              setPlaceholderFocusInput(input);
             }}
             onSelectionChange={(event) => {
               selectionRef.current = event.nativeEvent.selection;
@@ -949,6 +949,7 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
                   const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
                   editorHasFocusRef.current = true;
                   activeInputRef.current = input;
+                  setPlaceholderFocusInput(input);
                 }}
                 onSelectionChange={(event) => {
                   selectionRef.current = event.nativeEvent.selection;
@@ -991,8 +992,15 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
         accessibilityRole="button"
         onPress={() => addChecklistItem(block.id, block.items.at(-1)?.id ?? '')}
         onPressIn={markInteraction}
-        style={{ alignSelf: 'flex-start', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum, paddingLeft: 34 }}
+        style={{ alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', minHeight: theme.sizes.touchTargetMinimum, width: '100%' }}
       >
+        <View
+          accessible={false}
+          pointerEvents="none"
+          style={{ alignItems: 'center', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum, width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH }}
+        >
+          <ChecklistCheckboxIndicator isCompleted={false} />
+        </View>
         <Text style={[theme.typography.body, { color: theme.colors.textTertiary }]}>Adicionar tarefa</Text>
       </Pressable>
     </View>

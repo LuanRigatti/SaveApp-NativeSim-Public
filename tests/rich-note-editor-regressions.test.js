@@ -3,7 +3,8 @@
 const { readFileSync } = require('node:fs');
 const { getRichNoteInputHeight } = require('../src/features/home-content/richNoteEditorLayout');
 const { getBoundedChecklistTaskInputHeight } = require('../src/features/home-content/checklistTaskRowLayout');
-const { createEmptyRichNoteDocument } = require('../src/features/home-content/richNoteDocument');
+const { createEmptyRichNoteDocument, createRichNoteParagraph } = require('../src/features/home-content/richNoteDocument');
+const { getRichNoteBodyPlaceholderBlockId } = require('../src/features/home-content/richNotePlaceholder');
 const { getDockedKeyboardViewportOverlap } = require('../src/features/home-content/keyboardViewportOverlap');
 const { isTouchWithinRichNoteTextLine } = require('../src/features/home-content/richNoteTextLineHitTest');
 
@@ -164,6 +165,55 @@ describe('rich note editor iOS regressions', () => {
     expect(checklistSource).toContain('width: editorContentWidth > 0 ? editorContentWidth : \'100%\'');
     expect(checklistSource).not.toContain('imageWidth');
     expect(editorSource).toContain("block.size === 'small' ? 0.45 : block.size === 'medium' ? 0.72 : 1");
+  });
+
+  test('adds a visual checkbox to the add-task action without persisting an empty task', () => {
+    const checklistStart = editorSource.indexOf('const renderChecklist');
+    const checklistEnd = editorSource.indexOf('const renderInlineLinkComposer', checklistStart);
+    const checklistSource = editorSource.slice(checklistStart, checklistEnd);
+    const addTaskRowStart = checklistSource.lastIndexOf('<Pressable');
+    const addTaskRow = checklistSource.slice(addTaskRowStart);
+
+    expect(addTaskRow).toContain('accessibilityRole="button"');
+    expect(addTaskRow).toContain("onPress={() => addChecklistItem(block.id, block.items.at(-1)?.id ?? '')}");
+    expect(addTaskRow).toContain('width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH');
+    expect(addTaskRow).toContain('<ChecklistCheckboxIndicator isCompleted={false} />');
+    expect(addTaskRow).toContain('>Adicionar tarefa</Text>');
+    expect(addTaskRow).not.toContain('accessibilityRole="checkbox"');
+    expect(editorSource).toContain('const RICH_NOTE_CHECKLIST_CONTROL_WIDTH = 44');
+  });
+
+  test('shows the body placeholder for normal writing and hides it while a checklist task is active', () => {
+    const emptyDocument = createEmptyRichNoteDocument();
+    const initialPlaceholder = emptyDocument.blocks[1];
+    const trailingParagraph = createRichNoteParagraph();
+    const checklist = {
+      id: 'checklist-test',
+      type: 'checklist',
+      items: [{ id: 'task-test', text: '', checked: false }],
+    };
+    const image = {
+      id: 'image-test',
+      type: 'image',
+      assetId: 'asset-test',
+      mimeType: 'image/jpeg',
+      width: 120,
+      height: 90,
+      size: 'medium',
+    };
+    const blocksWithChecklist = [...emptyDocument.blocks, image, checklist, trailingParagraph];
+
+    expect(getRichNoteBodyPlaceholderBlockId(emptyDocument.blocks, null)).toBe(initialPlaceholder.id);
+    expect(getRichNoteBodyPlaceholderBlockId(blocksWithChecklist, {
+      kind: 'checklist', blockId: checklist.id, itemId: 'task-test',
+    })).toBeNull();
+    expect(getRichNoteBodyPlaceholderBlockId(blocksWithChecklist, {
+      kind: 'paragraph', blockId: trailingParagraph.id,
+    })).toBe(trailingParagraph.id);
+    expect(getRichNoteBodyPlaceholderBlockId([
+      ...blocksWithChecklist.slice(0, -1),
+      { ...trailingParagraph, text: 'Texto real' },
+    ], { kind: 'paragraph', blockId: trailingParagraph.id })).toBeNull();
   });
 
   test('bounds transient keyboard viewport heights for 1, 2, 5, and 10 checklist rows', () => {
