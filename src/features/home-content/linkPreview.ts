@@ -17,10 +17,16 @@ export type DownloadedPreviewImage = {
   extension: 'jpg' | 'png' | 'webp' | 'gif';
 };
 
+export type DownloadedFaviconImage = {
+  bytes: Uint8Array;
+  mimeType: string;
+};
+
 type LinkPreviewFetcher = typeof expoFetch;
 
 const MAX_HTML_BYTES = 512 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_FAVICON_BYTES = 256 * 1024;
 const MAX_OEMBED_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 3_500;
 const MAX_REDIRECTS = 4;
@@ -143,15 +149,41 @@ export function parseLinkPreviewHtml(html: string, pageUrl: string): LinkPreview
     pageUrl,
   );
 
-  let faviconUrl: string | null = null;
+  const faviconCandidates: { url: string; priority: number; declaredType: string; pathExtension: string }[] = [];
   for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
     const attrs = parseTagAttributes(match[0]);
-    if (attrs.rel?.toLowerCase().split(/\s+/).some((token) => token === 'icon')) {
-      faviconUrl = resolveHttpUrl(attrs.href, pageUrl);
-      if (faviconUrl) {
-        break;
-      }
-    }
+    const rel = attrs.rel?.toLowerCase().split(/\s+/) ?? [];
+    const isAppleTouchIcon = rel.some((token) => token.startsWith('apple-touch-icon'));
+    const isIcon = rel.includes('icon');
+    if (!isAppleTouchIcon && !isIcon) continue;
+    const url = resolveHttpUrl(attrs.href, pageUrl);
+    if (!url) continue;
+    const declaredType = attrs.type?.split(';')[0]?.trim().toLowerCase() ?? '';
+    let pathExtension = '';
+    try {
+      const pathComponent = new URL(url).pathname.split('/').pop() ?? '';
+      pathExtension = pathComponent.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '';
+    } catch { /* URL already resolved. */ }
+    faviconCandidates.push({ url, priority: isAppleTouchIcon ? 0 : 1, declaredType, pathExtension });
+  }
+
+  const supportedFaviconTypes = new Set([
+    'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+    'image/x-icon', 'image/vnd.microsoft.icon', 'image/ico',
+  ]);
+  const supportedFaviconExtensions = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'ico']);
+  const supportedFavicon = faviconCandidates
+    .filter((candidate) => {
+      if (candidate.declaredType && !supportedFaviconTypes.has(candidate.declaredType)) return false;
+      if (candidate.pathExtension === 'svg') return false;
+      return !candidate.pathExtension || supportedFaviconExtensions.has(candidate.pathExtension);
+    })
+    .sort((left, right) => left.priority - right.priority)[0]?.url;
+  let faviconUrl = supportedFavicon ?? null;
+  if (!faviconUrl && faviconCandidates.length > 0) {
+    try {
+      faviconUrl = new URL('/favicon.ico', pageUrl).href;
+    } catch { /* Invalid page URL is rejected by the caller's normalization. */ }
   }
 
   return {
@@ -445,7 +477,7 @@ function extensionForImageType(mimeType: DownloadedPreviewImage['mimeType']): Do
   return 'gif';
 }
 
-async function readBoundedImage(response: Response): Promise<DownloadedPreviewImage> {
+async function readBoundedImage(response: Response, maxBytes = MAX_IMAGE_BYTES): Promise<DownloadedPreviewImage> {
   const mimeType = getImageType(response.headers.get('content-type'));
   if (!mimeType) {
     await response.body?.cancel();
@@ -453,7 +485,7 @@ async function readBoundedImage(response: Response): Promise<DownloadedPreviewIm
   }
 
   const declaredLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_IMAGE_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     await response.body?.cancel();
     throw new Error('The preview image exceeds the size limit.');
   }
@@ -470,7 +502,7 @@ async function readBoundedImage(response: Response): Promise<DownloadedPreviewIm
       const { done, value } = await reader.read();
       if (done) break;
       totalBytes += value.byteLength;
-      if (totalBytes > MAX_IMAGE_BYTES) {
+      if (totalBytes > maxBytes) {
         await reader.cancel();
         throw new Error('The preview image exceeds the size limit.');
       }
@@ -499,5 +531,69 @@ export async function downloadLinkPreviewImage(
   signal?: AbortSignal,
   fetcher: LinkPreviewFetcher = expoFetch,
 ): Promise<DownloadedPreviewImage> {
-  return withSafeResponse(url, signal, fetcher, 'image/jpeg,image/png,image/webp,image/gif', readBoundedImage);
+  return withSafeResponse(
+    url,
+    signal,
+    fetcher,
+    'image/jpeg,image/png,image/webp,image/gif',
+    (response) => readBoundedImage(response),
+  );
+}
+
+/** Downloads only a small raster site icon through the same URL and redirect protections as previews. */
+export async function downloadLinkFaviconImage(
+  url: string,
+  signal?: AbortSignal,
+  fetcher: LinkPreviewFetcher = expoFetch,
+): Promise<DownloadedFaviconImage> {
+  return withSafeResponse(
+    url,
+    signal,
+    fetcher,
+    'image/png,image/jpeg,image/webp,image/gif,image/x-icon,image/vnd.microsoft.icon,image/ico',
+    readBoundedFavicon,
+  );
+}
+
+async function readBoundedFavicon(response: Response): Promise<DownloadedFaviconImage> {
+  const mimeType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+  const allowedTypes = new Set([
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'image/x-icon', 'image/vnd.microsoft.icon', 'image/ico',
+  ]);
+  if (!allowedTypes.has(mimeType)) {
+    await response.body?.cancel();
+    throw new Error('The favicon resource is not a supported image.');
+  }
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_FAVICON_BYTES) {
+    await response.body?.cancel();
+    throw new Error('The favicon exceeds the size limit.');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('The favicon response has no readable body.');
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_FAVICON_BYTES) {
+        await reader.cancel();
+        throw new Error('The favicon exceeds the size limit.');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (totalBytes === 0) throw new Error('The favicon is empty.');
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { bytes, mimeType };
 }

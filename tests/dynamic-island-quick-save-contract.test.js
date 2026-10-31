@@ -188,13 +188,14 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('Activity<LiveActivityAttributes>.activities');
     expect(quickSaveIntent).toContain('activity.update(ActivityContent(state: state, staleDate: nil))');
     expect(quickSaveIntent).not.toMatch(/console\.|print\(|clipboard\.value.*(props|ContentState)/i);
-    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(activityManager).toContain("quickSaveStatus: 'ready'");
+    expect(activityManager).toContain('recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)');
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("source: 'dynamic-island-expanded'");
     expect(activityLayout).toContain("<Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>" );
     expect(activityLayout.match(/<Link destination=\{props\.expandedHomeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
-    expect(activityLayout).toContain('import { Button, HStack, Image, Link, Text, VStack }');
+    expect(activityLayout).toContain('import { Button, Divider, HStack, Image, Link, Spacer, Text, VStack }');
   });
 
   test('renders icon-only quick-save states in the same fixed accessible button', () => {
@@ -392,6 +393,11 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(savedContentLibrary).toContain('preview_image_mime_type = COALESCE(preview_image_mime_type, ?)');
     expect(savedContentLibrary).toContain('deleted_at IS NULL');
     expect(savedContentLibrary).toContain('subscribeToQuickSaveLinkPreviewUpdates');
+    expect(savedContentLibrary).toContain('cacheLockScreenFavicon: cacheQuickSaveLockScreenFavicon');
+    expect(savedContentLibrary).toContain('downloadLinkFaviconImage(faviconUrl)');
+    expect(savedContentLibrary).toContain('storeQuickSaveLockScreenFavicon(id, base64)');
+    expect(savedContentLibrary).toContain('associateQuickSaveLockScreenContent(historyId, savedId)');
+    expect(savedContentLibrary).toContain('synchronizeQuickSaveLockScreenFavicons');
     expect(savedContentLibrary).toContain('schedulePendingQuickSaveLinkPreviewEnrichment');
     expect(savedContentProvider).toContain('subscribeToQuickSaveLinkPreviewUpdates');
     expect(savedContentProvider).toContain('schedulePendingQuickSaveLinkPreviewEnrichment()');
@@ -406,8 +412,38 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSavePreviewEnrichment).not.toMatch(/fetch\(|expoFetch|console\.(?:log|warn|error)/);
     expect(savedContentLibrary).toContain('getPreview: getLinkPreview');
     expect(savedContentLibrary).toContain('downloadLinkPreviewImage(url, signal)');
+    expect(savedContentLibrary).toContain('downloadLinkFaviconImage(faviconUrl)');
     expect(savedContentLibrary).toContain('cachePreview: cacheLinkPreviewImage');
     expect(savedContentLibrary).toContain('saveLinkWithPreview(input, {');
+  });
+
+  test('stores validated App Group favicons and updates the existing Activity without network in the intent', () => {
+    expect(clipboardModule).toContain('associateQuickSaveLockScreenContent');
+    expect(clipboardModule).toContain('storeQuickSaveLockScreenFavicon');
+    expect(clipboardNative).toContain('QuickSaveLockScreenRecentLinks.json');
+    expect(clipboardNative).toContain('Favicons');
+    expect(clipboardNative).toContain('flock(descriptor, LOCK_EX)');
+    expect(clipboardNative).toContain('atomicWrite(pngData, to: imageURL, in: faviconDirectory)');
+    expect(clipboardNative).toContain('CGImageSourceCreateThumbnailAtIndex');
+    expect(clipboardNative).toContain('maximumSourceBytes = 256 * 1_024');
+    expect(clipboardNative).toContain('maximumFaviconBytes = 64 * 1_024');
+    expect(clipboardNative).toContain('UserDefaults(suiteName: appGroupIdentifier)?.bool(forKey: visibleKey) == true');
+    expect(clipboardNative).toContain('favicon-\\(id).png');
+    expect(activityManager).toContain('faviconUri');
+    expect(activityLayout).toContain('uiImage={link.faviconUri}');
+    expect(activityLayout).toContain('systemName="globe"');
+    expect(quickSaveIntent).toContain('SaveAppQuickSaveQueue.lockScreenRecentLinkActivityProps()');
+    expect(quickSaveIntent).not.toMatch(/URLSession|URLRequest|fetch\(/);
+    expect(quickSaveQueueSwift).toContain('validFaviconURL(fileName: fileName, id: link.id)');
+    expect(quickSaveQueueSwift).toContain('pruneObsoleteFavicons');
+    expect(quickSaveQueueSwift).toContain('faviconUri');
+    expect(quickSaveQueueSwift.indexOf('var links = readLockScreenRecentLinks(in: directory)?.links ?? []'))
+      .toBeLessThan(quickSaveQueueSwift.indexOf('let entry = QuickSaveLockScreenRecentLink('));
+    expect(quickSaveQueueSwift).toContain('isAbandonedTemporary');
+    expect(clipboardNative).toContain('isAbandonedTemporary');
+    expect(savedContentLibrary).toContain('LIMIT 256;');
+    expect(activityManager).toContain('activity.update({');
+    expect(activityManager).not.toContain('factory.start({');
   });
 
   test('uses persistent App Group metadata only to suppress the same automatic clipboard offer', () => {
@@ -442,7 +478,8 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityManager).toContain('start: (props: SaveLinkActivityProps, url?: string)');
     expect(activityManager).toContain("Linking.createURL('/',");
     expect(activityManager).toContain("Linking.createURL('/links/compose'");
-    expect(activityManager).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(activityManager).toContain("quickSaveStatus: 'ready'");
+    expect(activityManager).toContain('showRecentQuickSaveLinks,');
     expect(expoWidgetsActivity).toContain('return island.widgetURL(url)');
     expect(expoWidgetsActivity).toContain('Only apply widgetURL when the activity has one');
   });
@@ -514,10 +551,12 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     }
     expect(mirrorSnapshot).toContain("'src/features/dynamic-island/quickSaveQueue.ts'");
     expect(mirrorSnapshot).toContain("'src/features/dynamic-island/quickSaveQueueImportPipeline.ts'");
+    expect(mirrorSnapshot).toContain("'src/features/dynamic-island/quickSaveLockScreenHistory.ts'");
     expect(mirrorSnapshot).toContain("'src/features/home-content/quickSaveLinkPreviewEnrichment.ts'");
     expect(mirrorSnapshot).toContain("'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts'");
     expect(mirrorSecurity).toContain("'src/features/dynamic-island/quickSaveQueue.ts'");
     expect(mirrorSecurity).toContain("'src/features/dynamic-island/quickSaveQueueImportPipeline.ts'");
+    expect(mirrorSecurity).toContain("'src/features/dynamic-island/quickSaveLockScreenHistory.ts'");
     expect(mirrorSecurity).toContain("'src/features/home-content/quickSaveLinkPreviewEnrichment.ts'");
     expect(mirrorSecurity).toContain("'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts'");
     expect(mirrorSecurity).toContain("'tests/quick-save-xcodeproj-contract.rb'");

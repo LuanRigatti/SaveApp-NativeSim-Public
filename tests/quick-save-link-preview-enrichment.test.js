@@ -59,6 +59,35 @@ describe('Quick Save link preview enrichment', () => {
     expect(adapter.onUpdated).toHaveBeenCalledTimes(1);
   });
 
+  test('updates the Live Activity favicon only after the same Quick Save row commits', async () => {
+    const previewWithFavicon = { ...metadata, faviconUrl: 'https://example.test/favicon.png' };
+    const adapter = createAdapter({
+      getPreview: jest.fn(async () => previewWithFavicon),
+      cacheLockScreenFavicon: jest.fn(async () => true),
+    });
+    const enricher = createQuickSaveLinkPreviewEnricher(adapter);
+
+    await expect(enricher.schedule(candidate())).resolves.toBe('updated');
+    await Promise.resolve();
+
+    expect(adapter.updateIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(adapter.cacheLockScreenFavicon).toHaveBeenCalledWith(candidate(), previewWithFavicon.faviconUrl);
+    expect(adapter.onUpdated).toHaveBeenCalledTimes(2);
+  });
+
+  test('keeps a committed preview when optional favicon caching fails offline', async () => {
+    const previewWithFavicon = { ...metadata, faviconUrl: 'https://example.test/favicon.png' };
+    const adapter = createAdapter({
+      getPreview: jest.fn(async () => previewWithFavicon),
+      cacheLockScreenFavicon: jest.fn(async () => { throw new Error('offline'); }),
+    });
+    const enricher = createQuickSaveLinkPreviewEnricher(adapter);
+
+    await expect(enricher.schedule(candidate())).resolves.toBe('updated');
+    expect(adapter.updateIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(adapter.onUpdated).toHaveBeenCalledTimes(1);
+  });
+
   test('coalesces concurrent requests for the same normalized URL', async () => {
     let finishPreview;
     const adapter = createAdapter({

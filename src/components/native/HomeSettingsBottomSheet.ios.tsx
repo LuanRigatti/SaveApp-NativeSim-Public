@@ -887,6 +887,11 @@ export default function HomeSettingsBottomSheet({
     isAvailable: isSaveLinkModeAvailable,
     isBusy: isSaveLinkModeBusy,
     setEnabled: setSaveLinkModeEnabled,
+    showRecentLinksOnLockScreen,
+    isRecentLinksSettingReady,
+    isRecentLinksSettingAvailable,
+    isRecentLinksSettingBusy,
+    setShowRecentLinksOnLockScreen,
   } = useSaveLinkDynamicIsland();
   const [path, setPath] = useState<string[]>([]);
   const [savedTags, setSavedTags] = useState<SavedTag[]>([]);
@@ -1108,6 +1113,26 @@ export default function HomeSettingsBottomSheet({
                       Indisponível nesta versão. A preferência será mantida.
                     </Text>
                   ) : null}
+                  <HStack alignment="center">
+                    <Text>Links recentes na tela bloqueada</Text>
+                    <Spacer />
+                    <Toggle
+                      isOn={showRecentLinksOnLockScreen}
+                      onIsOnChange={(nextValue) => {
+                        void setShowRecentLinksOnLockScreen(nextValue).catch(() => {
+                          Alert.alert('Não foi possível atualizar a Live Activity', 'A preferência de privacidade foi mantida. Tente novamente.');
+                        });
+                      }}
+                      modifiers={[
+                        accessibilityLabel('Mostrar domínios recentes do Quick Save na tela bloqueada'),
+                        accessibilityValue(showRecentLinksOnLockScreen ? 'Ativado' : 'Desativado'),
+                        disabled(!isRecentLinksSettingReady || !isRecentLinksSettingAvailable || isRecentLinksSettingBusy),
+                      ]}
+                    />
+                  </HStack>
+                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+                    Desativado por padrão. Quando ativado, mostra somente domínios dos três últimos links salvos pelo Quick Save.
+                  </Text>
                 </VStack>
               </Section>
               <Section title="Personalização">

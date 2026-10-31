@@ -252,6 +252,7 @@ try {
     $productionCandidates -contains 'scripts/verify-saveapp-quick-save-app-intents.js' -and
     $productionCandidates -contains 'src/features/dynamic-island/quickSaveQueue.ts' -and
     $productionCandidates -contains 'src/features/dynamic-island/quickSaveQueueImportPipeline.ts' -and
+    $productionCandidates -contains 'src/features/dynamic-island/quickSaveLockScreenHistory.ts' -and
     $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift' -and
     $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift') 'the exact production candidate set contains the Xcodeproj fixture, AppIntents target verifier, package registry source and pre-publication snapshot gate'
   $noPreflightSkillPath = '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'

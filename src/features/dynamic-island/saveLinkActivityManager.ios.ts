@@ -15,18 +15,30 @@ import {
   readActivityLinkAuthorization,
   writeActivityLinkAuthorization,
 } from './activityLinkAuthorization';
+import { readQuickSaveLockScreenHistory } from './quickSaveLockScreenHistory';
+import {
+  getQuickSaveLockScreenSettings,
+  setQuickSaveActivityStatus,
+  type QuickSaveLockScreenSettings,
+} from '../../../modules/clipboard-url-detection/src';
+
+type QuickSaveActivityStatus = QuickSaveLockScreenSettings['quickSaveStatus'];
+type RecentQuickSaveActivityLink = { domain: string; createdAt: number; faviconUri?: string };
 
 type SaveLinkActivityProps = {
   iconUri: string;
   composeUrl: string;
   expandedHomeUrl: string;
-  quickSaveStatus: 'ready';
+  quickSaveStatus: QuickSaveActivityStatus;
+  showRecentQuickSaveLinks: boolean;
+  recentQuickSaveLinks: RecentQuickSaveActivityLink[];
 };
 type NativeActivity = {
   end: (dismissalPolicy: 'immediate') => Promise<void>;
   getId: () => string;
+  update: (props: SaveLinkActivityProps) => Promise<void>;
 };
-type StartedActivity = { getId: () => string; end: NativeActivity['end'] };
+type StartedActivity = { getId: () => string; end: NativeActivity['end']; update: NativeActivity['update'] };
 type LiveActivityFactory = {
   start: (props: SaveLinkActivityProps, url?: string) => StartedActivity;
   getInstances: () => NativeActivity[];
@@ -52,6 +64,17 @@ function getActivityFactory(): LiveActivityFactory {
 
 export function isSaveLinkActivityAvailable(): boolean {
   return activityFactoryLoader.isAvailable();
+}
+
+async function makeRecentQuickSaveActivityProps(visible: boolean): Promise<RecentQuickSaveActivityLink[]> {
+  if (!visible) return [];
+  return (await readQuickSaveLockScreenHistory())
+    .slice(0, 3)
+    .map(({ domain, createdAt, faviconUri }) => ({
+      domain,
+      createdAt,
+      ...(faviconUri ? { faviconUri } : {}),
+    }));
 }
 
 async function getSharedAppIconUri(): Promise<string> {
@@ -106,6 +129,8 @@ const reconcileInstances = createActivityReconciler({
   getInstances: () => getActivityFactory().getInstances(),
   start: async () => {
     const iconUri = await getSharedAppIconUri();
+    const lockScreenSettings = getQuickSaveLockScreenSettings();
+    const showRecentQuickSaveLinks = lockScreenSettings?.showRecentLinks ?? false;
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { randomUUID } = require('expo-crypto') as typeof import('expo-crypto');
     const token = randomUUID();
@@ -116,10 +141,20 @@ const reconcileInstances = createActivityReconciler({
     const expandedHomeUrl = Linking.createURL('/', {
       queryParams: { source: 'dynamic-island-expanded' },
     });
+    // A new Activity starts in `ready`; prevent a previous Activity's persisted
+    // status from being copied into it when the lock-screen privacy toggle is used.
+    setQuickSaveActivityStatus('ready');
     let activity: StartedActivity | null = null;
     try {
       activity = getActivityFactory().start(
-        { iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },
+        {
+          iconUri,
+          composeUrl,
+          expandedHomeUrl,
+          quickSaveStatus: 'ready',
+          showRecentQuickSaveLinks,
+          recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks),
+        },
         composeUrl,
       );
       await writeActivityLinkAuthorization({ token, activityId: activity.getId() });
@@ -130,6 +165,40 @@ const reconcileInstances = createActivityReconciler({
     }
   },
 });
+
+export async function updateSaveLinkActivityRecentLinksVisibility(visible: boolean): Promise<void> {
+  const factory = activityFactoryLoader.get();
+  if (!factory) return;
+  const showRecentQuickSaveLinks = visible && getQuickSaveLockScreenSettings()?.showRecentLinks === true;
+  const authorization = await readActivityLinkAuthorization();
+  if (!authorization?.activityId) return;
+  const activity = factory.getInstances().find((candidate) => candidate.getId() === authorization.activityId);
+  if (!activity) return;
+
+  const [iconUri, recentQuickSaveLinks] = await Promise.all([
+    getSharedAppIconUri(),
+    makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks),
+  ]);
+  // The opt-in may be disabled while the icon/history are being loaded. Recheck
+  // immediately before submitting so an older async refresh cannot re-expose it.
+  const latestSettings = getQuickSaveLockScreenSettings();
+  const shouldShowRecentQuickSaveLinks = visible && latestSettings?.showRecentLinks === true;
+  const composeUrl = Linking.createURL('/links/compose', {
+    queryParams: { source: 'dynamic-island', activityToken: authorization.token },
+  });
+  const expandedHomeUrl = Linking.createURL('/', {
+    queryParams: { source: 'dynamic-island-expanded' },
+  });
+  const quickSaveStatus = latestSettings?.quickSaveStatus ?? 'ready';
+  await activity.update({
+    iconUri,
+    composeUrl,
+    expandedHomeUrl,
+    quickSaveStatus,
+    showRecentQuickSaveLinks: shouldShowRecentQuickSaveLinks,
+    recentQuickSaveLinks: shouldShowRecentQuickSaveLinks ? recentQuickSaveLinks : [],
+  });
+}
 
 export async function reconcileSaveLinkActivity(enabled: boolean): Promise<void> {
   const factory = activityFactoryLoader.get();

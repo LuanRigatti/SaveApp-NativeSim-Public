@@ -5,7 +5,16 @@ import { AppState, Platform } from 'react-native';
 import {
   isSaveLinkActivityAvailable,
   reconcileSaveLinkActivity,
+  updateSaveLinkActivityRecentLinksVisibility,
 } from './saveLinkActivityManager';
+import {
+  getQuickSaveLockScreenSettings,
+  setQuickSaveLockScreenRecentLinksVisible,
+} from '../../../modules/clipboard-url-detection/src';
+import {
+  subscribeToQuickSaveLinkPreviewUpdates,
+  synchronizeQuickSaveLockScreenFavicons,
+} from '@/features/home-content/savedContentLibrary';
 
 const PREFERENCE_KEY = '@saveapp/dynamic-island-link-mode-enabled-v1';
 
@@ -15,6 +24,11 @@ type SaveLinkDynamicIslandContextValue = {
   isAvailable: boolean;
   isBusy: boolean;
   setEnabled: (enabled: boolean) => Promise<void>;
+  showRecentLinksOnLockScreen: boolean;
+  isRecentLinksSettingReady: boolean;
+  isRecentLinksSettingAvailable: boolean;
+  isRecentLinksSettingBusy: boolean;
+  setShowRecentLinksOnLockScreen: (visible: boolean) => Promise<void>;
 };
 
 const SaveLinkDynamicIslandContext = createContext<SaveLinkDynamicIslandContextValue | null>(null);
@@ -24,10 +38,15 @@ export function SaveLinkDynamicIslandProvider({ children }: PropsWithChildren) {
   const [isReady, setIsReady] = useState(false);
   const [isAvailable, setIsAvailable] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
+  const [showRecentLinksOnLockScreen, setShowRecentLinksOnLockScreenState] = useState(false);
+  const [isRecentLinksSettingReady, setIsRecentLinksSettingReady] = useState(false);
+  const [isRecentLinksSettingAvailable, setIsRecentLinksSettingAvailable] = useState(false);
+  const [isRecentLinksSettingBusy, setIsRecentLinksSettingBusy] = useState(false);
   const enabledRef = useRef(false);
   const availableRef = useRef(false);
   const readyRef = useRef(false);
   const busyRef = useRef(false);
+  const recentLinksBusyRef = useRef(false);
   const loadingPreferenceRef = useRef(false);
   const operationRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -51,6 +70,10 @@ export function SaveLinkDynamicIslandProvider({ children }: PropsWithChildren) {
       }
       availableRef.current = nativeModuleAvailable;
       setIsAvailable(nativeModuleAvailable);
+      const lockScreenSettings = Platform.OS === 'ios' ? getQuickSaveLockScreenSettings() : null;
+      setIsRecentLinksSettingAvailable(lockScreenSettings !== null);
+      setShowRecentLinksOnLockScreenState(lockScreenSettings?.showRecentLinks ?? false);
+      setIsRecentLinksSettingReady(true);
 
       let storedEnabled: boolean;
       try {
@@ -72,6 +95,11 @@ export function SaveLinkDynamicIslandProvider({ children }: PropsWithChildren) {
         } catch {
           // Foreground reconciliation is best-effort; the next active transition retries.
         }
+        if (lockScreenSettings?.showRecentLinks) {
+          void synchronizeQuickSaveLockScreenFavicons()
+            .then((updated) => updated ? updateSaveLinkActivityRecentLinksVisibility(true) : undefined)
+            .catch(() => undefined);
+        }
       }
     } finally {
       loadingPreferenceRef.current = false;
@@ -92,10 +120,25 @@ export function SaveLinkDynamicIslandProvider({ children }: PropsWithChildren) {
       }
       if (availableRef.current) {
         void enqueueReconcile(enabledRef.current).catch(() => undefined);
+        if (getQuickSaveLockScreenSettings()?.showRecentLinks) {
+          void synchronizeQuickSaveLockScreenFavicons()
+            .then((updated) => updated ? updateSaveLinkActivityRecentLinksVisibility(true) : undefined)
+            .catch(() => undefined);
+        }
       }
     });
     return () => subscription.remove();
   }, [enqueueReconcile, loadPreference]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const unsubscribe = subscribeToQuickSaveLinkPreviewUpdates(() => {
+      if (getQuickSaveLockScreenSettings()?.showRecentLinks === true) {
+        void updateSaveLinkActivityRecentLinksVisibility(true).catch(() => undefined);
+      }
+    });
+    return () => { unsubscribe(); };
+  }, []);
 
   const setEnabled = useCallback(async (nextEnabled: boolean) => {
     if (Platform.OS !== 'ios') throw new Error('Dynamic Island está disponível somente no iOS.');
@@ -128,9 +171,55 @@ export function SaveLinkDynamicIslandProvider({ children }: PropsWithChildren) {
     }
   }, [enqueueReconcile]);
 
+  const setShowRecentLinksOnLockScreen = useCallback(async (visible: boolean) => {
+    if (Platform.OS !== 'ios' || !isRecentLinksSettingAvailable) {
+      throw new Error('O histórico na tela bloqueada não está disponível nesta versão do app.');
+    }
+    if (!isRecentLinksSettingReady) throw new Error('As configurações ainda estão carregando.');
+    if (recentLinksBusyRef.current || showRecentLinksOnLockScreen === visible) return;
+
+    recentLinksBusyRef.current = true;
+    setIsRecentLinksSettingBusy(true);
+    try {
+      if (!setQuickSaveLockScreenRecentLinksVisible(visible)) {
+        throw new Error('Não foi possível salvar a preferência de privacidade.');
+      }
+      setShowRecentLinksOnLockScreenState(visible);
+      await updateSaveLinkActivityRecentLinksVisibility(visible);
+      if (visible) {
+        void synchronizeQuickSaveLockScreenFavicons()
+          .then((updated) => updated ? updateSaveLinkActivityRecentLinksVisibility(true) : undefined)
+          .catch(() => undefined);
+      }
+    } catch (error) {
+      // Turning visibility off remains fail-safe: keep the shared preference off even
+      // if ActivityKit cannot refresh the currently displayed content immediately.
+      if (visible) {
+        setQuickSaveLockScreenRecentLinksVisible(false);
+        setShowRecentLinksOnLockScreenState(false);
+      }
+      throw error;
+    } finally {
+      recentLinksBusyRef.current = false;
+      setIsRecentLinksSettingBusy(false);
+    }
+  }, [isRecentLinksSettingAvailable, isRecentLinksSettingReady, showRecentLinksOnLockScreen]);
+
   const value = useMemo(
-    () => ({ isEnabled, isReady, isAvailable, isBusy, setEnabled }),
-    [isAvailable, isBusy, isEnabled, isReady, setEnabled],
+    () => ({
+      isEnabled,
+      isReady,
+      isAvailable,
+      isBusy,
+      setEnabled,
+      showRecentLinksOnLockScreen,
+      isRecentLinksSettingReady,
+      isRecentLinksSettingAvailable,
+      isRecentLinksSettingBusy,
+      setShowRecentLinksOnLockScreen,
+    }),
+    [isAvailable, isBusy, isEnabled, isReady, isRecentLinksSettingAvailable, isRecentLinksSettingBusy,
+      isRecentLinksSettingReady, setEnabled, setShowRecentLinksOnLockScreen, showRecentLinksOnLockScreen],
   );
 
   return (

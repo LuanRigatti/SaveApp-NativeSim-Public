@@ -1,4 +1,4 @@
-import { Button, HStack, Image, Link, Text, VStack } from '@expo/ui/swift-ui';
+import { Button, Divider, HStack, Image, Link, Spacer, Text, VStack } from '@expo/ui/swift-ui';
 import {
   clipShape,
   font,
@@ -17,6 +17,8 @@ type SaveLinkActivityProps = {
   composeUrl: string;
   expandedHomeUrl: string;
   quickSaveStatus?: 'ready' | 'processing' | 'queued' | 'alreadyQueued' | 'alreadySaved' | 'invalid' | 'failed';
+  showRecentQuickSaveLinks?: boolean;
+  recentQuickSaveLinks?: { domain: string; createdAt: number; faviconUri?: string }[];
 };
 
 function SaveLinkActivity(props: SaveLinkActivityProps) {
@@ -61,19 +63,66 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
       : quickSaveStatus === 'alreadySaved'
         ? 'Confirmado na biblioteca'
         : undefined;
+  const recentQuickSaveLinks = props.showRecentQuickSaveLinks
+    ? (props.recentQuickSaveLinks ?? []).slice(0, 3)
+    : [];
 
   return {
     banner: (
-      <HStack alignment="center" spacing={12} modifiers={[padding({ all: 16 })]}>
-        <Image
-          uiImage={props.iconUri}
-          modifiers={[resizable(), frame({ width: 34, height: 34 }), clipShape('roundedRectangle', 8)]}
-        />
-        <VStack alignment="leading" spacing={2}>
-          <Text modifiers={[font({ weight: 'semibold' })]}>Salvar link</Text>
-          <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle('#8E8E93')]}>Toque para abrir</Text>
-        </VStack>
-      </HStack>
+      <VStack alignment="leading" spacing={6} modifiers={[padding({ horizontal: 14, vertical: 10 })]}>
+        <Link destination={props.expandedHomeUrl}>
+          <HStack alignment="center" spacing={12}>
+            <Image
+              uiImage={props.iconUri}
+              modifiers={[resizable(), frame({ width: 34, height: 34 }), clipShape('roundedRectangle', 8)]}
+            />
+            <VStack alignment="leading" spacing={2}>
+              <Text modifiers={[font({ weight: 'semibold' }), foregroundStyle({ type: 'hierarchical', style: 'primary' })]}>Salvar link</Text>
+              <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>Toque para abrir</Text>
+            </VStack>
+            <Spacer minLength={8} />
+            <Image
+              systemName="chevron.right"
+              size={13}
+              modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}
+            />
+          </HStack>
+        </Link>
+        {recentQuickSaveLinks.length > 0 ? (
+          <>
+            <Divider modifiers={[foregroundStyle({ type: 'hierarchical', style: 'tertiary' })]} />
+            <VStack alignment="leading" spacing={3}>
+              {recentQuickSaveLinks.map((link) => (
+                <HStack key={`${link.domain}-${link.createdAt}`} alignment="center" spacing={10}>
+                  {link.faviconUri ? (
+                    <Image
+                      uiImage={link.faviconUri}
+                      modifiers={[resizable(), frame({ width: 18, height: 18 }), clipShape('roundedRectangle', 4)]}
+                    />
+                  ) : (
+                    <Image
+                      systemName="globe"
+                      size={18}
+                      modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}
+                    />
+                  )}
+                  <Text modifiers={[font({ textStyle: 'subheadline' }), lineLimit(1)]}>{link.domain}</Text>
+                  <Spacer minLength={6} />
+                  <Text
+                    date={new Date(link.createdAt)}
+                    dateStyle="relative"
+                    modifiers={[
+                      font({ textStyle: 'caption' }),
+                      foregroundStyle({ type: 'hierarchical', style: 'secondary' }),
+                      lineLimit(1),
+                    ]}
+                  />
+                </HStack>
+              ))}
+            </VStack>
+          </>
+        ) : null}
+      </VStack>
     ),
     compactLeading: (
       <Image

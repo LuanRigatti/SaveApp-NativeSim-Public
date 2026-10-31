@@ -552,7 +552,9 @@ if (
   !liveActivityManagerSource.includes('source.copy(destination, { overwrite: true })') ||
   !liveActivityManagerSource.includes('areBytesEqual(sourceBytes, copiedBytes)') ||
   !liveActivityManagerSource.includes("destination.uri.startsWith('file://')") ||
-  !liveActivityManagerSource.includes('{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: \'ready\' }') ||
+  !liveActivityManagerSource.includes("quickSaveStatus: 'ready'") ||
+  !liveActivityManagerSource.includes('showRecentQuickSaveLinks') ||
+  !liveActivityManagerSource.includes('recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)') ||
   (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 4 ||
   liveActivityLayoutSource.includes('assetName=') ||
   liveActivityLayoutSource.includes('environment.colorScheme') ||

@@ -27,6 +27,14 @@ const nativeSimWorkflow = readSource('../.github/workflows/native-sim.yml');
 const nativeVerificationSource = readSource('../scripts/verify-saveapp-native.js');
 const simulatorBuildSettingsVerifierSource = readSource('../scripts/verify-saveapp-simulator-build-settings.js');
 const failureAlertSource = readSource('../src/features/dynamic-island/liveActivityFailureAlert.ts');
+const lockScreenHistory = require('../src/features/dynamic-island/quickSaveLockScreenHistory');
+const lockScreenHistorySource = readSource('../src/features/dynamic-island/quickSaveLockScreenHistory.ts');
+const savedContentLibrarySource = readSource('../src/features/home-content/savedContentLibrary.ts');
+const linkPreviewSource = readSource('../src/features/home-content/linkPreview.ts');
+const quickSaveQueueSwift = readSource('../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift');
+const quickSaveIntentSwift = readSource('../modules/dynamic-island-quick-save/ios/SaveAppQuickSaveIntent.swift');
+const clipboardSettingsSwift = readSource('../modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift');
+const clipboardSettingsTypeScript = readSource('../modules/clipboard-url-detection/src/index.ts');
 const expoWidgetsModuleSource = readSource('../node_modules/expo-widgets/ios/WidgetsModule.swift');
 const expoWidgetsFactorySource = readSource('../node_modules/expo-widgets/ios/LiveActivityFactory.swift');
 const expoWidgetsTargetPluginSource = readSource('../node_modules/expo-widgets/plugin/src/ios/withIosWidgets.ts');
@@ -160,7 +168,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
 
   test('starts the activity with the fixed shared icon and preserves authorization setup', () => {
     const activityStartIndex = managerSource.indexOf(
-      "{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,",
+      "quickSaveStatus: 'ready',\n          showRecentQuickSaveLinks,",
     );
 
     expect(activityStartIndex).toBeGreaterThanOrEqual(0);
@@ -261,16 +269,197 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(managerSource).toContain('activity = getActivityFactory().start(');
     expect(managerSource).toContain('composeUrl');
     expect(managerSource).toContain('activityToken: token');
-    expect(managerSource).toContain("{ iconUri, composeUrl, expandedHomeUrl, quickSaveStatus: 'ready' },\n        composeUrl,");
+    expect(managerSource).toContain("quickSaveStatus: 'ready'");
+    expect(managerSource).toContain('showRecentQuickSaveLinks,');
+    expect(managerSource).toContain('recentQuickSaveLinks: await makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)');
     expect(layoutSource).toContain('compactLeading: (');
     expect(layoutSource).toContain('minimal: (');
-    expect(banner).not.toContain('<Link');
+    expect(banner).toContain('<Link destination={props.expandedHomeUrl}>');
+    expect(banner.match(/<Link/g)).toHaveLength(1);
+    expect(banner).toContain('recentQuickSaveLinks.length > 0');
+    expect(banner).not.toContain('Recentes');
     expect(compactLeading).not.toContain('<Link');
     expect(minimal).not.toContain('<Link');
     expect(expandedTrailing).toContain('target="saveapp.quickSave"');
     expect(layoutSource.match(/<Link destination=\{props\.composeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toBeNull();
     expect(managerSource).toContain("Linking.createURL('/links/compose'");
     expect(managerSource).toContain("Linking.createURL('/',");
+  });
+
+  test('builds a compact native lock-screen card with an optional domain-only history', () => {
+    const banner = layoutSource.match(/banner: \(([\s\S]*?)\n\s*\),\n\s*compactLeading:/)?.[1] ?? '';
+    const linkRows = banner.match(/recentQuickSaveLinks\.map\(\(link\) => \(([\s\S]*?)\n\s*\)\)\}/)?.[1] ?? '';
+
+    expect(banner).toContain('<VStack alignment="leading" spacing={6}');
+    expect(banner).toContain('padding({ horizontal: 14, vertical: 10 })');
+    expect(banner).toContain('<Divider');
+    expect(banner).toContain("foregroundStyle({ type: 'hierarchical', style: 'primary' })");
+    expect(banner).not.toContain('Recentes');
+    expect(banner).not.toContain('Links recentes');
+    expect(banner).not.toContain('background(');
+    expect(banner).not.toMatch(/frame\(\{\s*height:\s*(?:1[6-9]\d|[2-9]\d{2})/);
+    expect(banner).toContain('systemName="globe"');
+    expect(banner).toContain('uiImage={link.faviconUri}');
+    expect(banner).toMatch(/link\.faviconUri\s*\?/);
+    expect(banner).toContain('dateStyle="relative"');
+    expect(banner).toContain('lineLimit(1)');
+    expect(linkRows).toContain('link.domain');
+    expect(linkRows).not.toContain('<Link');
+    expect(linkRows).not.toContain('chevron');
+    expect(layoutSource).toContain('showRecentQuickSaveLinks?: boolean');
+    expect(layoutSource).toContain('(props.recentQuickSaveLinks ?? []).slice(0, 3)');
+    expect(layoutSource).toContain('quickSaveCenterTitle');
+  });
+
+  test('validates the capped recent-link summary and orders it without exposing URLs', () => {
+    const digest = (character) => character.repeat(64);
+    const data = {
+      formatVersion: 1,
+      links: [
+        { id: digest('a'), domain: 'older.example', createdAt: 1_000 },
+        { id: digest('b'), domain: 'newest.example', createdAt: 3_000 },
+        { id: digest('c'), domain: 'middle.example', createdAt: 2_000 },
+      ],
+    };
+
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({ formatVersion: 1, links: [] }, 4_000)).toEqual([]);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({ formatVersion: 1, links: data.links.slice(0, 1) }, 4_000))
+      .toHaveLength(1);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({ formatVersion: 1, links: data.links.slice(0, 2) }, 4_000))
+      .toHaveLength(2);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory(data, 4_000).map(({ domain }) => domain))
+      .toEqual(['newest.example', 'middle.example', 'older.example']);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({
+      formatVersion: 1,
+      links: [...data.links, { id: digest('d'), domain: 'extra.example', createdAt: 500 }],
+    }, 4_000)).toEqual([]);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({
+      formatVersion: 1,
+      links: [data.links[0], { ...data.links[0], domain: 'duplicate.example' }],
+    }, 4_000)).toEqual([]);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({
+      formatVersion: 1,
+      links: [{ id: digest('e'), domain: 'private.example/path?token=secret', createdAt: 1_000 }],
+    }, 4_000)).toEqual([]);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({ formatVersion: 2, links: [] }, 4_000)).toEqual([]);
+  });
+
+  test('validates shared favicon identity and the 96px PNG cache before passing file URIs to the widget', () => {
+    const id = 'a'.repeat(64);
+    const validPng = new Uint8Array(24);
+    validPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    validPng.set([0, 0, 0, 96], 16);
+    validPng.set([0, 0, 0, 96], 20);
+    const badDimensions = new Uint8Array(validPng);
+    badDimensions[19] = 48;
+    const tooLarge = new Uint8Array(64 * 1_024 + 1);
+    tooLarge.set(validPng);
+
+    expect(lockScreenHistory.isValidQuickSaveFaviconFileName(`favicon-${id}.png`, id)).toBe(true);
+    expect(lockScreenHistory.isValidQuickSaveFaviconFileName(`favicon-${'b'.repeat(64)}.png`, id)).toBe(false);
+    expect(lockScreenHistory.isValidQuickSaveFaviconFileName('../favicon.png', id)).toBe(false);
+    expect(lockScreenHistory.isValidQuickSaveFaviconPng(validPng)).toBe(true);
+    expect(lockScreenHistory.isValidQuickSaveFaviconPng(badDimensions)).toBe(false);
+    expect(lockScreenHistory.isValidQuickSaveFaviconPng(tooLarge)).toBe(false);
+
+    const summary = lockScreenHistory.validateQuickSaveLockScreenHistory({
+      formatVersion: 1,
+      links: [{
+        id,
+        domain: 'github.com',
+        createdAt: 1_000,
+        savedContentId: 42,
+        faviconFileName: `favicon-${id}.png`,
+      }],
+    }, 2_000);
+    expect(summary).toEqual([expect.objectContaining({ savedContentId: 42, faviconFileName: `favicon-${id}.png` })]);
+    expect(lockScreenHistory.validateQuickSaveLockScreenHistory({
+      formatVersion: 1,
+      links: [{ id, domain: 'github.com', createdAt: 1_000, faviconFileName: 'https://github.com/favicon.png' }],
+    }, 2_000)).toEqual([]);
+    expect(lockScreenHistorySource).toContain('favicon.bytes()');
+    expect(lockScreenHistorySource).toContain('favicon.uri.startsWith(\'file://\')');
+  });
+
+  test('keeps favicon networking in the opted-in app process and refreshes the existing activity after caching', () => {
+    expect(savedContentLibrarySource).toContain('downloadLinkFaviconImage(faviconUrl)');
+    expect(savedContentLibrarySource).toContain('link.id === id && link.savedContentId === candidate.id');
+    expect(savedContentLibrarySource).toContain('getQuickSaveLockScreenSettings()?.showRecentLinks !== true');
+    expect(savedContentLibrarySource).toContain('storeQuickSaveLockScreenFavicon(id, base64)');
+    expect(savedContentLibrarySource).toContain('subscribeToQuickSaveLinkPreviewUpdates');
+    expect(savedContentLibrarySource).toContain('associateQuickSaveLockScreenContent(historyId, savedId)');
+    expect(providerSource).toContain('synchronizeQuickSaveLockScreenFavicons()');
+    expect(providerSource).toContain('updateSaveLinkActivityRecentLinksVisibility(true)');
+    expect(managerSource).toContain('...(faviconUri ? { faviconUri } : {})');
+    expect(managerSource).toContain('if (!visible) return []');
+    expect(managerSource).toContain('visible && getQuickSaveLockScreenSettings()?.showRecentLinks === true');
+    expect(managerSource).not.toMatch(/recentQuickSaveLinks[\s\S]{0,180}normalizedUrl|recentQuickSaveLinks[\s\S]{0,180}\.url/);
+    expect(quickSaveIntentSwift).toContain('SaveAppQuickSaveQueue.lockScreenRecentLinkActivityProps()');
+    expect(quickSaveIntentSwift).not.toMatch(/URLSession|URLRequest|fetch\(/);
+    expect(layoutSource).toContain('uiImage={link.faviconUri}');
+    expect(layoutSource).toContain('systemName="globe"');
+    expect(clipboardSettingsSwift).toContain('flock(descriptor, LOCK_EX)');
+    expect(clipboardSettingsSwift).toContain('atomicWrite(pngData, to: imageURL, in: faviconDirectory)');
+    expect(clipboardSettingsSwift).toContain('maximumSourceBytes = 256 * 1_024');
+    expect(clipboardSettingsSwift).toContain('maximumFaviconBytes = 64 * 1_024');
+    expect(clipboardSettingsSwift).toContain('UIGraphicsImageRenderer(size: CGSize(width: 96, height: 96)');
+    expect(clipboardSettingsSwift).toContain('UserDefaults(suiteName: appGroupIdentifier)?.bool(forKey: visibleKey) == true');
+    expect(quickSaveQueueSwift).toContain('pruneObsoleteFavicons');
+    expect(quickSaveQueueSwift).toContain('lockScreenRecentLinkActivityProps');
+    expect(quickSaveQueueSwift).toContain('CGImageSourceCreateImageAtIndex(source, 0, nil) != nil');
+    expect(linkPreviewSource).toContain('downloadLinkFaviconImage');
+  });
+
+  test('defaults lock-screen recent history to hidden and publishes only a confirmed queue summary', () => {
+    const queueWriteIndex = quickSaveQueueSwift.indexOf('try writeAtomically(data, to: destination, in: directory)');
+    const queueVerifyIndex = quickSaveQueueSwift.indexOf('guard let persisted = try readAndValidateRecord(at: destination), persisted == record');
+    const historyWriteIndex = quickSaveQueueSwift.indexOf('updateLockScreenRecentLinksBestEffort(record, in: directory)', queueVerifyIndex);
+
+    expect(quickSaveQueueSwift).toContain('lockScreenRecentLinksVersion = 1');
+    expect(quickSaveQueueSwift).toContain('maximumLockScreenRecentLinks = 3');
+    expect(quickSaveQueueSwift).toContain('let id = String(queueFileName(for: record.normalizedURL).dropLast(".json".count))');
+    expect(quickSaveQueueSwift).toContain('id: id');
+    expect(quickSaveQueueSwift).toContain('flock(descriptor, LOCK_EX)');
+    expect(queueVerifyIndex).toBeGreaterThan(queueWriteIndex);
+    expect(historyWriteIndex).toBeGreaterThan(queueVerifyIndex);
+    expect(quickSaveQueueSwift).not.toMatch(/URLSession|URLRequest|fetch\(|saveapp-photos\.db/);
+    expect(quickSaveIntentSwift).toContain('?? false');
+    expect(quickSaveIntentSwift).toContain('props["recentQuickSaveLinks"] = recentQuickSaveLinks');
+    expect(quickSaveIntentSwift).toContain('await activity.update(ActivityContent(state: state, staleDate: nil))');
+    expect(quickSaveIntentSwift).not.toContain('recentQuickSaveLinksVisibleKey] ?? true');
+    expect(layoutSource).toContain('showRecentQuickSaveLinks?: boolean');
+  });
+
+  test('requires explicit lock-screen privacy opt-in and updates the existing authorized activity', () => {
+    const updateStart = managerSource.indexOf('export async function updateSaveLinkActivityRecentLinksVisibility');
+    const updateEnd = managerSource.indexOf('export async function reconcileSaveLinkActivity', updateStart);
+    const updateSource = managerSource.slice(updateStart, updateEnd);
+
+    expect(providerSource).toContain('useState(false);');
+    expect(providerSource).toContain('setQuickSaveLockScreenRecentLinksVisible(visible)');
+    expect(settingsSource).toContain('Links recentes na tela bloqueada');
+    expect(settingsSource).toContain('Desativado por padrão');
+    expect(updateSource).toContain('factory.getInstances().find((candidate) => candidate.getId() === authorization.activityId)');
+    expect(updateSource).toContain('const quickSaveStatus = latestSettings?.quickSaveStatus ?? \'ready\'');
+    expect(updateSource).toContain('await activity.update({');
+    expect(updateSource).toContain('quickSaveStatus,');
+    expect(updateSource).toContain('visible && getQuickSaveLockScreenSettings()?.showRecentLinks === true');
+    expect(updateSource).toContain('const latestSettings = getQuickSaveLockScreenSettings()');
+    expect(updateSource).toContain('const shouldShowRecentQuickSaveLinks = visible && latestSettings?.showRecentLinks === true');
+    expect(updateSource).toContain('recentQuickSaveLinks: shouldShowRecentQuickSaveLinks ? recentQuickSaveLinks : []');
+    expect(updateSource.indexOf('await Promise.all([')).toBeLessThan(updateSource.indexOf('const latestSettings = getQuickSaveLockScreenSettings()'));
+    expect(updateSource.indexOf('const latestSettings = getQuickSaveLockScreenSettings()')).toBeLessThan(updateSource.indexOf('await activity.update({'));
+    expect(updateSource).toContain('makeRecentQuickSaveActivityProps(showRecentQuickSaveLinks)');
+    expect(updateSource).toContain('activityToken: authorization.token');
+    expect(updateSource).toContain("source: 'dynamic-island-expanded'");
+    expect(updateSource).not.toContain('factory.start(');
+    expect(managerSource.indexOf("setQuickSaveActivityStatus('ready')"))
+      .toBeLessThan(managerSource.indexOf('activity = getActivityFactory().start('));
+    expect(quickSaveIntentSwift).toContain('let showRecentLinks = defaults?.bool(forKey: SaveAppQuickSaveQueue.lockScreenRecentLinksVisibleKey) ?? false');
+    expect(quickSaveIntentSwift).toContain('defaults?.set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)');
+    expect(clipboardSettingsSwift).toContain('Function("setQuickSaveActivityStatus")');
+    expect(clipboardSettingsSwift).toContain('allowedStatuses.contains(status)');
+    expect(clipboardSettingsTypeScript).toContain('export function setQuickSaveActivityStatus(');
   });
 
   test('reads clipboard only on the explicit activity deep link and opens the existing composer', () => {

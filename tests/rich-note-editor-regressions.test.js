@@ -133,19 +133,37 @@ describe('rich note editor iOS regressions', () => {
     expect(librarySource).toContain('UPDATE saved_content SET text_content = ?');
   });
 
-  test('keeps the checklist checkbox inside a finite native context-menu trigger', () => {
+  test('keeps the complete checklist row in a finite native context-menu trigger after media blocks', () => {
     const checklistStart = editorSource.indexOf('const renderChecklist');
     const checklistEnd = editorSource.indexOf('const renderInlineLinkComposer', checklistStart);
     const checklistSource = editorSource.slice(checklistStart, checklistEnd);
+    const nativeMenuCloseIndex = checklistSource.indexOf('</NativeCardContextMenu>');
+    const textInputIndex = checklistSource.indexOf('<TextInput');
 
     expect(checklistSource).toContain('matchContents={{ vertical: true }}');
-    expect(checklistSource).toContain('triggerContentWidth={RICH_NOTE_CHECKLIST_CONTROL_WIDTH}');
+    expect(checklistSource).toContain('triggerContentWidth={editorContentWidth > 0 ? editorContentWidth : undefined}');
+    expect(checklistSource).toContain('width: editorContentWidth > 0 ? editorContentWidth : \'100%\'');
     expect(editorSource).toContain('const RICH_NOTE_CHECKLIST_CONTROL_WIDTH = 44');
     expect(checklistSource).toContain('width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH');
     expect(checklistSource).toContain("alignItems: 'center', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum");
+    expect(nativeMenuCloseIndex).toBeGreaterThan(textInputIndex);
+    expect(checklistSource).toMatch(/<NativeCardContextMenu[\s\S]*?<View style=\{\{ alignItems: 'center', flexDirection: 'row'[\s\S]*?<ChecklistCheckboxIndicator[\s\S]*?<TextInput[\s\S]*?<\/NativeCardContextMenu>/);
+    expect(checklistSource).toContain('style={{ flex: 1, minWidth: 0, position: \'relative\' }}');
     expect(checklistSource).not.toContain('hitSlop={4}');
     expect(checklistSource).toContain('<ChecklistCheckboxIndicator isCompleted={item.checked} />');
     expect(checklistSource).toContain('accessibilityRole="checkbox"');
+    expect(checklistSource).toContain('key={item.id}');
+
+    const mediaBlocksStart = editorSource.indexOf('const rendered = document.blocks.flatMap');
+    const mediaBlocksEnd = editorSource.indexOf('if (!composer) return [row];', mediaBlocksStart);
+    const documentRenderer = editorSource.slice(mediaBlocksStart, mediaBlocksEnd);
+    expect(documentRenderer).toContain("if (block.type === 'image') row = renderImage(block)");
+    expect(documentRenderer).toContain('else row = renderChecklist(block)');
+    expect(documentRenderer).toContain('document.blocks.flatMap');
+    expect(documentRenderer).not.toMatch(/filter\([^)]*type\s*!==\s*'image'/);
+    expect(checklistSource).toContain('width: editorContentWidth > 0 ? editorContentWidth : \'100%\'');
+    expect(checklistSource).not.toContain('imageWidth');
+    expect(editorSource).toContain("block.size === 'small' ? 0.45 : block.size === 'medium' ? 0.72 : 1");
   });
 
   test('bounds transient keyboard viewport heights for 1, 2, 5, and 10 checklist rows', () => {

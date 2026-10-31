@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { CryptoDigestAlgorithm, digestStringAsync } from 'expo-crypto';
 
 import { getSaveAppDatabase } from '@/features/photos/photoLibrary';
 import {
@@ -8,11 +9,17 @@ import {
 
 import { deleteSavedContentWithPersistence } from './contentDeletionPipeline';
 import { savedContentRowToModel, type SavedContentRow } from './savedContentCatalog';
-import { downloadLinkPreviewImage, getLinkPreview } from './linkPreview';
+import { downloadLinkFaviconImage, downloadLinkPreviewImage, getLinkPreview } from './linkPreview';
 import { EmptySavedTextError, saveLinkWithPreview, saveTextContent } from './contentSavePipeline';
 import { fallbackLinkTitle, normalizeWebLink } from './linkValidation';
 import type { SavedHomeContent, SavedLink, SavedText } from './homeContentTypes';
-import { recordSaveAppDiagnosticEvent } from '../../../modules/clipboard-url-detection/src';
+import {
+  associateQuickSaveLockScreenContent,
+  getQuickSaveLockScreenSettings,
+  recordSaveAppDiagnosticEvent,
+  storeQuickSaveLockScreenFavicon,
+} from '../../../modules/clipboard-url-detection/src';
+import { readQuickSaveLockScreenHistory } from '@/features/dynamic-island/quickSaveLockScreenHistory';
 import type { PersistedQuickSaveLink } from '@/features/dynamic-island/quickSaveQueueImportPipeline';
 import {
   encodePersistedRichNote,
@@ -39,6 +46,8 @@ const PREVIEW_DIRECTORY = 'home-content/link-previews';
 const SAFE_PREVIEW_PATH =
   /^home-content\/link-previews\/(?:preview-[a-z0-9-]+\.(?:jpg|png|webp|gif)|\.delete-preview-[a-z0-9-]+\.(?:jpg|png|webp|gif))$/i;
 const quickSaveLinkPreviewListeners = new Set<() => void>();
+const quickSaveLockScreenFaviconJobs = new Map<string, Promise<boolean>>();
+const MAX_QUICK_SAVE_FAVICON_SOURCE_BYTES = 256 * 1_024;
 
 function fileForPreviewPath(relativePath: string): File {
   if (!SAFE_PREVIEW_PATH.test(relativePath)) {
@@ -76,6 +85,125 @@ async function deleteCachedLinkPreview(relativePath: string): Promise<void> {
   const file = fileForPreviewPath(relativePath);
   if (file.exists) file.delete();
   if (file.exists) throw new Error('The saved link preview could not be removed.');
+}
+
+async function cacheQuickSaveLockScreenFavicon(
+  candidate: QuickSaveLinkPreviewCandidate,
+  faviconUrl: string,
+): Promise<boolean> {
+  if (getQuickSaveLockScreenSettings()?.showRecentLinks !== true) return false;
+  const id = (await digestStringAsync(CryptoDigestAlgorithm.SHA256, candidate.normalizedUrl)).toLowerCase();
+  let history = await readQuickSaveLockScreenHistory();
+  const recent = history.find((link) => link.id === id && link.savedContentId === candidate.id);
+  if (!recent || recent.faviconUri) return false;
+  const existing = quickSaveLockScreenFaviconJobs.get(id);
+  if (existing) return existing;
+
+  let job!: Promise<boolean>;
+  job = (async () => {
+    let temporaryFile: File | null = null;
+    try {
+      if (getQuickSaveLockScreenSettings()?.showRecentLinks !== true) return false;
+      const downloaded = await downloadLinkFaviconImage(faviconUrl);
+      if (downloaded.bytes.byteLength > MAX_QUICK_SAVE_FAVICON_SOURCE_BYTES) return false;
+      const transferName = `quick-save-favicon-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bin`;
+      temporaryFile = new File(Paths.cache, transferName);
+      temporaryFile.create();
+      await temporaryFile.write(downloaded.bytes);
+      const base64 = await temporaryFile.base64();
+      if (getQuickSaveLockScreenSettings()?.showRecentLinks !== true) return false;
+      const latest = await readQuickSaveLockScreenHistory();
+      if (!latest.some((link) => link.id === id && link.savedContentId === candidate.id)) return false;
+      return storeQuickSaveLockScreenFavicon(id, base64);
+    } catch {
+      return false;
+    } finally {
+      if (temporaryFile?.exists) temporaryFile.delete();
+    }
+  })().finally(() => {
+    if (quickSaveLockScreenFaviconJobs.get(id) === job) quickSaveLockScreenFaviconJobs.delete(id);
+  });
+  quickSaveLockScreenFaviconJobs.set(id, job);
+  return job;
+}
+
+/** Backfills only the opted-in, capped Quick Save history from already-saved favicon metadata. */
+export async function synchronizeQuickSaveLockScreenFavicons(): Promise<boolean> {
+  if (getQuickSaveLockScreenSettings()?.showRecentLinks !== true) return false;
+  let history = await readQuickSaveLockScreenHistory();
+  if (!history.length) return false;
+  const database = await getSaveAppDatabase();
+  const missingMappings = new Set(history.filter((link) => !link.savedContentId).map((link) => link.id));
+  const resolved = new Map<string, { id: number; normalizedUrl: string; faviconUrl: string | null }>();
+
+  if (missingMappings.size > 0) {
+    for await (const row of database.getEachAsync<{
+      id: number;
+      normalized_url: string | null;
+      favicon_url: string | null;
+    }>(
+      `SELECT id, normalized_url, favicon_url
+       FROM saved_content
+       WHERE content_type = 'link' AND deleted_at IS NULL AND normalized_url IS NOT NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 256;`,
+    )) {
+      if (!row.normalized_url) continue;
+      const digest = (await digestStringAsync(CryptoDigestAlgorithm.SHA256, row.normalized_url)).toLowerCase();
+      if (!missingMappings.has(digest)) continue;
+      if (associateQuickSaveLockScreenContent(digest, row.id)) {
+        resolved.set(digest, { id: row.id, normalizedUrl: row.normalized_url, faviconUrl: row.favicon_url });
+        missingMappings.delete(digest);
+      }
+      if (missingMappings.size === 0) break;
+    }
+  }
+
+  if (history.some((link) => !link.savedContentId) && missingMappings.size < history.filter((link) => !link.savedContentId).length) {
+    history = await readQuickSaveLockScreenHistory();
+  }
+
+  const mappedIds = history.flatMap((link) => link.savedContentId ? [link.savedContentId] : []);
+  if (mappedIds.length > 0) {
+    const placeholders = mappedIds.map(() => '?').join(', ');
+    const rows = await database.getAllAsync<{
+      id: number;
+      normalized_url: string | null;
+      favicon_url: string | null;
+    }>(
+      `SELECT id, normalized_url, favicon_url FROM saved_content
+       WHERE content_type = 'link' AND deleted_at IS NULL AND id IN (${placeholders});`,
+      ...mappedIds,
+    );
+    const ids = new Map(history.flatMap((link) => link.savedContentId ? [[link.savedContentId, link.id] as const] : []));
+    for (const row of rows) {
+      const historyId = ids.get(row.id);
+      if (historyId && row.normalized_url) {
+        resolved.set(historyId, { id: row.id, normalizedUrl: row.normalized_url, faviconUrl: row.favicon_url });
+      }
+    }
+  }
+
+  let storedAny = false;
+  for (const link of history) {
+    if (!link.savedContentId || link.faviconUri) continue;
+    const record = resolved.get(link.id);
+    if (!record?.faviconUrl || record.id !== link.savedContentId) continue;
+    const candidate = {
+      id: record.id,
+      url: record.normalizedUrl,
+      normalizedUrl: record.normalizedUrl,
+      title: '',
+      description: null,
+      domain: link.domain,
+      imageUrl: null,
+      faviconUrl: record.faviconUrl,
+      previewImageRelativePath: null,
+      previewImageMimeType: null,
+    };
+    storedAny = await cacheQuickSaveLockScreenFavicon(candidate, record.faviconUrl) || storedAny;
+  }
+  return storedAny;
 }
 
 function toQuickSavePreviewCandidate(row: {
@@ -243,6 +371,7 @@ const quickSaveLinkPreviewEnricher = createQuickSaveLinkPreviewEnricher({
     return { relativePath: cached.relativePath, mimeType: cached.mimeType };
   },
   updateIfUnchanged: updateQuickSavePreviewIfUnchanged,
+  cacheLockScreenFavicon: cacheQuickSaveLockScreenFavicon,
   isPreviewReferenced: isLinkPreviewPathReferenced,
   deletePreview: deleteCachedLinkPreview,
   onUpdated() {
@@ -416,6 +545,12 @@ export async function importQueuedQuickSaveLink(
   });
 
   if (savedId != null) {
+    try {
+      const historyId = (await digestStringAsync(CryptoDigestAlgorithm.SHA256, normalized.url)).toLowerCase();
+      associateQuickSaveLockScreenContent(historyId, savedId);
+    } catch {
+      // The SQLite row and queue acknowledgment remain authoritative if this display-only mapping fails.
+    }
     const row = await database.getFirstAsync<{
       id: number;
       url: string | null;

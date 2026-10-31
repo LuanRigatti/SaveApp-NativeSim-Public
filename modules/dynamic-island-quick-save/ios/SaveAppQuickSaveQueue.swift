@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import ImageIO
 import OSLog
 
 struct QuickSaveQueueRecord: Codable, Equatable {
@@ -11,6 +12,19 @@ struct QuickSaveQueueRecord: Codable, Equatable {
   let createdAt: Int64
   let title: String
   let domain: String
+}
+
+struct QuickSaveLockScreenRecentLink: Codable, Equatable {
+  let id: String
+  let domain: String
+  let createdAt: Int64
+  var savedContentId: Int? = nil
+  var faviconFileName: String? = nil
+}
+
+private struct QuickSaveLockScreenRecentLinksFile: Codable, Equatable {
+  let formatVersion: Int
+  var links: [QuickSaveLockScreenRecentLink]
 }
 
 enum QuickSaveQueueWriteResult {
@@ -40,6 +54,14 @@ enum SaveAppQuickSaveQueue {
   static let formatVersion = 1
   static let maximumPendingRecords = 1_000
   static let maximumRecordBytes = 16 * 1_024
+  static let lockScreenRecentLinksFileName = "QuickSaveLockScreenRecentLinks.json"
+  static let lockScreenRecentLinksVersion = 1
+  static let maximumLockScreenRecentLinks = 3
+  static let lockScreenFaviconDirectoryName = "Favicons"
+  static let maximumLockScreenFaviconBytes = 64 * 1_024
+  static let lockScreenRecentLinksVisibleKey = "saveapp.dynamic-island.lock-screen-recents-visible-v1"
+  static let quickSaveActivityStatusKey = "saveapp.dynamic-island.quick-save-status-v1"
+  private static let maximumLockScreenRecentLinksBytes = 4 * 1_024
   private static let logger = Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.queue")
   private static let fileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
 
@@ -82,6 +104,7 @@ enum SaveAppQuickSaveQueue {
           logger.error("event=quick_save.queue.write_failed reason=existing_record_invalid")
           throw QuickSaveQueueFailure.invalidRecord
         }
+        updateLockScreenRecentLinksBestEffort(existing, in: directory)
         logger.notice("event=quick_save.queue.duplicate")
         return .alreadyQueued
       }
@@ -118,8 +141,164 @@ enum SaveAppQuickSaveQueue {
         throw QuickSaveQueueFailure.io(EIO)
       }
 
+      updateLockScreenRecentLinksBestEffort(record, in: directory)
       logger.notice("event=quick_save.queue.write_confirmed")
       return .enqueued
+    }
+  }
+
+  static func lockScreenRecentLinks() -> [QuickSaveLockScreenRecentLink] {
+    guard let container = FileManager.default.containerURL(
+      forSecurityApplicationGroupIdentifier: appGroupIdentifier
+    ) else { return [] }
+    let directory = container.appendingPathComponent(directoryName, isDirectory: true)
+    guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+    do {
+      return try withExclusiveFileLock(in: directory) {
+        readLockScreenRecentLinks(in: directory)?.links ?? []
+      }
+    } catch {
+      logger.notice("event=quick_save.lock_screen_history.read_failed")
+      return []
+    }
+  }
+
+  static func lockScreenRecentLinkActivityProps() -> [[String: Any]] {
+    lockScreenRecentLinks().map { link in
+      var result: [String: Any] = ["domain": link.domain, "createdAt": link.createdAt]
+      if let fileName = link.faviconFileName,
+         let uri = validFaviconURL(fileName: fileName, id: link.id) {
+        result["faviconUri"] = uri.absoluteString
+      }
+      return result
+    }
+  }
+
+  private static func updateLockScreenRecentLinksBestEffort(
+    _ record: QuickSaveQueueRecord,
+    in directory: URL
+  ) {
+    do {
+      var links = readLockScreenRecentLinks(in: directory)?.links ?? []
+      let id = String(queueFileName(for: record.normalizedURL).dropLast(".json".count))
+      let previous = links.first(where: { $0.id == id })
+      let entry = QuickSaveLockScreenRecentLink(
+        id: id,
+        domain: record.domain,
+        createdAt: record.createdAt,
+        savedContentId: previous?.savedContentId,
+        faviconFileName: previous?.faviconFileName
+      )
+      links.removeAll { $0.id == entry.id }
+      links.append(entry)
+      links.sort {
+        if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+        return $0.id < $1.id
+      }
+      let file = QuickSaveLockScreenRecentLinksFile(
+        formatVersion: lockScreenRecentLinksVersion,
+        links: Array(links.prefix(maximumLockScreenRecentLinks))
+      )
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.sortedKeys]
+      let data = try encoder.encode(file)
+      guard data.count <= maximumLockScreenRecentLinksBytes else {
+        throw QuickSaveQueueFailure.invalidRecord
+      }
+      let destination = directory.appendingPathComponent(lockScreenRecentLinksFileName, isDirectory: false)
+      try writeAtomically(data, to: destination, in: directory)
+      guard let verified = readLockScreenRecentLinks(in: directory), verified == file else {
+        throw QuickSaveQueueFailure.io(EIO)
+      }
+      pruneObsoleteFavicons(in: directory, referencedNames: Set(file.links.compactMap(\.faviconFileName)))
+      logger.notice("event=quick_save.lock_screen_history.write_confirmed count=\(file.links.count, privacy: .public)")
+    } catch {
+      // The durable queue record is authoritative. A summary failure must never turn a
+      // confirmed Quick Save into a failed save or remove it from the import queue.
+      logger.notice("event=quick_save.lock_screen_history.write_failed")
+    }
+  }
+
+  private static func readLockScreenRecentLinks(in directory: URL) -> QuickSaveLockScreenRecentLinksFile? {
+    let url = directory.appendingPathComponent(lockScreenRecentLinksFileName, isDirectory: false)
+    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+          values.isRegularFile == true,
+          let size = values.fileSize,
+          size > 0,
+          size <= maximumLockScreenRecentLinksBytes,
+          let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+          let decoded = try? JSONDecoder().decode(QuickSaveLockScreenRecentLinksFile.self, from: data),
+          decoded.formatVersion == lockScreenRecentLinksVersion,
+          decoded.links.count <= maximumLockScreenRecentLinks,
+          decoded.links.allSatisfy(isValidLockScreenRecentLink),
+          Set(decoded.links.map(\.id)).count == decoded.links.count,
+          decoded.links == decoded.links.sorted(by: {
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.id < $1.id
+          }) else {
+      return nil
+    }
+    return decoded
+  }
+
+  private static func isValidLockScreenRecentLink(_ link: QuickSaveLockScreenRecentLink) -> Bool {
+    guard link.id.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+          !link.domain.isEmpty,
+          link.domain.utf8.count <= 253,
+          link.createdAt > 0,
+          link.createdAt <= Int64(Date().timeIntervalSince1970 * 1_000) + 60_000,
+          let normalized = SaveLinkQuickSaveSQLite.normalize("https://\(link.domain)") else {
+      return false
+    }
+    return normalized.domain == link.domain &&
+      (link.savedContentId == nil || link.savedContentId! > 0) &&
+      (link.faviconFileName == nil || link.faviconFileName == faviconFileName(for: link.id))
+  }
+
+  private static func faviconFileName(for id: String) -> String {
+    "favicon-\(id.lowercased()).png"
+  }
+
+  private static func validFaviconURL(fileName: String, id: String) -> URL? {
+    guard fileName == faviconFileName(for: id),
+          let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroupIdentifier
+          ) else { return nil }
+    let directory = container.appendingPathComponent(directoryName, isDirectory: true)
+      .appendingPathComponent(lockScreenFaviconDirectoryName, isDirectory: true)
+    let url = directory.appendingPathComponent(fileName, isDirectory: false)
+    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+          values.isRegularFile == true,
+          let size = values.fileSize,
+          size > 0,
+          size <= maximumLockScreenFaviconBytes,
+          let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+          CGImageSourceGetCount(source) > 0,
+          let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+          (properties[kCGImagePropertyPixelWidth] as? Int) == 96,
+          (properties[kCGImagePropertyPixelHeight] as? Int) == 96,
+          CGImageSourceCreateImageAtIndex(source, 0, nil) != nil else { return nil }
+    return url
+  }
+
+  private static func pruneObsoleteFavicons(in directory: URL, referencedNames: Set<String>) {
+    let faviconDirectory = directory.appendingPathComponent(lockScreenFaviconDirectoryName, isDirectory: true)
+    guard let children = try? FileManager.default.contentsOfDirectory(
+      at: faviconDirectory,
+      includingPropertiesForKeys: [.isRegularFileKey],
+      options: []
+    ) else { return }
+    for child in children {
+      let name = child.lastPathComponent
+      let isObsoleteFavicon = name.range(
+        of: "^favicon-[a-f0-9]{64}\\.png$", options: .regularExpression
+      ) != nil && !referencedNames.contains(name)
+      let isAbandonedTemporary = name.range(
+        of: "^\\.pending-[A-F0-9-]{36}\\.tmp$", options: [.regularExpression, .caseInsensitive]
+      ) != nil
+      guard isObsoleteFavicon || isAbandonedTemporary else { continue }
+      guard (try? child.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+      try? FileManager.default.removeItem(at: child)
     }
   }
 

@@ -32,6 +32,7 @@ export type QuickSavePreviewEnrichmentAdapter = {
     candidate: QuickSaveLinkPreviewCandidate,
     policy: { maxAttempts: number; retryDelayMs: number; now: number },
   ) => Promise<boolean>;
+  cacheLockScreenFavicon?: (candidate: QuickSaveLinkPreviewCandidate, faviconUrl: string) => Promise<boolean | void>;
   isPreviewReferenced: (relativePath: string) => Promise<boolean>;
   deletePreview: (relativePath: string) => Promise<void>;
   onUpdated: () => void;
@@ -148,6 +149,11 @@ export function createQuickSaveLinkPreviewEnricher(
         return 'unchanged';
       }
       adapter.onUpdated();
+      if (metadata.faviconUrl && adapter.cacheLockScreenFavicon) {
+        void adapter.cacheLockScreenFavicon(candidate, metadata.faviconUrl)
+          .then((stored) => { if (stored !== false) adapter.onUpdated(); })
+          .catch(() => undefined);
+      }
       return 'updated';
     } catch {
       if (preview) {

@@ -905,79 +905,86 @@ export const RichNoteEditor = forwardRef<RichNoteEditorHandle, RichNoteEditorPro
   const renderChecklist = (block: RichNoteChecklistBlock) => (
     <View key={block.id} style={{ gap: 2, width: '100%' }}>
       {block.items.map((item, index) => (
-        <View key={item.id} style={{ alignItems: 'center', flexDirection: 'row', minHeight: theme.sizes.touchTargetMinimum, width: '100%' }}>
-          <NativeCardContextMenu
-            actions={checklistItemActions(block.id, item.id)}
-            matchContents={{ vertical: true }}
-            style={{ alignSelf: 'flex-start', flexShrink: 0, width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH }}
-            title="Tarefa"
-            triggerContentWidth={RICH_NOTE_CHECKLIST_CONTROL_WIDTH}
-          >
-          <Pressable
-            accessibilityLabel={item.checked ? `Desmarcar tarefa ${index + 1}` : `Marcar tarefa ${index + 1}`}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: item.checked }}
-            onPress={() => toggleChecklistItem(block.id, item.id)}
-            onPressIn={markInteraction}
-            style={{ alignItems: 'center', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum, width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH }}
-          >
-            <ChecklistCheckboxIndicator isCompleted={item.checked} />
-          </Pressable>
-          </NativeCardContextMenu>
-          <View
-            onLayout={(event) => measureInputHitArea(item.id, event.nativeEvent.layout.width)}
-            style={{ flex: 1, minWidth: 0, position: 'relative' }}
-          >
-            <TextInput
-              accessibilityLabel={`Tarefa ${index + 1}`}
-              editable={!disabled}
-              multiline
-              onContentSizeChange={(event) => measureChecklistInput(item.id, event.nativeEvent.contentSize.height, item.text)}
-              onBlur={handleInputBlur}
-              onChangeText={(text) => {
-                preserveExplicitLines(item.id, text, checklistTaskLineHeight, checklistTaskMinimumHeight, checklistTaskVerticalPadding);
-                updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`);
-              }}
-              onFocus={() => {
-                if (submittedChecklistItemRef.current === item.id) submittedChecklistItemRef.current = null;
-                const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
-                editorHasFocusRef.current = true;
-                activeInputRef.current = input;
-              }}
-              onSelectionChange={(event) => {
-                selectionRef.current = event.nativeEvent.selection;
-                selectionByInputRef.current.set(item.id, event.nativeEvent.selection);
-              }}
-              onSubmitEditing={() => submitChecklistItem(block.id, item.id)}
-              onTouchStart={(event) => markTextLineInteraction(item.id, event, checklistTaskLineHeight, measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, theme.spacing.xs)}
-              placeholder="Item da checklist"
-              placeholderTextColor={theme.colors.textTertiary}
-              ref={(node) => {
-                if (!node) {
-                  inputRefs.current.delete(item.id);
-                  return;
-                }
-                inputRefs.current.set(item.id, node);
-              }}
-              returnKeyType="next"
-              scrollEnabled={false}
-              selectionColor={theme.colors.primary}
-              style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, flex: 1, height: measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, minHeight: checklistTaskMinimumHeight, minWidth: 0, paddingVertical: theme.spacing.xs, textDecorationLine: item.checked ? 'line-through' : 'none', textAlignVertical: 'center' }]}
-              submitBehavior="submit"
-              value={item.text}
-            />
-            <Text
-              accessible={false}
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-              onTextLayout={(event) => measureInputTextLines(item.id, event.nativeEvent.lines.map((line) => ({ width: line.width, height: line.height })))}
-              pointerEvents="none"
-              style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, left: 0, opacity: 0, paddingVertical: theme.spacing.xs, position: 'absolute', textDecorationLine: item.checked ? 'line-through' : 'none', top: 0, width: '100%' }]}
+        <NativeCardContextMenu
+          key={item.id}
+          actions={checklistItemActions(block.id, item.id)}
+          matchContents={{ vertical: true }}
+          style={{
+            alignSelf: 'stretch',
+            flexShrink: 0,
+            minHeight: theme.sizes.touchTargetMinimum,
+            minWidth: 0,
+            width: editorContentWidth > 0 ? editorContentWidth : '100%',
+          }}
+          title="Tarefa"
+          triggerContentWidth={editorContentWidth > 0 ? editorContentWidth : undefined}
+        >
+          <View style={{ alignItems: 'center', flexDirection: 'row', minHeight: theme.sizes.touchTargetMinimum, width: '100%' }}>
+            <Pressable
+              accessibilityLabel={item.checked ? `Desmarcar tarefa ${index + 1}` : `Marcar tarefa ${index + 1}`}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: item.checked }}
+              onPress={() => toggleChecklistItem(block.id, item.id)}
+              onPressIn={markInteraction}
+              style={{ alignItems: 'center', justifyContent: 'center', minHeight: theme.sizes.touchTargetMinimum, width: RICH_NOTE_CHECKLIST_CONTROL_WIDTH }}
             >
-              {item.text || 'Item da checklist'}
-            </Text>
+              <ChecklistCheckboxIndicator isCompleted={item.checked} />
+            </Pressable>
+            <View
+              onLayout={(event) => measureInputHitArea(item.id, event.nativeEvent.layout.width)}
+              style={{ flex: 1, minWidth: 0, position: 'relative' }}
+            >
+              <TextInput
+                accessibilityLabel={`Tarefa ${index + 1}`}
+                editable={!disabled}
+                multiline
+                onContentSizeChange={(event) => measureChecklistInput(item.id, event.nativeEvent.contentSize.height, item.text)}
+                onBlur={handleInputBlur}
+                onChangeText={(text) => {
+                  preserveExplicitLines(item.id, text, checklistTaskLineHeight, checklistTaskMinimumHeight, checklistTaskVerticalPadding);
+                  updateChecklistItem(block.id, item.id, (current) => ({ ...current, text }), `checklist:${item.id}`);
+                }}
+                onFocus={() => {
+                  if (submittedChecklistItemRef.current === item.id) submittedChecklistItemRef.current = null;
+                  const input = { kind: 'checklist' as const, blockId: block.id, itemId: item.id };
+                  editorHasFocusRef.current = true;
+                  activeInputRef.current = input;
+                }}
+                onSelectionChange={(event) => {
+                  selectionRef.current = event.nativeEvent.selection;
+                  selectionByInputRef.current.set(item.id, event.nativeEvent.selection);
+                }}
+                onSubmitEditing={() => submitChecklistItem(block.id, item.id)}
+                onTouchStart={(event) => markTextLineInteraction(item.id, event, checklistTaskLineHeight, measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, theme.spacing.xs)}
+                placeholder="Item da checklist"
+                placeholderTextColor={theme.colors.textTertiary}
+                ref={(node) => {
+                  if (!node) {
+                    inputRefs.current.delete(item.id);
+                    return;
+                  }
+                  inputRefs.current.set(item.id, node);
+                }}
+                returnKeyType="next"
+                scrollEnabled={false}
+                selectionColor={theme.colors.primary}
+                style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, flex: 1, height: measuredInputHeights[item.id] ?? checklistTaskMinimumHeight, minHeight: checklistTaskMinimumHeight, minWidth: 0, paddingVertical: theme.spacing.xs, textDecorationLine: item.checked ? 'line-through' : 'none', textAlignVertical: 'center' }]}
+                submitBehavior="submit"
+                value={item.text}
+              />
+              <Text
+                accessible={false}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                onTextLayout={(event) => measureInputTextLines(item.id, event.nativeEvent.lines.map((line) => ({ width: line.width, height: line.height })))}
+                pointerEvents="none"
+                style={[theme.typography.body, { color: item.checked ? theme.colors.textSecondary : theme.colors.textPrimary, left: 0, opacity: 0, paddingVertical: theme.spacing.xs, position: 'absolute', textDecorationLine: item.checked ? 'line-through' : 'none', top: 0, width: '100%' }]}
+              >
+                {item.text || 'Item da checklist'}
+              </Text>
+            </View>
           </View>
-        </View>
+        </NativeCardContextMenu>
       ))}
       <Pressable
         accessibilityLabel="Adicionar tarefa à checklist da nota"

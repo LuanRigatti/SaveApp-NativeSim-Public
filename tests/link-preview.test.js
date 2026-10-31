@@ -1,4 +1,8 @@
-const { getLinkPreview, parseLinkPreviewHtml } = require('../src/features/home-content/linkPreview');
+const {
+  downloadLinkFaviconImage,
+  getLinkPreview,
+  parseLinkPreviewHtml,
+} = require('../src/features/home-content/linkPreview');
 
 const YOUTUBE_VIDEO_ID = 'abcDEF12345';
 
@@ -28,6 +32,51 @@ describe('local link metadata extraction', () => {
       imageUrl: 'https://example.com/assets/cover.jpg',
       faviconUrl: 'https://example.com/favicon.ico',
     });
+  });
+
+  test('prefers an official raster touch icon when the regular favicon is an ICO', () => {
+    const metadata = parseLinkPreviewHtml(`
+      <link rel="shortcut icon" href="/favicon.ico" />
+      <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    `, 'https://github.com/example/repo');
+
+    expect(metadata.faviconUrl).toBe('https://github.com/apple-touch-icon.png');
+  });
+
+  test('uses the site favicon.ico when the page declares only an unsupported SVG favicon', () => {
+    const metadata = parseLinkPreviewHtml(
+      '<link rel="icon" type="image/svg+xml" href="/assets/site-mark.svg">',
+      'https://github.com/example/repo',
+    );
+
+    expect(metadata.faviconUrl).toBe('https://github.com/favicon.ico');
+  });
+
+  test('downloads a small raster or ICO favicon through the bounded safe request path', async () => {
+    const body = Uint8Array.from([1, 2, 3, 4]);
+    const fetcher = jest.fn(async () => new Response(body, {
+      headers: { 'content-type': 'image/x-icon', 'content-length': String(body.length) },
+    }));
+
+    await expect(downloadLinkFaviconImage('https://example.com/favicon.ico', undefined, fetcher))
+      .resolves.toMatchObject({ mimeType: 'image/x-icon', bytes: body });
+    expect(fetcher.mock.calls[0][1]).toMatchObject({
+      credentials: 'omit',
+      redirect: 'manual',
+      headers: { Accept: expect.stringContaining('image/x-icon') },
+    });
+  });
+
+  test('rejects an oversized favicon and keeps network failures optional', async () => {
+    const oversizedFetcher = jest.fn(async () => new Response(null, {
+      headers: { 'content-type': 'image/png', 'content-length': String(300 * 1024) },
+    }));
+    await expect(downloadLinkFaviconImage('https://example.com/favicon.png', undefined, oversizedFetcher))
+      .rejects.toThrow('size limit');
+
+    const offlineFetcher = jest.fn(async () => { throw new Error('offline'); });
+    await expect(downloadLinkFaviconImage('https://example.com/favicon.png', undefined, offlineFetcher))
+      .rejects.toThrow('offline');
   });
 
   test('uses HTML title and derives fallback title if metadata is absent', () => {

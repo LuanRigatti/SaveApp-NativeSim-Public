@@ -42,6 +42,7 @@ $requiredSnapshotFiles = @(
   'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift',
   'src/features/dynamic-island/quickSaveQueue.ts',
   'src/features/dynamic-island/quickSaveQueueImportPipeline.ts',
+  'src/features/dynamic-island/quickSaveLockScreenHistory.ts',
   'src/features/home-content/quickSaveLinkPreviewEnrichment.ts',
   'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts',
   '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',

@@ -206,6 +206,13 @@ private actor SaveLinkQuickSaveCoordinator {
     SaveAppQuickSaveLog.logger.notice("event=activity.state.transition previous=\(previousStatus, privacy: .public) requested=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
 
     props["quickSaveStatus"] = status.rawValue
+    let defaults = UserDefaults(suiteName: SaveAppQuickSaveQueue.appGroupIdentifier)
+    let showRecentLinks = defaults?.bool(forKey: SaveAppQuickSaveQueue.lockScreenRecentLinksVisibleKey) ?? false
+    let recentQuickSaveLinks: [[String: Any]] = showRecentLinks
+      ? SaveAppQuickSaveQueue.lockScreenRecentLinkActivityProps()
+      : []
+    props["showRecentQuickSaveLinks"] = showRecentLinks
+    props["recentQuickSaveLinks"] = recentQuickSaveLinks
     guard let updatedData = try? JSONSerialization.data(withJSONObject: props, options: [.sortedKeys]),
           let updatedProps = String(data: updatedData, encoding: .utf8) else {
       SaveAppQuickSaveLog.logger.error("event=activity.update.result=serialization_failed operation=\(operationID, privacy: .public)")
@@ -218,6 +225,7 @@ private actor SaveLinkQuickSaveCoordinator {
     )
     SaveAppQuickSaveLog.logger.notice("event=activity.update.started state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
     await activity.update(ActivityContent(state: state, staleDate: nil))
+    defaults?.set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)
     SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
     return true
   }

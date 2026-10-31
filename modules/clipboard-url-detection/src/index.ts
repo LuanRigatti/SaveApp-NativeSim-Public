@@ -91,6 +91,16 @@ export type SaveAppDiagnosticEvent = (typeof SAVEAPP_DIAGNOSTIC_EVENTS)[number];
 type ClipboardURLDetectionNativeModule = {
   getDetectionSnapshotAsync: () => Promise<unknown>;
   recordDiagnosticEvent?: (event: SaveAppDiagnosticEvent) => void;
+  getQuickSaveLockScreenSettings?: () => unknown;
+  setQuickSaveLockScreenRecentLinksVisible?: (visible: boolean) => boolean;
+  setQuickSaveActivityStatus?: (status: QuickSaveLockScreenSettings['quickSaveStatus']) => boolean;
+  associateQuickSaveLockScreenContent?: (id: string, savedContentId: number) => boolean;
+  storeQuickSaveLockScreenFavicon?: (id: string, base64: string) => boolean;
+};
+
+export type QuickSaveLockScreenSettings = {
+  showRecentLinks: boolean;
+  quickSaveStatus: 'ready' | 'processing' | 'queued' | 'alreadyQueued' | 'invalid' | 'failed';
 };
 
 let cachedModule: ClipboardURLDetectionNativeModule | null | undefined;
@@ -114,6 +124,59 @@ export function recordSaveAppDiagnosticEvent(event: SaveAppDiagnosticEvent): voi
     getNativeModule()?.recordDiagnosticEvent?.(event);
   } catch {
     // Diagnostics are best-effort and must not affect clipboard or navigation behavior.
+  }
+}
+
+export function getQuickSaveLockScreenSettings(): QuickSaveLockScreenSettings | null {
+  try {
+    const result = getNativeModule()?.getQuickSaveLockScreenSettings?.();
+    if (!result || typeof result !== 'object') return null;
+    const value = result as Record<string, unknown>;
+    const statuses = new Set<QuickSaveLockScreenSettings['quickSaveStatus']>([
+      'ready', 'processing', 'queued', 'alreadyQueued', 'invalid', 'failed',
+    ]);
+    if (typeof value.showRecentLinks !== 'boolean' || typeof value.quickSaveStatus !== 'string' ||
+        !statuses.has(value.quickSaveStatus as QuickSaveLockScreenSettings['quickSaveStatus'])) return null;
+    return {
+      showRecentLinks: value.showRecentLinks,
+      quickSaveStatus: value.quickSaveStatus as QuickSaveLockScreenSettings['quickSaveStatus'],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function setQuickSaveLockScreenRecentLinksVisible(visible: boolean): boolean {
+  try {
+    return getNativeModule()?.setQuickSaveLockScreenRecentLinksVisible?.(visible) === true;
+  } catch {
+    return false;
+  }
+}
+
+export function setQuickSaveActivityStatus(status: QuickSaveLockScreenSettings['quickSaveStatus']): boolean {
+  try {
+    return getNativeModule()?.setQuickSaveActivityStatus?.(status) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Associates only the hashed Quick Save history entry with its committed SQLite row ID. */
+export function associateQuickSaveLockScreenContent(id: string, savedContentId: number): boolean {
+  try {
+    return getNativeModule()?.associateQuickSaveLockScreenContent?.(id, savedContentId) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Stores a validated, small image in the App Group only while lock-screen history is opted in. */
+export function storeQuickSaveLockScreenFavicon(id: string, base64: string): boolean {
+  try {
+    return getNativeModule()?.storeQuickSaveLockScreenFavicon?.(id, base64) === true;
+  } catch {
+    return false;
   }
 }
 
