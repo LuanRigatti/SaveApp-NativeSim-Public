@@ -513,6 +513,9 @@ const liveActivityLayoutPath = path.join(root, 'src/features/dynamic-island/save
 const liveActivityLayoutSource = fs.existsSync(liveActivityLayoutPath)
   ? fs.readFileSync(liveActivityLayoutPath, 'utf8')
   : '';
+const expandedLeadingLayout = liveActivityLayoutSource.match(
+  /expandedLeading:\s*\(([\s\S]*?)\n\s*\),\n\s*expandedCenter:/,
+)?.[1] ?? '';
 const savedContentLibraryPath = path.join(root, 'src/features/home-content/savedContentLibrary.ts');
 const savedContentLibrarySource = fs.existsSync(savedContentLibraryPath)
   ? fs.readFileSync(savedContentLibraryPath, 'utf8')
@@ -611,9 +614,15 @@ if (
   !quickSaveIntentSource.includes('maximumActivityContentStateBytes = 4 * 1_024') ||
   !quickSaveIntentSource.includes('encodedState.count <= Self.maximumActivityContentStateBytes') ||
   !quickSaveQueueSource.includes('.bool(forKey: lockScreenRecentLinksVisibleKey) ?? false') ||
-  (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 3 ||
+  (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 4 ||
+  !expandedLeadingLayout.includes('uiImage={props.iconUri}') ||
+  !expandedLeadingLayout.includes('frame({ width: 48, height: 48 })') ||
+  !expandedLeadingLayout.includes("clipShape('roundedRectangle', 12)") ||
+  expandedLeadingLayout.includes('<Divider') ||
+  liveActivityLayoutSource.includes('square.on.square') ||
   !liveActivityLayoutSource.includes('expandedBottom: recentQuickSaveLinks.length > 0 ? (') ||
-  !liveActivityLayoutSource.includes('systemName="square.on.square"') ||
+  !liveActivityLayoutSource.includes("? '1 recente'") ||
+  !liveActivityLayoutSource.includes(': `${recentQuickSaveLinks.length} recentes`') ||
   !liveActivityLayoutSource.includes("? 'Pronto para salvar'") ||
   !liveActivityLayoutSource.includes('date={new Date(link.createdAt)}') ||
   !liveActivityLayoutSource.includes('dateStyle="time"') ||

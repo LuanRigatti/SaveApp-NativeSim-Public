@@ -221,11 +221,11 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource.match(/<Link destination=\{props\.expandedHomeUrl\} modifiers=\{\[tint\('#FFFFFF'\)\]\}>/g)).toHaveLength(2);
     expect(layoutSource).not.toContain('compactTrailing:');
     expect(layoutSource).toContain("clipShape('roundedRectangle'");
-    expect(expandedLeading).toContain('systemName="square.on.square"');
-    expect(expandedLeading).toContain('frame({ width: 42, height: 42 })');
-    expect(expandedLeading).toContain("shapes.roundedRectangle({ cornerRadius: 12 })");
-    expect(expandedLeading).toContain('<Divider');
-    expect(expandedLeading).not.toContain('uiImage={props.iconUri}');
+    expect(expandedLeading).toContain('uiImage={props.iconUri}');
+    expect(expandedLeading).toContain('frame({ width: 48, height: 48 })');
+    expect(expandedLeading).toContain("clipShape('roundedRectangle', 12)");
+    expect(expandedLeading).not.toContain('square.on.square');
+    expect(expandedLeading).not.toContain('<Divider');
     expect(expandedLeading).not.toContain('padding({ top: 8 })');
     expect(layoutSource).toContain('Salvar link');
     expect(layoutSource).toContain("? 'Pronto para salvar'");
@@ -242,11 +242,18 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(layoutSource).not.toContain('34C759');
     expect(layoutSource).not.toContain('circle.fill');
     expect(layoutSource).not.toMatch(/clipboard|https?:|normalizedUrl|props\.url/i);
-    expect(nativeVerificationSource).toContain('(liveActivityLayoutSource.match(/uiImage=\\{props\\.iconUri\\}/g) ?? []).length !== 3');
+    expect(nativeVerificationSource).toContain('(liveActivityLayoutSource.match(/uiImage=\\{props\\.iconUri\\}/g) ?? []).length !== 4');
     expect(nativeVerificationSource).toContain("!liveActivityLayoutSource.includes('expandedBottom: recentQuickSaveLinks.length > 0 ? (')");
-    expect(nativeVerificationSource).toContain("!liveActivityLayoutSource.includes('systemName=\"square.on.square\"')");
+    expect(nativeVerificationSource).toContain("expandedLeadingLayout.includes('uiImage={props.iconUri}')");
+    expect(nativeVerificationSource).toContain("expandedLeadingLayout.includes('frame({ width: 48, height: 48 })')");
+    expect(nativeVerificationSource).toContain("expandedLeadingLayout.includes('<Divider')");
     expect(expandedBottom).toContain('recentQuickSaveLinks.length > 0');
     expect(expandedBottom).toContain('recentQuickSaveLinks.map((link) => (');
+    expect(expandedBottom).toContain('{recentQuickSaveLinksCountLabel}');
+    expect(expandedBottom).toContain('frame({ maxWidth: 56 })');
+    expect(layoutSource).toContain("const recentQuickSaveLinksCountLabel = recentQuickSaveLinks.length === 1");
+    expect(layoutSource).toContain("? '1 recente'");
+    expect(layoutSource).toContain(': `${recentQuickSaveLinks.length} recentes`');
     expect(expandedBottom).toContain('link.faviconUri');
     expect(expandedBottom).toContain('systemName="globe"');
     expect(expandedBottom).toContain("background('#1C1C1E', shapes.capsule())");
@@ -609,19 +616,23 @@ describe('Dynamic Island SaveApp icon assets and expanded layout', () => {
     expect(managerSource).toContain('areBytesEqual(sourceBytes, copiedBytes)');
     expect(managerSource).toContain("destination.uri.startsWith('file://')");
     expect(managerSource).toContain('iconUri: string');
-    expect(layoutSource.match(/uiImage=\{props\.iconUri\}/g)).toHaveLength(3);
+    expect(layoutSource.match(/uiImage=\{props\.iconUri\}/g)).toHaveLength(4);
     expect(layoutSource).not.toContain('assetName=');
     expect(layoutSource).not.toContain('environment.colorScheme');
     expect(quickSavePluginSource).not.toMatch(/SaveAppLiveActivityIcons|withSaveAppLiveActivityIconAssets|folder\.assetcatalog/);
     expect(quickSavePluginSource).toContain('withSaveAppQuickSaveAppIntentsPackage(config)');
   });
 
-  test('uses a dark rounded-square expanded icon and keeps the functional check ring inside its 48 point frame', () => {
+  test('uses the shared SaveApp icon at 48 points and keeps the functional check ring inside its 48 point frame', () => {
     const expandedLeading = layoutSource.match(
       /expandedLeading: \(([\s\S]*?)\n\s*\),\n\s*expandedCenter:/,
     )?.[1] ?? '';
 
-    expect(expandedLeading).toContain('frame({ width: 42, height: 42 })');
+    expect(expandedLeading).toContain('uiImage={props.iconUri}');
+    expect(expandedLeading).toContain('frame({ width: 48, height: 48 })');
+    expect(expandedLeading).toContain("clipShape('roundedRectangle', 12)");
+    expect(expandedLeading).not.toContain('<Divider');
+    expect(layoutSource).not.toContain('square.on.square');
     expect(nativeQuickSaveButtonSource.match(/\.frame\(width: 48, height: 48\)/g)).toHaveLength(2);
     expect(nativeQuickSaveButtonSource).toContain('.strokeBorder(Color.white, lineWidth: 2.5)');
     expect(nativeQuickSaveButtonSource).toContain('.font(.system(size: 18, weight: .semibold))');

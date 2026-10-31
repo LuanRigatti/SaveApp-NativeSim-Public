@@ -166,7 +166,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityLayout).toContain('target="saveapp.quickSave"');
     expect(activityLayout).toContain('expandedTrailing:');
     expect(activityLayout).toContain('quickSaveStatus');
-    expect(activityLayout).toContain('frame({ width: 42, height: 42 })');
+    expect(activityLayout).toContain('frame({ width: 48, height: 48 })');
     expect(activityLayout).not.toContain('Toque para salvar');
     expect(activityLayout).not.toMatch(/https?:|normalizedUrl|clipboard/i);
 
@@ -229,7 +229,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).toContain('SaveLinkQuickSaveIntent(activityID: props.source)');
     expect(quickSaveBranch).toContain('Circle()');
     expect(quickSaveBranch).toContain('.frame(width: 48, height: 48)');
-    expect(expandedLeadingFrame?.slice(1)).toEqual(['42', '42']);
+    expect(expandedLeadingFrame?.slice(1)).toEqual(['48', '48']);
     expect(quickSaveButtonFrame?.slice(1)).toEqual(['48', '48']);
     expect(quickSaveBranch).toContain('.strokeBorder(Color.white, lineWidth: 2.5)');
     expect(quickSaveBranch).toContain('.font(.system(size: 18, weight: .semibold))');

@@ -71,6 +71,9 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
   const recentQuickSaveLinks = props.showRecentQuickSaveLinks
     ? (props.recentQuickSaveLinks ?? []).slice(0, 3)
     : [];
+  const recentQuickSaveLinksCountLabel = recentQuickSaveLinks.length === 1
+    ? '1 recente'
+    : `${recentQuickSaveLinks.length} recentes`;
 
   return {
     banner: (
@@ -166,23 +169,10 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
     ),
     expandedLeading: (
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
-        <HStack alignment="center" spacing={7}>
-          <Image
-            systemName="square.on.square"
-            size={22}
-            modifiers={[
-              foregroundStyle('#FFFFFF'),
-              frame({ width: 42, height: 42 }),
-              background('#1C1C1E', shapes.roundedRectangle({ cornerRadius: 12 })),
-            ]}
-          />
-          <Divider
-            modifiers={[
-              foregroundStyle('#48484A'),
-              frame({ height: 30 }),
-            ]}
-          />
-        </HStack>
+        <Image
+          uiImage={props.iconUri}
+          modifiers={[resizable(), frame({ width: 48, height: 48 }), clipShape('roundedRectangle', 12)]}
+        />
       </Link>
     ),
     expandedCenter: (
@@ -226,7 +216,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
         modifiers={[frame({ maxWidth: Infinity }), padding({ top: 2 })]}
       >
         <Divider modifiers={[foregroundStyle('#38383A')]} />
-        <HStack alignment="center" spacing={5} modifiers={[frame({ maxWidth: Infinity })]}>
+        <HStack alignment="center" spacing={4} modifiers={[frame({ maxWidth: Infinity })]}>
           <Image
             systemName="clock"
             size={14}
@@ -239,15 +229,15 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
               lineLimit(1),
             ]}
           >
-            {`${recentQuickSaveLinks.length} ${recentQuickSaveLinks.length === 1 ? 'link recente' : 'links recentes'}`}
+            {recentQuickSaveLinksCountLabel}
           </Text>
           {recentQuickSaveLinks.map((link) => (
             <HStack
               key={`${link.domain}-${link.createdAt}`}
               alignment="center"
-              spacing={4}
+              spacing={3}
               modifiers={[
-                padding({ horizontal: 6, vertical: 4 }),
+                padding({ horizontal: 5, vertical: 4 }),
                 background('#1C1C1E', shapes.capsule()),
               ]}
             >
@@ -268,7 +258,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
                   font({ textStyle: 'caption2' }),
                   foregroundStyle('#D1D1D6'),
                   lineLimit(1),
-                  frame({ maxWidth: 66 }),
+                  frame({ maxWidth: 56 }),
                 ]}
               >
                 {link.domain}
