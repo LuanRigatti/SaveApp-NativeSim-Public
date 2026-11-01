@@ -76,6 +76,8 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
   const recentQuickSaveLinksCountLabel = recentQuickSaveLinks.length === 1
     ? '1 link'
     : `${recentQuickSaveLinks.length} links`;
+  const expandedHeaderVerticalInset = 8;
+  const expandedHeaderOuterInset = 4;
 
   return {
     banner: (
@@ -173,7 +175,12 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
       <Link destination={props.expandedHomeUrl} modifiers={[tint('#FFFFFF')]}>
         <Image
           uiImage={props.iconUri}
-          modifiers={[resizable(), frame({ width: 48, height: 48 }), clipShape('roundedRectangle', 12)]}
+          modifiers={[
+            resizable(),
+            frame({ width: 48, height: 48 }),
+            clipShape('roundedRectangle', 12),
+            padding({ top: expandedHeaderVerticalInset, leading: expandedHeaderOuterInset }),
+          ]}
         />
       </Link>
     ),
@@ -218,6 +225,7 @@ function SaveLinkActivity(props: SaveLinkActivityProps) {
         label={quickSaveLabels[quickSaveStatus]}
         systemImage={quickSaveSymbols[quickSaveStatus]}
         target="saveapp.quickSave"
+        modifiers={[padding({ top: expandedHeaderVerticalInset, trailing: expandedHeaderOuterInset })]}
       />
     ),
     expandedBottom: recentQuickSaveLinks.length > 0 ? (

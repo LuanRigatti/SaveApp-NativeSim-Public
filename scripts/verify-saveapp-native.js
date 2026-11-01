@@ -543,6 +543,9 @@ const liveActivityLayoutSource = fs.existsSync(liveActivityLayoutPath)
 const expandedLeadingLayout = liveActivityLayoutSource.match(
   /expandedLeading:\s*\(([\s\S]*?)\n\s*\),\n\s*expandedCenter:/,
 )?.[1] ?? '';
+const expandedTrailingLayout = liveActivityLayoutSource.match(
+  /expandedTrailing:\s*\(([\s\S]*?)\n\s*\),\n\s*expandedBottom:/,
+)?.[1] ?? '';
 const savedContentLibraryPath = path.join(root, 'src/features/home-content/savedContentLibrary.ts');
 const savedContentLibrarySource = fs.existsSync(savedContentLibraryPath)
   ? fs.readFileSync(savedContentLibraryPath, 'utf8')
@@ -595,6 +598,15 @@ if (
   quickSaveIntentSource.includes('SaveLinkQuickSaveSQLite.insertOrFindExisting') ||
   !quickSaveButtonSource.includes('props.target == saveAppQuickSaveTarget') ||
   !quickSaveButtonSource.includes('SaveLinkQuickSaveIntent(activityID: props.source)') ||
+  !quickSaveButtonSource.includes('private let quickSaveStrokeWidth: CGFloat = 3.25') ||
+  !quickSaveButtonSource.includes('.strokeBorder(Color.white, lineWidth: quickSaveStrokeWidth)') ||
+  !quickSaveButtonSource.includes('.inset(by: quickSaveStrokeWidth / 2)') ||
+  !quickSaveButtonSource.includes('StrokeStyle(lineWidth: quickSaveStrokeWidth, lineCap: .round)') ||
+  !quickSaveButtonSource.includes('private let quickSaveSymbolSize: CGFloat = 18') ||
+  !quickSaveButtonSource.includes('.font(.system(size: quickSaveSymbolSize, weight: .bold))') ||
+  !quickSaveButtonSource.includes('reduceMotion ? .identity : .opacity') ||
+  quickSaveButtonSource.includes('.animation(') ||
+  quickSaveButtonSource.includes('.symbolEffect(.bounce') ||
   !widgetsRendererSource.includes('buttonProps.source = name') ||
   !widgetsLiveActivitySource.includes('WidgetsDynamicView(name: context.activityID') ||
   !quickSaveQueueSource.includes('FileManager.default.containerURL') ||
@@ -647,6 +659,13 @@ if (
   !expandedLeadingLayout.includes('uiImage={props.iconUri}') ||
   !expandedLeadingLayout.includes('frame({ width: 48, height: 48 })') ||
   !expandedLeadingLayout.includes("clipShape('roundedRectangle', 12)") ||
+  !liveActivityLayoutSource.includes('const expandedHeaderVerticalInset = 8;') ||
+  !liveActivityLayoutSource.includes('const expandedHeaderOuterInset = 4;') ||
+  !expandedLeadingLayout.includes('padding({ top: expandedHeaderVerticalInset, leading: expandedHeaderOuterInset })') ||
+  !expandedTrailingLayout.includes('target="saveapp.quickSave"') ||
+  !expandedTrailingLayout.includes('modifiers={[padding({ top: expandedHeaderVerticalInset, trailing: expandedHeaderOuterInset })]}') ||
+  expandedLeadingLayout.includes('.offset(') ||
+  expandedTrailingLayout.includes('.offset(') ||
   expandedLeadingLayout.includes('<Divider') ||
   liveActivityLayoutSource.includes('square.on.square') ||
   !liveActivityLayoutSource.includes('expandedBottom: recentQuickSaveLinks.length > 0 ? (') ||

@@ -205,6 +205,9 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     const expandedCenter = layoutSource.match(
       /expandedCenter: \(([\s\S]*?)\n\s*\),\n\s*expandedTrailing:/,
     )?.[1] ?? '';
+    const expandedTrailing = layoutSource.match(
+      /expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*expandedBottom:/,
+    )?.[1] ?? '';
     const expandedBottom = layoutSource.match(
       /expandedBottom: ([\s\S]*?)\n\s*\};/,
     )?.[1] ?? '';
@@ -224,9 +227,19 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(expandedLeading).toContain('uiImage={props.iconUri}');
     expect(expandedLeading).toContain('frame({ width: 48, height: 48 })');
     expect(expandedLeading).toContain("clipShape('roundedRectangle', 12)");
+    expect(layoutSource).toContain('const expandedHeaderVerticalInset = 8;');
+    expect(layoutSource).toContain('const expandedHeaderOuterInset = 4;');
+    expect(expandedLeading).toContain(
+      'padding({ top: expandedHeaderVerticalInset, leading: expandedHeaderOuterInset })',
+    );
+    expect(expandedTrailing).toContain('target="saveapp.quickSave"');
+    expect(expandedTrailing).toContain(
+      'modifiers={[padding({ top: expandedHeaderVerticalInset, trailing: expandedHeaderOuterInset })]}',
+    );
+    expect(expandedLeading).not.toContain('.offset(');
+    expect(expandedTrailing).not.toContain('.offset(');
     expect(expandedLeading).not.toContain('square.on.square');
     expect(expandedLeading).not.toContain('<Divider');
-    expect(expandedLeading).not.toContain('padding({ top: 8 })');
     expect(layoutSource).toContain('Salvar link');
     expect(layoutSource).toContain("? 'Pronto para salvar'");
     expect(expandedCenter).toMatch(/<VStack\s+alignment="leading"/);
@@ -247,6 +260,9 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(nativeVerificationSource).toContain("!liveActivityLayoutSource.includes('expandedBottom: recentQuickSaveLinks.length > 0 ? (')");
     expect(nativeVerificationSource).toContain("expandedLeadingLayout.includes('uiImage={props.iconUri}')");
     expect(nativeVerificationSource).toContain("expandedLeadingLayout.includes('frame({ width: 48, height: 48 })')");
+    expect(nativeVerificationSource).toContain('expandedHeaderVerticalInset = 8');
+    expect(nativeVerificationSource).toContain('expandedHeaderOuterInset = 4');
+    expect(nativeVerificationSource).toContain('expandedTrailingLayout.includes');
     expect(nativeVerificationSource).toContain("expandedLeadingLayout.includes('<Divider')");
     expect(expandedBottom).toContain('recentQuickSaveLinks.length > 0');
     expect(expandedBottom).toContain('recentQuickSaveLinks.map((link) => (');
@@ -637,10 +653,14 @@ describe('Dynamic Island SaveApp icon assets and expanded layout', () => {
     expect(expandedLeading).not.toContain('<Divider');
     expect(layoutSource).not.toContain('square.on.square');
     expect(nativeQuickSaveButtonSource.match(/\.frame\(width: 48, height: 48\)/g)).toHaveLength(2);
-    expect(nativeQuickSaveButtonSource).toContain('.strokeBorder(Color.white, lineWidth: 2.5)');
-    expect(nativeQuickSaveButtonSource).toContain('.font(.system(size: 18, weight: .semibold))');
+    expect(nativeQuickSaveButtonSource).toContain('private let quickSaveStrokeWidth: CGFloat = 3.25');
+    expect(nativeQuickSaveButtonSource).toContain('.strokeBorder(Color.white, lineWidth: quickSaveStrokeWidth)');
+    expect(nativeQuickSaveButtonSource).toContain('.font(.system(size: quickSaveSymbolSize, weight: .bold))');
+    expect(nativeQuickSaveButtonSource).toContain('.inset(by: quickSaveStrokeWidth / 2)');
     expect(nativeQuickSaveButtonSource).toContain('.contentShape(Circle())');
     expect(nativeQuickSaveButtonSource).toContain('quickSaveIsProcessing');
     expect(nativeQuickSaveButtonSource).toContain('quickSaveIsFailure');
+    expect(nativeQuickSaveButtonSource).toContain('reduceMotion ? .identity : .opacity');
+    expect(nativeQuickSaveButtonSource).not.toContain('.animation(');
   });
 });

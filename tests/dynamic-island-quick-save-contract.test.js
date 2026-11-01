@@ -232,6 +232,9 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     const expandedLeadingFrame = activityLayout.match(
       /expandedLeading:[\s\S]*?frame\(\{ width: (\d+), height: (\d+) \}\)/,
     );
+    const expandedTrailing = activityLayout.match(
+      /expandedTrailing: \(([\s\S]*?)\n\s*\),\n\s*expandedBottom:/,
+    )?.[1] ?? '';
     const quickSaveButtonFrame = quickSaveBranch.match(
       /\n        \.frame\(width: (\d+), height: (\d+)\)/,
     );
@@ -256,19 +259,28 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).toContain('Circle()');
     expect(quickSaveBranch).toContain('.frame(width: 48, height: 48)');
     expect(expandedLeadingFrame?.slice(1)).toEqual(['48', '48']);
+    expect(expandedTrailing).toContain('target="saveapp.quickSave"');
+    expect(expandedTrailing).toContain(
+      'modifiers={[padding({ top: expandedHeaderVerticalInset, trailing: expandedHeaderOuterInset })]}',
+    );
     expect(quickSaveButtonFrame?.slice(1)).toEqual(['48', '48']);
-    expect(quickSaveBranch).toContain('.strokeBorder(Color.white, lineWidth: 2.5)');
-    expect(quickSaveBranch).toContain('.font(.system(size: 18, weight: .semibold))');
-    expect(quickSaveBranch).toContain('.foregroundStyle(.white)');
+    expect(quickSaveButton).toContain('private let quickSaveStrokeWidth: CGFloat = 3.25');
+    expect(quickSaveButton).toContain('private let quickSaveSymbolSize: CGFloat = 18');
+    expect(quickSaveBranch).toContain('.strokeBorder(Color.white, lineWidth: quickSaveStrokeWidth)');
+    expect(quickSaveButton).toContain('.font(.system(size: quickSaveSymbolSize, weight: .bold))');
+    expect(quickSaveButton).toContain('.foregroundStyle(.white)');
     expect(quickSaveButton).toContain('Color(red: 0.13, green: 0.45, blue: 0.27)');
     expect(quickSaveBranch).toContain('.buttonStyle(.plain)');
     expect(quickSaveBranch).toContain('.accessibilityLabel(props.label ?? "Salvar link")');
     expect(quickSaveBranch).toContain('.disabled(quickSaveIsProcessing)');
-    expect(quickSaveBranch).toContain('.contentTransition(.symbolEffect(.replace))');
+    expect(quickSaveButton).toContain('.contentTransition(.symbolEffect(.replace))');
     expect(quickSaveBranch).toContain('.trim(from: 0.08, to: 0.92)');
-    expect(quickSaveBranch).toContain('.stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))');
-    expect(quickSaveBranch).toContain('.symbolEffect(.bounce, value: quickSaveIsSuccess)');
-    expect(quickSaveBranch).toContain('.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: diagnosticStatus)');
+    expect(quickSaveBranch).toContain('.inset(by: quickSaveStrokeWidth / 2)');
+    expect(quickSaveBranch).toContain('StrokeStyle(lineWidth: quickSaveStrokeWidth, lineCap: .round)');
+    expect(quickSaveButton).toContain('.transition(quickSaveStateTransition)');
+    expect(quickSaveButton).toContain('reduceMotion ? .identity : .opacity');
+    expect(quickSaveButton).not.toContain('.animation(');
+    expect(quickSaveBranch).not.toContain('.symbolEffect(.bounce');
     expect(quickSaveButton).toContain('@Environment(\\.accessibilityReduceMotion) private var reduceMotion');
     expect(quickSaveBranch).not.toContain('.padding(.top, 8)');
     expect(quickSaveBranch).not.toMatch(/\b(?:Text|Label)\(/);

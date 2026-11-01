@@ -43,6 +43,8 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
   @State private var lastLoggedQuickSaveStatus: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let diagnosticLogger = Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.renderer")
+  private let quickSaveStrokeWidth: CGFloat = 3.25
+  private let quickSaveSymbolSize: CGFloat = 18
 
   private var quickSaveIsProcessing: Bool {
     diagnosticStatus == "processing"
@@ -93,11 +95,28 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
     return .clear
   }
 
+  private var quickSaveStateTransition: AnyTransition {
+    reduceMotion ? .identity : .opacity
+  }
+
   private var quickSaveSymbolForStatus: String {
     switch diagnosticStatus {
     case "invalid": return "exclamationmark"
     case "failed": return "xmark"
     default: return "checkmark"
+    }
+  }
+
+  @ViewBuilder
+  private var quickSaveSymbol: some View {
+    let symbol = Image(systemName: quickSaveSymbolForStatus)
+      .font(.system(size: quickSaveSymbolSize, weight: .bold))
+      .foregroundStyle(.white)
+
+    if reduceMotion {
+      symbol
+    } else {
+      symbol.contentTransition(.symbolEffect(.replace))
     }
   }
 
@@ -123,38 +142,35 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
         ZStack {
           if quickSaveIsProcessing {
             Circle()
+              .inset(by: quickSaveStrokeWidth / 2)
               .trim(from: 0.08, to: 0.92)
-              .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+              .stroke(Color.white, style: StrokeStyle(lineWidth: quickSaveStrokeWidth, lineCap: .round))
               .frame(width: 48, height: 48)
               .rotationEffect(.degrees(-90))
               .accessibilityHidden(true)
-          } else if quickSaveIsSuccess || quickSaveIsQueuedDuplicate || quickSaveIsFailure {
+              .transition(quickSaveStateTransition)
+          } else if quickSaveIsSuccess {
             Circle()
               .fill(quickSaveBackground)
-              .overlay {
-                if reduceMotion {
-                  Image(systemName: quickSaveSymbolForStatus)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .accessibilityHidden(true)
-                } else {
-                  Image(systemName: quickSaveSymbolForStatus)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .contentTransition(.symbolEffect(.replace))
-                    .symbolEffect(.bounce, value: quickSaveIsSuccess)
-                    .accessibilityHidden(true)
-                }
-              }
+              .transition(quickSaveStateTransition)
+          } else if quickSaveIsQueuedDuplicate {
+            Circle()
+              .fill(quickSaveBackground)
+              .transition(quickSaveStateTransition)
+          } else if quickSaveIsFailure {
+            Circle()
+              .fill(quickSaveBackground)
+              .transition(quickSaveStateTransition)
           } else {
             Circle()
-              .strokeBorder(Color.white, lineWidth: 2.5)
-              .overlay {
-                Image(systemName: "checkmark")
-                  .font(.system(size: 18, weight: .semibold))
-                  .foregroundStyle(.white)
-                  .accessibilityHidden(true)
-              }
+              .strokeBorder(Color.white, lineWidth: quickSaveStrokeWidth)
+              .transition(quickSaveStateTransition)
+          }
+
+          if !quickSaveIsProcessing {
+            quickSaveSymbol
+              .accessibilityHidden(true)
+              .transition(quickSaveStateTransition)
           }
         }
         .frame(width: 48, height: 48)
@@ -163,7 +179,6 @@ struct LiveActivityButtonView: ExpoSwiftUI.View {
       .buttonStyle(.plain)
       .accessibilityLabel(props.label ?? "Salvar link")
       .disabled(quickSaveIsProcessing)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: diagnosticStatus)
       .onAppear { logObservedStatusIfChanged() }
       .onChange(of: diagnosticStatus) { _, _ in logObservedStatusIfChanged() }
     } else {
