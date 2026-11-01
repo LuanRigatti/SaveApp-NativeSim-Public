@@ -443,7 +443,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(lockScreenHistorySource).toContain('favicon.uri.startsWith(\'file://\')');
   });
 
-  test('keeps favicon networking in the opted-in app process and refreshes the existing activity after caching', () => {
+  test('keeps closed-app Quick Save network-free while preserving the opted-in local favicon cache', () => {
     expect(savedContentLibrarySource).toContain('downloadLinkFaviconImage(faviconUrl)');
     expect(savedContentLibrarySource).toContain('link.id === id && link.savedContentId === candidate.id');
     expect(savedContentLibrarySource).toContain('getQuickSaveLockScreenSettings()?.showRecentLinks !== true');
@@ -458,7 +458,21 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(managerSource).not.toMatch(/recentQuickSaveLinks[\s\S]{0,180}normalizedUrl|recentQuickSaveLinks[\s\S]{0,180}\.url/);
     expect(quickSaveIntentSwift).toContain('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
     expect(quickSaveQueueSwift).toContain('func activityProps()');
-    expect(quickSaveIntentSwift).not.toMatch(/URLSession|URLRequest|fetch\(/);
+    const forbiddenNativeTransport = /\b(?:URLSession|URLRequest|NWConnection|NWEndpoint|NWBrowser|NWListener|CFHost|getaddrinfo|CFNetwork)\b|\b(?:socket|connect)\s*\(|\.data\s*\(for:|\.download\s*\(from:/;
+    expect(quickSaveIntentSwift).not.toMatch(forbiddenNativeTransport);
+    expect(quickSaveQueueSwift).not.toMatch(forbiddenNativeTransport);
+    expect(quickSaveQueueSwift).not.toContain('fetchLockScreenFaviconIfNeeded');
+    expect(quickSaveQueueSwift).toContain('validFaviconURLForActivity(fileName: fileName, id: link.id)');
+    expect(quickSaveQueueSwift).toContain('availableFaviconFileName(');
+    expect(quickSaveIntentSwift).not.toContain('scheduleFaviconEnrichment(');
+    expect(quickSaveIntentSwift).not.toContain('pendingFaviconEnrichments');
+    expect(quickSaveIntentSwift).not.toContain('async let readyRestore: Void');
+    expect(quickSaveIntentSwift).toContain('terminalStatusDisplayNanoseconds');
+    expect(quickSaveIntentSwift).toContain('await restoreReadyAfterTerminalDisplayIfCurrent(');
+    expect(quickSaveIntentSwift).not.toContain('let sharedStatus = UserDefaults(');
+    expect(quickSaveIntentSwift).not.toContain('enqueueActivityHistoryRefreshIfCurrent(');
+    expect(savedContentLibrarySource).toContain('downloadLinkFaviconImage(faviconUrl)');
+    expect(clipboardSettingsSwift).toContain('atomicWrite(pngData, to: imageURL, in: faviconDirectory)');
     expect(layoutSource).toContain('uiImage={link.faviconUri}');
     expect(layoutSource).toContain('systemName="globe"');
     expect(clipboardSettingsSwift).toContain('flock(descriptor, LOCK_EX | LOCK_NB)');
@@ -490,7 +504,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(quickSaveQueueSwift).toContain('flock(descriptor, LOCK_EX | LOCK_NB)');
     expect(queueVerifyIndex).toBeGreaterThan(queueWriteIndex);
     expect(historyWriteIndex).toBeGreaterThan(queueVerifyIndex);
-    expect(quickSaveQueueSwift).not.toMatch(/URLSession|URLRequest|fetch\(|saveapp-photos\.db/);
+    expect(quickSaveQueueSwift).not.toContain('saveapp-photos.db');
+    expect(quickSaveQueueSwift).not.toContain('favicons.example');
     expect(quickSaveQueueSwift).toContain('.bool(forKey: lockScreenRecentLinksVisibleKey) ?? false');
     expect(quickSaveIntentSwift).toContain('props["recentQuickSaveLinks"] = showRecentLinks ? snapshot?.activityProps() ?? [] : []');
     expect(quickSaveIntentSwift).toContain('await activity.update(ActivityContent(state: state, staleDate: nil))');
@@ -516,7 +531,7 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
 
   test('releases the shared file lock before ActivityKit awaits and bounds lock contention', () => {
     const historyReaderStart = quickSaveQueueSwift.indexOf('static func lockScreenHistoryForActivityUpdate()');
-    const historyReaderEnd = quickSaveQueueSwift.indexOf('private static func updateLockScreenRecentLinksBestEffort', historyReaderStart);
+    const historyReaderEnd = quickSaveQueueSwift.indexOf('private static func updateLockScreenRecentLinksBestEffort(', historyReaderStart);
     const historyReaderSource = quickSaveQueueSwift.slice(historyReaderStart, historyReaderEnd);
     const updateMethodStart = quickSaveIntentSwift.indexOf('private func updateActivity(');
     const updateMethodEnd = quickSaveIntentSwift.indexOf('@MainActor', updateMethodStart);
@@ -573,6 +588,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
       .toBeLessThan(managerSource.indexOf('activity = getActivityFactory().start('));
     expect(quickSaveIntentSwift).toContain('props["recentQuickSaveLinksRevision"]');
     expect(quickSaveIntentSwift).toContain('props["quickSaveStatus"] = status.rawValue');
+    expect(quickSaveIntentSwift).toContain('status: SaveLinkQuickSaveStatus,');
+    expect(quickSaveIntentSwift).not.toContain('let sharedStatus = UserDefaults(');
     expect(quickSaveIntentSwift).toContain('maximumActivityContentStateBytes = 4 * 1_024');
     expect(quickSaveIntentSwift).toContain('encodedState.count <= Self.maximumActivityContentStateBytes');
     expect(quickSaveIntentSwift).toContain('.set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)');

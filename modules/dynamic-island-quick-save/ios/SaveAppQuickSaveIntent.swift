@@ -174,12 +174,13 @@ private actor SaveLinkQuickSaveCoordinator {
         }
         // The queue and recent-link summary are durable before ActivityKit is
         // awaited. The intent waits for the local update attempt, not rendering.
-        return await enqueueActivityStatusSequence(
+        let submitted = await enqueueActivityStatusSequence(
           activityID: activityID,
           statuses: [.processing, .queued],
           generation: generation,
           operationID: operationID
         )
+        return submitted
       case .alreadyQueued(let lockScreenHistoryUpdated):
         SaveAppQuickSaveLog.logger.notice("event=quick_save.operation.completed outcome=already_queued operation=\(operationID, privacy: .public)")
         ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)
@@ -187,12 +188,13 @@ private actor SaveLinkQuickSaveCoordinator {
           SaveAppQuickSaveLog.logger.error("event=quick_save.operation.visual_update_unavailable reason=history_write_failed operation=\(operationID, privacy: .public)")
           return false
         }
-        return await enqueueActivityStatusSequence(
+        let submitted = await enqueueActivityStatusSequence(
           activityID: activityID,
           statuses: [.processing, .alreadyQueued],
           generation: generation,
           operationID: operationID
         )
+        return submitted
       }
     } catch let error as QuickSaveQueueFailure {
       SaveAppQuickSaveLog.logger.error("event=quick_save.operation.failed stage=queue reason=\(error.diagnosticCode, privacy: .public) operation=\(operationID, privacy: .public)")
@@ -314,7 +316,8 @@ private actor SaveLinkQuickSaveCoordinator {
     status: SaveLinkQuickSaveStatus,
     operationID: String
   ) async -> Bool {
-    SaveAppQuickSaveLog.logger.notice("event=activity.lookup.started requested_state=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
+    let requestedState = status.rawValue
+    SaveAppQuickSaveLog.logger.notice("event=activity.lookup.started requested_state=\(requestedState, privacy: .public) operation=\(operationID, privacy: .public)")
     let activities = Activity<LiveActivityAttributes>.activities
     guard !activities.isEmpty else {
       SaveAppQuickSaveLog.logger.error("event=activity.lookup.result=not_found reason=no_activity_available operation=\(operationID, privacy: .public)")
@@ -342,7 +345,7 @@ private actor SaveLinkQuickSaveCoordinator {
       return false
     }
     let previousStatus = baseProps["quickSaveStatus"] as? String ?? "unknown"
-    SaveAppQuickSaveLog.logger.notice("event=activity.state.transition previous=\(previousStatus, privacy: .public) requested=\(status.rawValue, privacy: .public) operation=\(operationID, privacy: .public)")
+    SaveAppQuickSaveLog.logger.notice("event=activity.state.transition previous=\(previousStatus, privacy: .public) requested=\(requestedState, privacy: .public) operation=\(operationID, privacy: .public)")
 
     func makeState(
       snapshot: QuickSaveLockScreenRecentLinksSnapshot?,
@@ -403,7 +406,7 @@ private actor SaveLinkQuickSaveCoordinator {
         return false
       }
 
-      SaveAppQuickSaveLog.logger.notice("event=activity.update.started state=\(status.rawValue, privacy: .public) history_revision=\(history.snapshot?.revision ?? 0, privacy: .public) operation=\(operationID, privacy: .public)")
+      SaveAppQuickSaveLog.logger.notice("event=activity.update.started state=\(requestedState, privacy: .public) history_revision=\(history.snapshot?.revision ?? 0, privacy: .public) operation=\(operationID, privacy: .public)")
       await activity.update(ActivityContent(state: state, staleDate: nil))
 
       guard let latestHistory = SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate() else {
@@ -416,7 +419,7 @@ private actor SaveLinkQuickSaveCoordinator {
       if !privacyChanged && !revisionChanged {
         UserDefaults(suiteName: SaveAppQuickSaveQueue.appGroupIdentifier)?
           .set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)
-        SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) history_revision=\(history.snapshot?.revision ?? 0, privacy: .public) delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
+        SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(requestedState, privacy: .public) history_revision=\(history.snapshot?.revision ?? 0, privacy: .public) delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
         return true
       }
       SaveAppQuickSaveLog.logger.notice("event=activity.update.reconcile attempt=\(attempt + 1, privacy: .public) privacy_changed=\(privacyChanged, privacy: .public) revision_changed=\(revisionChanged, privacy: .public) operation=\(operationID, privacy: .public)")
@@ -434,7 +437,7 @@ private actor SaveLinkQuickSaveCoordinator {
         if !privacyCheck.showRecentLinks {
           UserDefaults(suiteName: SaveAppQuickSaveQueue.appGroupIdentifier)?
             .set(status.rawValue, forKey: SaveAppQuickSaveQueue.quickSaveActivityStatusKey)
-          SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(status.rawValue, privacy: .public) history_redacted=true delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
+          SaveAppQuickSaveLog.logger.notice("event=activity.update.submitted state=\(requestedState, privacy: .public) history_redacted=true delivery_confirmation=unavailable operation=\(operationID, privacy: .public)")
           return true
         }
       }

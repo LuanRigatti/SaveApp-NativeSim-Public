@@ -261,12 +261,19 @@ enum SaveAppQuickSaveQueue {
       var links = previousFile?.links ?? []
       let id = String(queueFileName(for: record.normalizedURL).dropLast(".json".count))
       let previous = links.first(where: { $0.id == id })
+      let faviconFileName = availableFaviconFileName(
+        for: id,
+        domain: record.domain,
+        previous: previous,
+        links: links,
+        directory: directory
+      )
       let entry = QuickSaveLockScreenRecentLink(
         id: id,
         domain: record.domain,
         createdAt: record.createdAt,
         savedContentId: previous?.savedContentId,
-        faviconFileName: previous?.faviconFileName
+        faviconFileName: faviconFileName
       )
       links.removeAll { $0.id == entry.id }
       links.append(entry)
@@ -300,6 +307,8 @@ enum SaveAppQuickSaveQueue {
     } catch {
       // The durable queue record is authoritative. A summary failure must never turn a
       // confirmed Quick Save into a failed save or remove it from the import queue.
+      let referenced = Set(readLockScreenRecentLinks(in: directory)?.links.compactMap(\.faviconFileName) ?? [])
+      pruneObsoleteFavicons(in: directory, referencedNames: referenced)
       logger.notice("event=quick_save.lock_screen_history.write_failed")
       return false
     }
@@ -346,6 +355,62 @@ enum SaveAppQuickSaveQueue {
 
   private static func faviconFileName(for id: String) -> String {
     "favicon-\(id.lowercased()).png"
+  }
+
+  private static func availableFaviconFileName(
+    for id: String,
+    domain: String,
+    previous: QuickSaveLockScreenRecentLink?,
+    links: [QuickSaveLockScreenRecentLink],
+    directory: URL
+  ) -> String? {
+    if let previous,
+       let fileName = previous.faviconFileName,
+       validFaviconURL(fileName: fileName, id: id) != nil {
+      return fileName
+    }
+    guard UserDefaults(suiteName: appGroupIdentifier)?.bool(forKey: lockScreenRecentLinksVisibleKey) == true else {
+      return nil
+    }
+
+    for candidate in links where candidate.domain.caseInsensitiveCompare(domain) == .orderedSame {
+      guard let sourceName = candidate.faviconFileName,
+            let sourceURL = validFaviconURL(fileName: sourceName, id: candidate.id),
+            let sourceData = try? Data(contentsOf: sourceURL, options: [.mappedIfSafe]),
+            sourceData.count <= maximumLockScreenFaviconBytes,
+            isValidFaviconPNG(sourceData) else { continue }
+      let faviconDirectory = directory.appendingPathComponent(lockScreenFaviconDirectoryName, isDirectory: true)
+      do {
+        try FileManager.default.createDirectory(
+          at: faviconDirectory,
+          withIntermediateDirectories: true,
+          attributes: [.protectionKey: fileProtection]
+        )
+        try FileManager.default.setAttributes([.protectionKey: fileProtection], ofItemAtPath: faviconDirectory.path)
+        let destinationName = faviconFileName(for: id)
+        let destination = faviconDirectory.appendingPathComponent(destinationName, isDirectory: false)
+        try writeAtomically(sourceData, to: destination, in: faviconDirectory)
+        guard validFaviconURL(fileName: destinationName, id: id) != nil else { continue }
+        logger.notice("event=quick_save.favicon_cache.reused outcome=same_domain")
+        return destinationName
+      } catch {
+        logger.notice("event=quick_save.favicon_cache.reused outcome=write_failed")
+        return nil
+      }
+    }
+    return nil
+  }
+
+  private static func isValidFaviconPNG(_ data: Data) -> Bool {
+    guard data.count >= 24,
+          data.count <= maximumLockScreenFaviconBytes,
+          data.prefix(8).elementsEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+          let source = CGImageSourceCreateWithData(data as CFData, nil),
+          CGImageSourceGetCount(source) > 0,
+          let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+          (properties[kCGImagePropertyPixelWidth] as? Int) == 96,
+          (properties[kCGImagePropertyPixelHeight] as? Int) == 96 else { return false }
+    return CGImageSourceCreateImageAtIndex(source, 0, nil) != nil
   }
 
   private static func validFaviconURL(fileName: String, id: String) -> URL? {

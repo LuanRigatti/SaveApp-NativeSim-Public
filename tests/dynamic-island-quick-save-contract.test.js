@@ -468,7 +468,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(savedContentLibrary).toContain('saveLinkWithPreview(input, {');
   });
 
-  test('stores validated App Group favicons and updates the existing Activity without network in the intent', () => {
+  test('keeps native Quick Save network-free and preserves the validated opted-in App Group favicon cache', () => {
     expect(clipboardModule).toContain('associateQuickSaveLockScreenContent');
     expect(clipboardModule).toContain('storeQuickSaveLockScreenFavicon');
     expect(clipboardNative).toContain('QuickSaveLockScreenRecentLinks.json');
@@ -485,8 +485,22 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(activityLayout).toContain('uiImage={link.faviconUri}');
     expect(activityLayout).toContain('systemName="globe"');
     expect(quickSaveIntent).toContain('SaveAppQuickSaveQueue.lockScreenHistoryForActivityUpdate()');
-    expect(quickSaveIntent).not.toMatch(/URLSession|URLRequest|fetch\(/);
+    const forbiddenTransport = /\b(?:URLSession|URLRequest|NWConnection|NWEndpoint|NWBrowser|NWListener|CFHost|getaddrinfo|CFNetwork)\b|\b(?:socket|connect)\s*\(|\.data\s*\(for:|\.download\s*\(from:/;
+    expect(quickSaveIntent).not.toMatch(forbiddenTransport);
+    expect(quickSaveQueueSwift).not.toMatch(forbiddenTransport);
+    expect(quickSaveQueueSwift).not.toContain('fetchLockScreenFaviconIfNeeded');
+    expect(quickSaveIntent).not.toContain('scheduleFaviconEnrichment(');
+    expect(quickSaveIntent).not.toContain('pendingFaviconEnrichments');
+    expect(quickSaveIntent).toContain('await restoreReadyAfterTerminalDisplayIfCurrent(');
+    expect(quickSaveIntent).toContain('terminalStatusDisplayNanoseconds');
+    expect(quickSaveIntent).toContain('props["quickSaveStatus"] = status.rawValue');
+    expect(quickSaveIntent).not.toContain('let sharedStatus = UserDefaults(');
+    expect(quickSaveIntent).not.toContain('if let status');
+    expect(quickSaveQueueSwift).toContain('availableFaviconFileName(');
     expect(quickSaveQueueSwift).toContain('validFaviconURLForActivity(fileName: fileName, id: link.id)');
+    expect(quickSaveQueueSwift).toContain('caseInsensitiveCompare(domain) == .orderedSame');
+    expect(quickSaveQueueSwift).toContain('isValidFaviconPNG(sourceData)');
+    expect(quickSaveQueueSwift).toContain('lockScreenRecentLinksVisibleKey) == true');
     expect(quickSaveQueueSwift).toContain('pruneObsoleteFavicons');
     expect(quickSaveQueueSwift).toContain('lockScreenRecentLinksVersion = 2');
     expect(quickSaveQueueSwift).toContain('lockScreenHistoryForActivityUpdate()');
@@ -502,6 +516,74 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(savedContentLibrary).toContain('LIMIT 256;');
     expect(activityManager).toContain('activity.update({');
     expect(activityManager).not.toContain('factory.start({');
+  });
+
+  test('keeps the five-second ready restoration independent of favicon networking', () => {
+    const performStart = quickSaveIntent.indexOf('func perform(activityID: String, operationID: String) async {');
+    const performEnd = quickSaveIntent.indexOf('private func performSerially(', performStart);
+    const perform = quickSaveIntent.slice(performStart, performEnd);
+    const restoreStart = quickSaveIntent.indexOf('private func restoreReadyAfterTerminalDisplayIfCurrent(');
+    const restoreEnd = quickSaveIntent.indexOf('private func enqueueReadyRestoreIfCurrent(', restoreStart);
+    const restore = quickSaveIntent.slice(restoreStart, restoreEnd);
+    const updateStart = quickSaveIntent.indexOf('private func updateActivity(');
+    const updateEnd = quickSaveIntent.indexOf('@MainActor', updateStart);
+    const update = quickSaveIntent.slice(updateStart, updateEnd);
+
+    expect(perform).toContain('await restoreReadyAfterTerminalDisplayIfCurrent(');
+    expect(perform).not.toMatch(/favicon|URLSession|URLRequest|NWConnection/);
+    expect(quickSaveIntent).not.toContain('scheduleFaviconEnrichment(');
+    expect(restore).toContain('terminalStatusDisplayNanoseconds');
+    expect(restore).toContain('await enqueueReadyRestoreIfCurrent(');
+    expect(update).toContain('lockScreenHistoryForActivityUpdate()');
+    expect(update).toContain('props["quickSaveStatus"] = status.rawValue');
+    expect(update).not.toContain('sharedStatus');
+    expect(update).not.toContain('status: SaveLinkQuickSaveStatus?');
+    expect(update).not.toContain('if let status');
+  });
+
+  test('reuses only a validated same-domain App Group favicon while recent links are opted in', () => {
+    const reuseStart = quickSaveQueueSwift.indexOf('private static func availableFaviconFileName(');
+    const reuseEnd = quickSaveQueueSwift.indexOf('private static func isValidFaviconPNG', reuseStart);
+    const reuse = quickSaveQueueSwift.slice(reuseStart, reuseEnd);
+
+    expect(reuse).toContain('bool(forKey: lockScreenRecentLinksVisibleKey) == true');
+    expect(reuse).toContain('candidate.domain.caseInsensitiveCompare(domain) == .orderedSame');
+    expect(reuse).toContain('Data(contentsOf: sourceURL, options: [.mappedIfSafe])');
+    expect(reuse).toContain('sourceData.count <= maximumLockScreenFaviconBytes');
+    expect(reuse).toContain('isValidFaviconPNG(sourceData)');
+    expect(reuse).toContain('try writeAtomically(sourceData, to: destination, in: faviconDirectory)');
+    expect(reuse).not.toMatch(/URLSession|URLRequest|NWConnection|URL\(string:/);
+  });
+
+  test('has no native Quick Save transport capable of connecting to a DNS or redirect destination', () => {
+    const nativeQuickSaveSources = [quickSaveIntent, quickSaveQueueSwift, quickSaveSQLite].join('\n');
+    const networkOpeningApis = /\b(?:URLSession|URLRequest|NWConnection|NWEndpoint|NWBrowser|NWListener|CFHost|getaddrinfo|CFNetwork)\b|\b(?:socket|connect)\s*\(|\.data\s*\(for:|\.download\s*\(from:/;
+
+    // With the native transport removed, public, private, rebound, redirected,
+    // malformed-certificate, and timed-out destinations all have no socket path.
+    expect(nativeQuickSaveSources).not.toMatch(networkOpeningApis);
+    expect(quickSaveQueueSwift).toContain('FileManager.default.containerURL(');
+    expect(quickSaveQueueSwift).toContain('forSecurityApplicationGroupIdentifier: appGroupIdentifier');
+    expect(quickSaveQueueSwift).toContain('validFaviconURLForActivity(fileName: fileName, id: link.id)');
+    expect(quickSaveQueueSwift).toContain('fileName == faviconFileName(for: id)');
+    expect(activityLayout).toContain('systemName="globe"');
+    expect(quickSaveIntent).toContain('SaveAppQuickSaveQueue.enqueue(normalized)');
+  });
+
+  test('removes obsolete cached favicons using the confirmed latest queue history', () => {
+    const updateStart = quickSaveQueueSwift.indexOf('private static func updateLockScreenRecentLinksBestEffort(');
+    const updateEnd = quickSaveQueueSwift.indexOf('private static func readLockScreenRecentLinks', updateStart);
+    const update = quickSaveQueueSwift.slice(updateStart, updateEnd);
+    const enqueueStart = quickSaveQueueSwift.indexOf('static func enqueue(');
+    const enqueueEnd = quickSaveQueueSwift.indexOf('static func lockScreenRecentLinks()', enqueueStart);
+    const enqueue = quickSaveQueueSwift.slice(enqueueStart, enqueueEnd);
+
+    expect(update).toContain('pruneObsoleteFavicons(in: directory, referencedNames: Set(file.links.compactMap(\\.faviconFileName)))');
+    expect(update).toContain('let referenced = Set(readLockScreenRecentLinks(in: directory)?.links.compactMap(\\.faviconFileName) ?? [])');
+    expect(update).toContain('pruneObsoleteFavicons(in: directory, referencedNames: referenced)');
+    expect(enqueue).toContain('withExclusiveFileLock(in: directory)');
+    expect(enqueue).toContain('updateLockScreenRecentLinksBestEffort(record, in: directory)');
+    expect(update).not.toContain('await ');
   });
 
   test('serializes nearby intents and updates the existing Activity from the latest versioned App Group snapshot', () => {
@@ -533,7 +615,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     const performSeriallyEnd = quickSaveIntent.indexOf('private func enqueueActivityStatusSequence(', performSeriallyStart);
     const performSerially = quickSaveIntent.slice(performSeriallyStart, performSeriallyEnd);
     const historyReaderStart = quickSaveQueueSwift.indexOf('static func lockScreenHistoryForActivityUpdate()');
-    const historyReaderEnd = quickSaveQueueSwift.indexOf('private static func updateLockScreenRecentLinksBestEffort', historyReaderStart);
+    const historyReaderEnd = quickSaveQueueSwift.indexOf('private static func updateLockScreenRecentLinksBestEffort(', historyReaderStart);
     const historyReader = quickSaveQueueSwift.slice(historyReaderStart, historyReaderEnd);
     const updateMethodStart = quickSaveIntent.indexOf('private func updateActivity(');
     const updateMethodEnd = quickSaveIntent.indexOf('@MainActor', updateMethodStart);

@@ -504,10 +504,16 @@ for (const relativePath of quickSaveNativeSources) {
 }
 const quickSaveIntentSource = fs.readFileSync(path.join(root, quickSaveNativeSources[1]), 'utf8');
 const quickSaveButtonSource = fs.readFileSync(path.join(root, quickSaveNativeSources[2]), 'utf8');
+const quickSaveSQLiteSource = fs.readFileSync(path.join(root, quickSaveNativeSources[3]), 'utf8');
 const quickSaveQueueSource = fs.readFileSync(path.join(root, quickSaveNativeSources[4]), 'utf8');
+const quickSaveClipboardNativePath = path.join(root, 'modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift');
+const quickSaveClipboardNativeSource = fs.existsSync(quickSaveClipboardNativePath)
+  ? fs.readFileSync(quickSaveClipboardNativePath, 'utf8')
+  : '';
+const forbiddenQuickSaveNativeTransport = /\b(?:URLSession|URLRequest|NWConnection|NWEndpoint|NWBrowser|NWListener|CFHost|getaddrinfo|CFNetwork)\b|\b(?:socket|connect)\s*\(|\.data\s*\(for:|\.download\s*\(from:/;
 const lockScreenHistoryReaderStart = quickSaveQueueSource.indexOf('static func lockScreenHistoryForActivityUpdate()');
 const lockScreenHistoryReaderEnd = quickSaveQueueSource.indexOf(
-  'private static func updateLockScreenRecentLinksBestEffort',
+  'private static func updateLockScreenRecentLinksBestEffort(',
   lockScreenHistoryReaderStart,
 );
 const lockScreenHistoryReaderSource = lockScreenHistoryReaderStart >= 0 && lockScreenHistoryReaderEnd > lockScreenHistoryReaderStart
@@ -620,6 +626,17 @@ if (
   quickSaveQueueSource.includes('saveapp-photos.db') ||
   !quickSaveQueueSource.includes('lockScreenRecentLinksVersion = 2') ||
   !quickSaveQueueSource.includes('addingReportingOverflow(1)') ||
+  forbiddenQuickSaveNativeTransport.test(quickSaveIntentSource) ||
+  forbiddenQuickSaveNativeTransport.test(quickSaveSQLiteSource) ||
+  forbiddenQuickSaveNativeTransport.test(quickSaveQueueSource) ||
+  quickSaveQueueSource.includes('fetchLockScreenFaviconIfNeeded') ||
+  !quickSaveQueueSource.includes('availableFaviconFileName(') ||
+  !quickSaveQueueSource.includes('caseInsensitiveCompare(domain) == .orderedSame') ||
+  !quickSaveQueueSource.includes('isValidFaviconPNG(sourceData)') ||
+  !quickSaveClipboardNativeSource.includes('static func store(id: String, base64: String)') ||
+  !quickSaveClipboardNativeSource.includes('CGImageSourceCreateThumbnailAtIndex') ||
+  !quickSaveClipboardNativeSource.includes('atomicWrite(pngData, to: imageURL, in: faviconDirectory)') ||
+  !quickSaveClipboardNativeSource.includes('bool(forKey: visibleKey) == true') ||
   !quickSaveQueueSource.includes('func lockScreenHistoryForActivityUpdate()') ||
   !lockScreenHistoryReaderSource.includes('withExclusiveFileLock(in: directory)') ||
   lockScreenHistoryReaderSource.includes('await') ||
@@ -652,9 +669,21 @@ if (
   !quickSaveIntentSource.includes('props["recentQuickSaveLinksRevision"]') ||
   !quickSaveIntentSource.includes('props["recentQuickSaveLinks"] = showRecentLinks ? snapshot?.activityProps() ?? [] : []') ||
   !quickSaveIntentSource.includes('activity.activityState == .active') ||
+  quickSaveIntentSource.includes('scheduleFaviconEnrichment(') ||
+  quickSaveIntentSource.includes('pendingFaviconEnrichments') ||
+  !quickSaveIntentSource.includes('static var executionRole: String') ||
+  !quickSaveIntentSource.includes('event=intent.execution_context role=') ||
+  quickSaveIntentSource.includes('enqueueActivityHistoryRefreshIfCurrent(') ||
+  !quickSaveIntentSource.includes('await restoreReadyAfterTerminalDisplayIfCurrent(') ||
+  !quickSaveIntentSource.includes('terminalStatusDisplayNanoseconds') ||
+  quickSaveIntentSource.includes('status: SaveLinkQuickSaveStatus?') ||
+  quickSaveIntentSource.includes('if let status') ||
+  !quickSaveIntentSource.includes('props["quickSaveStatus"] = status.rawValue') ||
+  quickSaveIntentSource.includes('let sharedStatus = UserDefaults(') ||
   !quickSaveIntentSource.includes('maximumActivityContentStateBytes = 4 * 1_024') ||
   !quickSaveIntentSource.includes('encodedState.count <= Self.maximumActivityContentStateBytes') ||
   !quickSaveQueueSource.includes('.bool(forKey: lockScreenRecentLinksVisibleKey) ?? false') ||
+  quickSaveQueueSource.includes('URLSession') ||
   (liveActivityLayoutSource.match(/uiImage=\{props\.iconUri\}/g) ?? []).length !== 4 ||
   !expandedLeadingLayout.includes('uiImage={props.iconUri}') ||
   !expandedLeadingLayout.includes('frame({ width: 48, height: 48 })') ||

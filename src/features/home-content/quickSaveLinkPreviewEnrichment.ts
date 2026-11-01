@@ -125,6 +125,18 @@ export function createQuickSaveLinkPreviewEnricher(
 
       if (!hasUsefulMetadata(metadata, candidate)) return 'unchanged';
 
+      // Once the preview reveals the favicon URL, start its separate App Group
+      // cache job before any larger preview-image download. The native Activity
+      // can then refresh as soon as the small icon is ready, without waiting for
+      // the card's main image pipeline.
+      const faviconUrl = metadata.faviconUrl;
+      if (faviconUrl && adapter.cacheLockScreenFavicon) {
+        void Promise.resolve()
+          .then(() => adapter.cacheLockScreenFavicon?.(candidate, faviconUrl))
+          .then((stored) => { if (stored !== false) adapter.onUpdated(); })
+          .catch(() => undefined);
+      }
+
       if (!candidate.previewImageRelativePath) {
         const imageUrls = [...new Set([
           candidate.imageUrl,
@@ -149,11 +161,6 @@ export function createQuickSaveLinkPreviewEnricher(
         return 'unchanged';
       }
       adapter.onUpdated();
-      if (metadata.faviconUrl && adapter.cacheLockScreenFavicon) {
-        void adapter.cacheLockScreenFavicon(candidate, metadata.faviconUrl)
-          .then((stored) => { if (stored !== false) adapter.onUpdated(); })
-          .catch(() => undefined);
-      }
       return 'updated';
     } catch {
       if (preview) {

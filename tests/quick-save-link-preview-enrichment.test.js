@@ -59,7 +59,7 @@ describe('Quick Save link preview enrichment', () => {
     expect(adapter.onUpdated).toHaveBeenCalledTimes(1);
   });
 
-  test('updates the Live Activity favicon only after the same Quick Save row commits', async () => {
+  test('caches the favicon for the same Quick Save row and refreshes the Live Activity', async () => {
     const previewWithFavicon = { ...metadata, faviconUrl: 'https://example.test/favicon.png' };
     const adapter = createAdapter({
       getPreview: jest.fn(async () => previewWithFavicon),
@@ -72,6 +72,34 @@ describe('Quick Save link preview enrichment', () => {
 
     expect(adapter.updateIfUnchanged).toHaveBeenCalledTimes(1);
     expect(adapter.cacheLockScreenFavicon).toHaveBeenCalledWith(candidate(), previewWithFavicon.faviconUrl);
+    expect(adapter.onUpdated).toHaveBeenCalledTimes(2);
+  });
+
+  test('starts the small favicon cache job before waiting for the preview image download', async () => {
+    const previewWithFavicon = { ...metadata, faviconUrl: 'https://example.test/favicon.png' };
+    let finishPreviewImage;
+    let finishFaviconCache;
+    const adapter = createAdapter({
+      getPreview: jest.fn(async () => previewWithFavicon),
+      cachePreview: jest.fn(() => new Promise((resolve) => { finishPreviewImage = resolve; })),
+      cacheLockScreenFavicon: jest.fn(() => new Promise((resolve) => { finishFaviconCache = resolve; })),
+    });
+    const enricher = createQuickSaveLinkPreviewEnricher(adapter);
+
+    const enrichment = enricher.schedule(candidate());
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.cacheLockScreenFavicon).toHaveBeenCalledWith(candidate(), previewWithFavicon.faviconUrl);
+    expect(adapter.cachePreview).toHaveBeenCalledWith(previewWithFavicon.imageUrl);
+
+    finishPreviewImage({ relativePath: 'home-content/link-previews/preview-test.png', mimeType: 'image/png' });
+    await expect(enrichment).resolves.toBe('updated');
+    finishFaviconCache(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(adapter.onUpdated).toHaveBeenCalledTimes(2);
   });
 

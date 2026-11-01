@@ -154,6 +154,8 @@ jobs:
   native-integration-build:
     name: Generate, install Pods, and compile iOS Simulator app
     runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     timeout-minutes: 120
     needs:
       - javascript-validation
@@ -169,7 +171,7 @@ jobs:
           node-version: 22.14.0
           cache: npm
 
-      - name: Report and verify Xcode 27 App Intents SDK
+      - name: Report and verify Xcode 27.1, Swift 6.4, and iOS 27.1 App Intents SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -181,23 +183,29 @@ jobs:
           XCODE_OUTPUT="$(xcodebuild -version)"
           printf '%s\n' "$XCODE_OUTPUT"
           XCODE_VERSION="$(printf '%s\n' "$XCODE_OUTPUT" | awk '/^Xcode / { print $2; exit }')"
+          printf 'Selected developer directory: %s\n' "$(xcode-select -p)"
 
           SWIFT_OUTPUT="$(xcrun swift --version)"
           printf '%s\n' "$SWIFT_OUTPUT"
+          SWIFT_VERSION="$(printf '%s\n' "$SWIFT_OUTPUT" | sed -nE 's/^Apple Swift version ([0-9]+\.[0-9]+).*/\1/p' | head -n 1)"
 
           IOS_SIMULATOR_SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
           IOS_SIMULATOR_SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
           printf 'iOS Simulator SDK version: %s\niOS Simulator SDK path: %s\n' \
             "$IOS_SIMULATOR_SDK_VERSION" "$IOS_SIMULATOR_SDK_PATH"
 
-          case "$XCODE_VERSION" in
-            27.*) ;;
-            *) echo "::error::Expected Xcode 27, found ${XCODE_VERSION:-unknown}"; exit 1 ;;
-          esac
-          case "$IOS_SIMULATOR_SDK_VERSION" in
-            27.*) ;;
-            *) echo "::error::Expected iOS Simulator SDK 27, found ${IOS_SIMULATOR_SDK_VERSION:-unknown}"; exit 1 ;;
-          esac
+          test "$XCODE_VERSION" = "27.1" || {
+            echo "::error::Expected Xcode 27.1, found ${XCODE_VERSION:-unknown}"
+            exit 1
+          }
+          test "$SWIFT_VERSION" = "6.4" || {
+            echo "::error::Expected Swift 6.4, found ${SWIFT_VERSION:-unknown}"
+            exit 1
+          }
+          test "$IOS_SIMULATOR_SDK_VERSION" = "27.1" || {
+            echo "::error::Expected iOS Simulator SDK 27.1, found ${IOS_SIMULATOR_SDK_VERSION:-unknown}"
+            exit 1
+          }
 
           cat > "$RUNNER_TEMP/saveapp-app-intents-sdk-probe.swift" <<'SWIFT'
           import AppIntents
@@ -296,7 +304,7 @@ jobs:
           xcodebuild \
             -workspace ios/SaveApp.xcworkspace \
             -scheme SaveApp \
-            -configuration Debug \
+            -configuration Release \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$DERIVED_DATA" \
@@ -309,7 +317,7 @@ jobs:
         run: |
           set -euo pipefail
           DERIVED_DATA="$RUNNER_TEMP/saveapp-swift-preflight-derived-data"
-          APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/SaveApp.app"
+          APP="$DERIVED_DATA/Build/Products/Release-iphonesimulator/SaveApp.app"
           EXTENSION="$APP/PlugIns/ExpoWidgetsTarget.appex"
           test -d "$APP"
           test -d "$EXTENSION"
