@@ -285,12 +285,20 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveBranch).not.toContain('.padding(.top, 8)');
     expect(quickSaveBranch).not.toMatch(/\b(?:Text|Label)\(/);
     expect(quickSaveIntent).toContain('terminalStatusDisplayNanoseconds: UInt64 = 5_000_000_000');
-    expect(quickSaveIntent).toContain('guard submitted else {');
-    expect(quickSaveIntent).toContain('try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
-    const displayWindowIndex = quickSaveIntent.indexOf('Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
-    const readyResetIndex = quickSaveIntent.indexOf('statuses: [.ready]', displayWindowIndex);
-    expect(displayWindowIndex).toBeGreaterThanOrEqual(0);
-    expect(readyResetIndex).toBeGreaterThan(displayWindowIndex);
+    const coordinatorStart = quickSaveIntent.indexOf('func perform(activityID: String, operationID: String) async {');
+    const operationStart = quickSaveIntent.indexOf('private func performSerially(', coordinatorStart);
+    const coordinatorPerform = quickSaveIntent.slice(coordinatorStart, operationStart);
+    const terminalDelay = quickSaveIntent.indexOf('try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
+    const readyReset = quickSaveIntent.indexOf('statuses: [.ready]', terminalDelay);
+
+    expect(coordinatorPerform).toContain('let terminalStatusSubmitted = await operation.value');
+    expect(coordinatorPerform.indexOf('await operation.value'))
+      .toBeLessThan(coordinatorPerform.indexOf('pendingOperations.removeValue(forKey: activityID)'));
+    expect(coordinatorPerform.indexOf('pendingOperations.removeValue(forKey: activityID)'))
+      .toBeLessThan(coordinatorPerform.indexOf('await restoreReadyAfterTerminalDisplayIfCurrent('));
+    expect(quickSaveIntent).toContain('private var pendingOperations: [String: Task<Bool, Never>]');
+    expect(terminalDelay).toBeGreaterThan(coordinatorStart);
+    expect(readyReset).toBeGreaterThan(terminalDelay);
   });
 
   test('diagnoses the intent process and separates ActivityKit lookup failures without private identifiers', () => {
@@ -564,7 +572,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     const cleanup = quickSaveIntent.slice(cleanupStart, submitStart);
     const taskBody = enqueue.slice(enqueue.indexOf('let update = Task'), enqueue.indexOf('pendingActivityUpdates[activityID] = update'));
 
-    expect(enqueue).toMatch(/private func enqueueActivityStatusSequence\([\s\S]*?\) async \{/);
+    expect(enqueue).toMatch(/private func enqueueActivityStatusSequence\([\s\S]*?\) async -> Bool \{/);
     expect(enqueue).toContain('await previous?.value');
     expect(enqueue).toContain('await self.submitActivityStatusSequence(');
     expect(taskBody).toContain('await self.clearActivityStatusSequenceIfCurrent(activityID: activityID, ticket: ticket)');
@@ -577,36 +585,62 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(cleanup).not.toContain('unsafe');
   });
 
-  test('awaits the intent-owned Activity update while keeping ready restoration separate and generation-guarded', () => {
+  test('awaits ready restoration inside the intent lifecycle while releasing the next-save lane', () => {
     const performStart = quickSaveIntent.indexOf('func perform() async throws');
-    const coordinatorStart = quickSaveIntent.indexOf('await SaveLinkQuickSaveCoordinator.shared.perform(', performStart);
+    const intentCallStart = quickSaveIntent.indexOf('await SaveLinkQuickSaveCoordinator.shared.perform(', performStart);
     const performEnd = quickSaveIntent.indexOf('\n}\n\nprivate enum SaveLinkQuickSaveStatus', performStart);
-    const perform = quickSaveIntent.slice(performStart, performEnd);
+    const intentPerform = quickSaveIntent.slice(performStart, performEnd);
+    const coordinatorPerformStart = quickSaveIntent.indexOf('func perform(activityID: String, operationID: String) async {');
+    const coordinatorPerformEnd = quickSaveIntent.indexOf('private func performSerially(', coordinatorPerformStart);
+    const coordinatorPerform = quickSaveIntent.slice(coordinatorPerformStart, coordinatorPerformEnd);
+    const performSeriallyStart = quickSaveIntent.indexOf('private func performSerially(');
+    const enqueueStart = quickSaveIntent.indexOf('private func enqueueActivityStatusSequence(', performSeriallyStart);
+    const performSerially = quickSaveIntent.slice(performSeriallyStart, enqueueStart);
     const submitStart = quickSaveIntent.indexOf('private func submitActivityStatusSequence(');
-    const updateActivityStart = quickSaveIntent.indexOf('private func updateActivity(', submitStart);
-    const submit = quickSaveIntent.slice(submitStart, updateActivityStart);
-    const failedSubmissionGuard = submit.indexOf('guard submitted else {');
-    const readyDelay = submit.indexOf('try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
-    const activityUpdateStart = quickSaveIntent.indexOf('private func updateActivity(');
-    const clipboardReaderStart = quickSaveIntent.indexOf('@MainActor\n  private func readClipboardAfterExplicitAction', activityUpdateStart);
-    const activityUpdate = quickSaveIntent.slice(activityUpdateStart, clipboardReaderStart);
-    const enqueueStart = quickSaveIntent.indexOf('private func enqueueActivityStatusSequence(');
+    const waitStart = quickSaveIntent.indexOf('private func restoreReadyAfterTerminalDisplayIfCurrent(');
+    const submit = quickSaveIntent.slice(submitStart, waitStart);
+    const readyStart = quickSaveIntent.indexOf('private func enqueueReadyRestoreIfCurrent(', waitStart);
+    const terminalWait = quickSaveIntent.slice(waitStart, readyStart);
     const cleanupStart = quickSaveIntent.indexOf('private func clearActivityStatusSequenceIfCurrent(', enqueueStart);
     const enqueue = quickSaveIntent.slice(enqueueStart, cleanupStart);
-    const readyStart = quickSaveIntent.indexOf('private func enqueueReadyRestoreIfCurrent(');
     const readyEnd = quickSaveIntent.indexOf('private func updateActivity(', readyStart);
     const readyRestore = quickSaveIntent.slice(readyStart, readyEnd);
 
-    expect(coordinatorStart).toBeGreaterThan(performStart);
-    expect(perform.indexOf('await SaveLinkQuickSaveCoordinator.shared.perform('))
-      .toBeLessThan(perform.lastIndexOf('return .result()'));
+    expect(intentCallStart).toBeGreaterThan(performStart);
+    expect(intentPerform.indexOf('await SaveLinkQuickSaveCoordinator.shared.perform('))
+      .toBeLessThan(intentPerform.indexOf('event=intent.perform.returned'));
+    expect(intentPerform).toContain('event=intent.perform.returned');
+    expect(coordinatorPerform).toContain('let terminalStatusSubmitted = await operation.value');
+    expect(coordinatorPerform.indexOf('pendingOperations.removeValue(forKey: activityID)'))
+      .toBeLessThan(coordinatorPerform.indexOf('await restoreReadyAfterTerminalDisplayIfCurrent('));
+    const failedTerminalBranchStart = coordinatorPerform.indexOf('guard terminalStatusSubmitted else {');
+    const delayedRestoreStart = coordinatorPerform.indexOf('await restoreReadyAfterTerminalDisplayIfCurrent(');
+    const failedTerminalBranch = coordinatorPerform.slice(failedTerminalBranchStart, delayedRestoreStart);
+    expect(failedTerminalBranch).toContain('await enqueueReadyRestoreIfCurrent(');
+    expect(failedTerminalBranch).toContain('return');
+    expect(coordinatorPerform).toContain('guard requestGenerationByActivity[activityID] == generation else {');
+    expect(coordinatorPerform).toContain('await previous?.value');
+    expect(performSerially).toContain('return await enqueueActivityStatusSequence(');
+    for (const terminalSequence of [
+      'statuses: [.processing, .queued]',
+      'statuses: [.processing, .alreadyQueued]',
+      'statuses: [.invalid]',
+      'statuses: [.failed]',
+    ]) {
+      expect(quickSaveIntent).toContain(terminalSequence);
+    }
+    expect(performSerially).not.toContain('Task.sleep(');
+    expect(enqueue).toContain('let submitted = await self.submitActivityStatusSequence(');
     expect(enqueue.indexOf('pendingActivityUpdateTickets[activityID] = ticket'))
       .toBeLessThan(enqueue.indexOf('await update.value'));
-    expect(submit.indexOf('let submitted = await updateActivity(')).toBeLessThan(failedSubmissionGuard);
-    expect(failedSubmissionGuard).toBeGreaterThanOrEqual(0);
-    expect(readyDelay).toBeGreaterThan(failedSubmissionGuard);
-    expect(submit.slice(failedSubmissionGuard, readyDelay)).toContain('return');
-    expect(activityUpdate).toContain('await activity.update(ActivityContent(state: state, staleDate: nil))');
+    expect(submit).toContain('let submitted = await updateActivity(');
+    expect(submit).toContain('guard submitted else {');
+    expect(submit).toContain('return true');
+    expect(submit).not.toContain('Task.sleep(');
+    expect(terminalWait).toContain('try await Task.sleep(nanoseconds: Self.terminalStatusDisplayNanoseconds)');
+    expect(terminalWait).toContain('event=activity.result_display.wait_interrupted outcome=restore_attempted');
+    expect(terminalWait.indexOf('catch {')).toBeLessThan(terminalWait.indexOf('await enqueueReadyRestoreIfCurrent('));
+    expect(terminalWait).not.toContain('Task {');
     expect(readyRestore).toContain('requestGenerationByActivity[activityID] == generation');
     expect(readyRestore).toContain('await enqueueActivityStatusSequence(');
     expect(readyRestore).toContain('statuses: [.ready]');
