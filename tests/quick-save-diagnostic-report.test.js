@@ -85,4 +85,37 @@ describe('Quick Save diagnostic report', () => {
     expect(report.operations[0].operationID).toBe('00000002');
     expect(report.operations.at(-1).events).toHaveLength(48);
   });
+
+  test('preserves unavailable app and scene state without weakening field validation', () => {
+    const report = parseQuickSaveDiagnosticReport(JSON.stringify({
+      schemaVersion: 1,
+      operations: [{
+        operationID: 'A1B2C3D4',
+        startedAt: 1_798_000_000,
+        environment: { processRole: 'extension', applicationState: 'unavailable' },
+        events: [{
+          name: 'clipboard.snapshot',
+          elapsedMilliseconds: 1,
+          values: { applicationState: 'unavailable', sceneStates: 'unavailable', hasURLs: 'true' },
+        }],
+      }],
+    }));
+
+    expect(report.operations[0].environment.applicationState).toBe('unavailable');
+    expect(report.operations[0].events[0].values).toEqual({
+      applicationState: 'unavailable',
+      sceneStates: 'unavailable',
+      hasURLs: 'true',
+    });
+    const invalid = parseQuickSaveDiagnosticReport(JSON.stringify({
+      schemaVersion: 1,
+      operations: [{
+        operationID: 'A1B2C3D4',
+        startedAt: 1_798_000_000,
+        environment: { processRole: 'extension', applicationState: 'unknownState' },
+        events: [],
+      }],
+    }));
+    expect(invalid.operations[0].environment).not.toHaveProperty('applicationState');
+  });
 });

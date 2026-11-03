@@ -439,6 +439,7 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(diagnosticWriter).toContain('buildConfiguration');
     expect(diagnosticWriter).toContain('applicationState');
     expect(diagnosticWriter).toContain('sceneStates');
+    expect(diagnosticWriter).toContain('"applicationState": ["active", "inactive", "background", "unknown", "unavailable"]');
     expect(diagnosticWriter).toContain('containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)');
     expect(diagnosticWriter).not.toMatch(/pasteboard\.string|absoluteString|\.host\b|\.path\b/);
     expect(quickSaveIntent).toContain('"clipboard.snapshot"');
@@ -458,6 +459,17 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(settingsBottomSheet).toContain('getQuickSaveDiagnosticReport()');
     expect(settingsBottomSheet).toContain('getClipboardURLDetectionSnapshot()');
     expect(settingsBottomSheet).toContain('Verifica somente metadados; não lê nem mostra o conteúdo copiado.');
+  });
+
+  test('uses extension-safe lifecycle diagnostics and normalized URL string metadata', () => {
+    expect(quickSaveIntent).not.toContain('UIApplication.shared');
+    expect(quickSaveIntent).not.toContain('connectedScenes');
+    expect(quickSaveIntent).toContain('let appState = "unavailable"');
+    expect(quickSaveIntent).toContain('let sceneStates = "unavailable"');
+    expect(quickSaveIntent).toContain('URL(string: normalized.url)?.scheme?.lowercased()');
+    expect(quickSaveIntent).not.toContain('URL(string: normalized)?');
+    expect(quickSaveIntent.match(/_ = await previous\?\.value/g)).toHaveLength(2);
+    expect(quickSaveIntent).not.toMatch(/^\s*await previous\?\.value\s*$/m);
   });
 
   test('enriches Quick Save metadata after commit without delaying import or overwriting a changed row', () => {

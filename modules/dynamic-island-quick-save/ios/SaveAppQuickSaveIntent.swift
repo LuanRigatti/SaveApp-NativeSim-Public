@@ -146,7 +146,7 @@ private enum SaveAppQuickSaveDiagnostics {
       "processRole": ["application", "extension", "other"],
       "target": ["simulator", "device"],
       "buildConfiguration": ["debug", "release"],
-      "applicationState": ["active", "inactive", "background", "unknown"],
+      "applicationState": ["active", "inactive", "background", "unknown", "unavailable"],
       "schemeClass": ["http", "https", "other", "none"],
       "selectedRepresentation": ["url", "string", "none"],
       "result": ["empty", "unavailable", "completed", "invalid", "queued", "alreadyQueued", "failed", "found", "notFound", "submitted", "started", "skipped", "returned", "historyUnavailable", "reconciliationUnavailable", "reconciliationLimit", "contentStateInvalid"],
@@ -202,24 +202,6 @@ private enum SaveAppQuickSaveDiagnostics {
 #endif
   }
 
-  fileprivate static func applicationStateName(_ state: UIApplication.State) -> String {
-    switch state {
-    case .active: return "active"
-    case .inactive: return "inactive"
-    case .background: return "background"
-    @unknown default: return "unknown"
-    }
-  }
-
-  fileprivate static func sceneActivationStateName(_ state: UIScene.ActivationState) -> String {
-    switch state {
-    case .foregroundActive: return "foregroundActive"
-    case .foregroundInactive: return "foregroundInactive"
-    case .background: return "background"
-    case .unattached: return "unattached"
-    @unknown default: return "unavailable"
-    }
-  }
 }
 
 /// Makes this pod module's App Intents metadata discoverable from the app bundle.
@@ -295,7 +277,7 @@ private actor SaveLinkQuickSaveCoordinator {
     let ticket = UUID()
     let previous = pendingOperations[activityID]
     let operation = Task { [self] in
-      await previous?.value
+      _ = await previous?.value
       return await performSerially(activityID: activityID, operationID: operationID, generation: generation)
     }
     pendingOperations[activityID] = operation
@@ -374,7 +356,7 @@ private actor SaveLinkQuickSaveCoordinator {
     SaveAppQuickSaveDiagnostics.record(
       "quickSave.validation",
       operationID: operationID,
-      values: ["result": "completed", "schemeClass": URL(string: normalized)?.scheme == "https" ? "https" : "http"]
+      values: ["result": "completed", "schemeClass": URL(string: normalized.url)?.scheme?.lowercased() == "https" ? "https" : "http"]
     )
     do {
       let result = try SaveAppQuickSaveQueue.enqueue(normalized)
@@ -443,7 +425,7 @@ private actor SaveLinkQuickSaveCoordinator {
     let previous = pendingActivityUpdates[activityID]
     let ticket = UUID()
     let update = Task { [weak self] in
-      await previous?.value
+      _ = await previous?.value
       guard let self else { return false }
       let submitted = await self.submitActivityStatusSequence(
         activityID: activityID,
@@ -691,11 +673,9 @@ private actor SaveLinkQuickSaveCoordinator {
     let hasURL = pasteboard.hasURLs
     let hasString = pasteboard.hasStrings
     let itemCount = pasteboard.numberOfItems
-    let appState = SaveAppQuickSaveDiagnostics.applicationStateName(UIApplication.shared.applicationState)
-    let sceneStates = UIApplication.shared.connectedScenes
-      .compactMap { ($0 as? UIWindowScene).map { SaveAppQuickSaveDiagnostics.sceneActivationStateName($0.activationState) } }
-      .sorted()
-      .joined(separator: ",")
+    // App and scene lifecycle APIs are unavailable to application extensions.
+    let appState = "unavailable"
+    let sceneStates = "unavailable"
     SaveAppQuickSaveDiagnostics.record(
       "clipboard.snapshot",
       operationID: operationID,
@@ -705,7 +685,7 @@ private actor SaveLinkQuickSaveCoordinator {
         "hasURLs": hasURL ? "true" : "false",
         "hasStrings": hasString ? "true" : "false",
         "applicationState": appState,
-        "sceneStates": sceneStates.isEmpty ? "unavailable" : sceneStates,
+        "sceneStates": sceneStates,
       ]
     )
     guard hasURL || hasString else {

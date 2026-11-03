@@ -141,7 +141,7 @@ const quickSaveDiagnosticEnums: Record<string, ReadonlySet<string>> = {
   processRole: new Set(['application', 'extension', 'other']),
   target: new Set(['simulator', 'device']),
   buildConfiguration: new Set(['debug', 'release']),
-  applicationState: new Set(['active', 'inactive', 'background', 'unknown']),
+  applicationState: new Set(['active', 'inactive', 'background', 'unknown', 'unavailable']),
   schemeClass: new Set(['http', 'https', 'other', 'none']),
   selectedRepresentation: new Set(['url', 'string', 'none']),
   result: new Set(['empty', 'unavailable', 'completed', 'invalid', 'queued', 'alreadyQueued', 'failed', 'found', 'notFound', 'submitted', 'started', 'skipped', 'returned', 'historyUnavailable', 'activityUnavailable', 'reconciliationUnavailable', 'reconciliationLimit', 'contentStateInvalid']),
