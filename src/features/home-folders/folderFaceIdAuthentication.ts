@@ -4,6 +4,83 @@ import { Platform } from 'react-native';
 
 export type FolderAuthenticationOutcome = 'authenticated' | 'cancelled' | 'unavailable' | 'failed';
 
+export async function authorizeAndRunHomeFolderAction(options: {
+  authorize: () => Promise<FolderAuthenticationOutcome>;
+  isRequestCurrent: () => boolean;
+  getAppState: () => string;
+  waitUntilActive: () => Promise<boolean>;
+  isProtected: () => boolean;
+  hasSessionAuthorization: () => boolean;
+  runAction: () => void;
+}): Promise<FolderAuthenticationOutcome> {
+  const outcome = await options.authorize();
+  if (outcome !== 'authenticated') return outcome;
+  if (!options.isRequestCurrent()) return 'cancelled';
+
+  let appState = options.getAppState();
+  if (appState === 'inactive') {
+    if (!await options.waitUntilActive()) return 'cancelled';
+    appState = options.getAppState();
+  }
+  if (
+    !options.isRequestCurrent() ||
+    appState !== 'active' ||
+    (options.isProtected() && !options.hasSessionAuthorization())
+  ) {
+    return 'cancelled';
+  }
+
+  options.runAction();
+  return 'authenticated';
+}
+
+export function lockAuthorizedHomeFolder(options: {
+  folderId: string;
+  isProtected: boolean;
+  appState: string;
+  unlockedFolderIds: ReadonlySet<string>;
+  invalidatePending: () => void;
+  replaceUnlockedFolderIds: (folderIds: ReadonlySet<string>) => void;
+  returnToAllItems: () => void;
+}): boolean {
+  if (
+    !options.isProtected ||
+    options.appState !== 'active' ||
+    !options.unlockedFolderIds.has(options.folderId)
+  ) {
+    return false;
+  }
+
+  const nextUnlockedFolderIds = new Set(options.unlockedFolderIds);
+  nextUnlockedFolderIds.delete(options.folderId);
+  options.invalidatePending();
+  options.replaceUnlockedFolderIds(nextUnlockedFolderIds);
+  options.returnToAllItems();
+  return true;
+}
+
+// The system authentication sheet may finish while UIKit still reports a transient inactive state.
+// Only configuration changes may accept that state; protected-content access stays active-only.
+export function canContinueAfterFaceId(options: {
+  outcome: FolderAuthenticationOutcome;
+  requestEpoch: number;
+  currentEpoch: number;
+  appState: string;
+  allowInactiveAfterAuthentication?: boolean;
+}): boolean {
+  if (
+    options.outcome !== 'authenticated' ||
+    options.requestEpoch !== options.currentEpoch ||
+    options.appState === 'background'
+  ) {
+    return false;
+  }
+
+  return options.appState === 'active' || (
+    options.allowInactiveAfterAuthentication === true && options.appState === 'inactive'
+  );
+}
+
 export type FaceIdAuthenticationAdapter = {
   platform: string;
   executionEnvironment: ExecutionEnvironment;

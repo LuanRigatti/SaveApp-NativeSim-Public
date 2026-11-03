@@ -412,6 +412,7 @@ private enum SaveAppQuickSaveLockScreenFaviconStore {
 public final class SaveAppClipboardURLDetectionModule: Module {
   private let quickSaveMarkerAppGroup = "group.com.luanrigatti.saveapp"
   private let quickSaveMarkerKey = "saveapp.dynamic-island.quick-save-clipboard-event-v1"
+  private let quickSaveDiagnosticReportKey = "saveapp.dynamic-island.quick-save-diagnostic-report-v1"
   private let lockScreenRecentLinksVisibleKey = "saveapp.dynamic-island.lock-screen-recents-visible-v1"
   private let quickSaveActivityStatusKey = "saveapp.dynamic-island.quick-save-status-v1"
 
@@ -451,6 +452,19 @@ public final class SaveAppClipboardURLDetectionModule: Module {
     Function("recordDiagnosticEvent") { (event: String) in
       guard SaveAppClipboardDiagnostics.allowedEvents.contains(event) else { return }
       SaveAppClipboardDiagnostics.logger.notice("event=\(event, privacy: .public)")
+    }
+
+    Function("getQuickSaveDiagnosticReport") { () -> String in
+      guard let data = UserDefaults(suiteName: self.quickSaveMarkerAppGroup)?
+        .data(forKey: self.quickSaveDiagnosticReportKey),
+        let report = String(data: data, encoding: .utf8) else { return "" }
+      return report
+    }
+
+    Function("clearQuickSaveDiagnosticReport") { () -> Bool in
+      guard let defaults = UserDefaults(suiteName: self.quickSaveMarkerAppGroup) else { return false }
+      defaults.removeObject(forKey: self.quickSaveDiagnosticReportKey)
+      return true
     }
 
     AsyncFunction("getDetectionSnapshotAsync") { () async -> [String: Any] in

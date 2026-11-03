@@ -43,7 +43,7 @@ export function HomeFolderOverview({
 }: HomeFolderOverviewProps) {
   const { accentColor, resolvedMode, theme } = useAppTheme();
   const router = useRouter();
-  const { authorizeFolder, isFolderAuthorized } = useLocalHomeFolders();
+  const { authorizeFolderAndContinue } = useLocalHomeFolders();
   const listRef = useRef<FlashListRef<HomeFolder> | null>(null);
   const listHeader = useMemo(() => <>{largeTitle}</>, [largeTitle]);
   const listHeaderStyle: StyleProp<ViewStyle> = useMemo(
@@ -64,10 +64,11 @@ export function HomeFolderOverview({
         accessibilityRole="button"
         onPress={() => {
           void (async () => {
-            const outcome = await authorizeFolder(item.id);
-            if (outcome === 'authenticated' && isFolderAuthorized(item.id)) {
-              router.push(getHomeFolderRoute(item.id));
-            } else if (outcome === 'unavailable' || outcome === 'failed') {
+            const outcome = await authorizeFolderAndContinue(
+              item.id,
+              () => router.push(getHomeFolderRoute(item.id)),
+            );
+            if (outcome === 'unavailable' || outcome === 'failed') {
               Alert.alert('Pasta protegida', getFolderAuthenticationFailureMessage(outcome));
             }
           })();
@@ -119,7 +120,7 @@ export function HomeFolderOverview({
         />
       </Pressable>
     ),
-    [accentColor, authorizeFolder, folders.length, isFolderAuthorized, resolvedMode, router, theme],
+    [accentColor, authorizeFolderAndContinue, folders.length, resolvedMode, router, theme],
   );
 
   const emptyMessage = isReady ? (

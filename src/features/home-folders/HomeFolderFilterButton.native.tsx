@@ -13,12 +13,24 @@ import { triggerSelectionHaptic } from '@/utils/haptics';
 
 export default function HomeFolderFilterButton() {
   const { setViewMode, viewMode } = useHomeViewMode();
-  const { authorizeFolder, folders, isFolderAuthorized, selectCategory, selectFolder, selectView, selection, view } = useLocalHomeFolders();
+  const {
+    folders,
+    isFolderAuthorized,
+    lockFolder,
+    selectCategory,
+    selectFolderAfterAuthorization,
+    selectView,
+    selection,
+    view,
+  } = useLocalHomeFolders();
   const { accentColor, resolvedMode, theme } = useAppTheme();
   const { favoritesOnly, setFavoritesOnly } = useHomeFavorites();
   const selectedFolderId = selection.kind === 'folder' ? selection.folderId : null;
   const selectedCategory = selection.kind === 'category' ? selection.category : null;
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId);
+  const canLockSelectedFolder = Boolean(
+    selectedFolder?.isProtected && selectedFolderId && isFolderAuthorized(selectedFolderId),
+  );
   const selectedFolderColor = selectedFolder
     ? getHomeFolderAccentColor(selectedFolder.color, accentColor, resolvedMode)
     : theme.colors.primary;
@@ -30,6 +42,11 @@ export default function HomeFolderFilterButton() {
     () => [
       { id: 'view:all-items', title: 'Todos', state: !selectedCategory && view === 'all-items' ? 'on' : 'off' },
       { id: 'view:folders', title: 'Pastas', state: !selectedCategory && view === 'folders' ? 'on' : 'off', image: 'folder', imageColor: theme.colors.primary },
+      ...(canLockSelectedFolder && selectedFolderId ? [{
+        id: 'folder:lock-current',
+        title: 'Bloquear pasta',
+        image: 'lock.fill' as const,
+      }] : []),
       {
         id: 'section-title:categories',
         title: 'CATEGORIAS',
@@ -83,7 +100,7 @@ export default function HomeFolderFilterButton() {
         ],
       },
     ],
-    [accentColor, folders, resolvedMode, selectedCategory, selectedFolderId, theme.colors.primary, theme.colors.textSecondary, view, viewMode],
+    [accentColor, canLockSelectedFolder, folders, resolvedMode, selectedCategory, selectedFolderId, theme.colors.primary, theme.colors.textSecondary, view, viewMode],
   );
 
   return (
@@ -111,6 +128,8 @@ export default function HomeFolderFilterButton() {
             } else if (selected === 'view:folders') {
               setFavoritesOnly(false);
               selectView('folders');
+            } else if (selected === 'folder:lock-current') {
+              if (selectedFolder && lockFolder(selectedFolder.id)) setFavoritesOnly(false);
             } else if (selected.startsWith('category:')) {
               const category = selected.slice('category:'.length);
               if (isHomeCategory(category)) {
@@ -119,12 +138,7 @@ export default function HomeFolderFilterButton() {
               }
             } else if (selected.startsWith('folder:')) {
               const folderId = selected.slice('folder:'.length);
-              void (async () => {
-                const outcome = await authorizeFolder(folderId);
-                if (outcome !== 'authenticated' || !isFolderAuthorized(folderId)) return;
-                selectFolder(folderId);
-                setFavoritesOnly(false);
-              })();
+              void selectFolderAfterAuthorization(folderId, () => setFavoritesOnly(false));
             } else if (selected.startsWith('mode:')) {
               const mode = selected.slice('mode:'.length);
               if (

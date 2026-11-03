@@ -208,6 +208,8 @@ try {
   Assert-True ($productionAllowedFiles -contains 'scripts/verify-saveapp-simulator-build-settings.js' -and
     $productionAllowedFiles -contains 'scripts/Test-SaveAppMirrorSnapshot.ps1' -and
     $productionAllowedFiles -contains 'scripts/verify-saveapp-quick-save-app-intents.js' -and
+    $productionAllowedFiles -contains 'scripts/Download-SaveAppArchivePipelineArtifact.ps1' -and
+    $productionAllowedFiles -contains '.github/workflows/simulator-archive.yml' -and
     $productionAllowedDirectories -notcontains 'scripts' -and $productionAllowedDirectories -notcontains 'modules') 'mirror path policy explicitly includes the simulator build-settings helper and snapshot gate without broadening sensitive directories'
   $documentThumbnailModuleFiles = @(
     'modules/document-thumbnailing/package.json',
@@ -254,7 +256,10 @@ try {
     $productionCandidates -contains 'src/features/dynamic-island/quickSaveQueueImportPipeline.ts' -and
     $productionCandidates -contains 'src/features/dynamic-island/quickSaveLockScreenHistory.ts' -and
     $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveQueue.swift' -and
-    $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift') 'the exact production candidate set contains the Xcodeproj fixture, AppIntents target verifier, package registry source and pre-publication snapshot gate'
+    $productionCandidates -contains 'modules/dynamic-island-quick-save/ios/SaveAppQuickSaveAppIntentsPackage.swift' -and
+    $productionCandidates -contains 'scripts/Download-SaveAppArchivePipelineArtifact.ps1' -and
+    $productionCandidates -contains '.github/workflows/simulator-archive.yml' -and
+    $productionCandidates -contains 'tests/simulator-archive-workflow-contract.test.js') 'the exact production candidate set contains the Xcodeproj fixture, AppIntents target verifier, archive workflow/downloader, and pre-publication snapshot gate'
   $noPreflightSkillPath = '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
   $noPreflightSkillFile = Resolve-SaveAppMirrorPath -Base $repositoryRoot -RelativePath $noPreflightSkillPath -ExpectedType File
   Assert-True ($productionAllowedFiles -contains $noPreflightSkillPath -and
@@ -262,6 +267,17 @@ try {
     (Test-SaveAppMirrorAllowedRelativePath -RelativePath $noPreflightSkillPath `
       -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) -and
     (Assert-SaveAppSafeContent -RelativePath $noPreflightSkillPath -Content ([IO.File]::ReadAllText($noPreflightSkillFile)))) 'the no-Preflight skill is an exact required snapshot path and remains covered by the existing path and content scanners'
+
+  $privatePipelineSkillPath = '.agents/skills/saveapp-archive-pipeline/SKILL.md'
+  Assert-True ((Test-SaveAppMirrorPrivateOnlyPath -RelativePath $privatePipelineSkillPath) -and
+    -not (Test-SaveAppMirrorAllowedRelativePath -RelativePath $privatePipelineSkillPath `
+      -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) -and
+    $productionCandidates -notcontains $privatePipelineSkillPath -and
+    $productionCandidates -notcontains '.agents/skills/saveapp-archive-pipeline/SaveAppArchivePipeline.psm1' -and
+    $productionCandidates -notcontains '.agents/skills/saveapp-archive-pipeline/SaveAppArchivePipeline.Tests.ps1') 'the archive orchestrator skill, module, and tests remain private despite the broader skills mirror directory'
+  $privatePipelineScriptPath = 'scripts/Invoke-SaveAppArchivePipeline.ps1'
+  Assert-True (-not (Test-SaveAppMirrorAllowedRelativePath -RelativePath $privatePipelineScriptPath -AllowedFiles $productionAllowedFiles -AllowedDirectories $productionAllowedDirectories) -and
+    $productionCandidates -notcontains $privatePipelineScriptPath) 'the source-to-Preflight-to-dispatch orchestrator remains outside the public script allowlist'
 
   $incompleteSnapshot = Join-Path $tempRoot 'incomplete-mirror-snapshot'
   $incompleteManifestPath = Join-Path $tempRoot 'incomplete-mirror-manifest.json'

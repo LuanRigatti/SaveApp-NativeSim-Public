@@ -64,9 +64,18 @@ describe('Home favorites UI and privacy contract', () => {
     expect(read('../src/app/(tabs)/_layout.tsx')).toMatch(/const handleFavoritesPress[\s\S]*?setFavoritesOnly\(!favoritesOnly\)[\s\S]*?router\.dismissTo\('\/'\)/);
   });
 
-  test('does not clear Favorites when Face ID cancels a protected folder selection', () => {
+  test('clears Favorites only after the provider confirms a protected folder selection', () => {
     const layout = read('../src/app/(tabs)/_layout.tsx');
-    expect(layout).toMatch(/const outcome = await authorizeFolder\(folderId\);[\s\S]*?if \(outcome !== 'authenticated' \|\| !isFolderAuthorized\(folderId\)\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?setFavoritesOnly\(false\)/);
+    expect(layout).toMatch(/const outcome = await selectFolderAfterAuthorization\(folderId, \(\) => \{[\s\S]*?setFavoritesOnly\(false\);[\s\S]*?router\.replace\(getHomeFolderRoute\(folderId\)\)/);
+    expect(layout).toMatch(/if \(outcome !== 'authenticated'\) \{[\s\S]*?return;/);
+    for (const path of [
+      '../src/features/home-folders/HomeFolderFilterButton.native.tsx',
+      '../src/features/home-folders/HomeFolderFilterButton.tsx',
+    ]) {
+      const filter = read(path);
+      expect(filter).toMatch(/(?:void |await )(?:selectFolderAfterAuthorization|selectAuthorizedFolder)\(folderId,?\s*(?:\(\) => setFavoritesOnly\(false\)|\(\) => \{)/);
+      expect(filter).not.toMatch(/await authorizeFolder\(folderId\)[\s\S]*?isFolderAuthorized\(folderId\)/);
+    }
   });
 
   test('stores associations separately and removes them only when an item is permanently deleted', () => {

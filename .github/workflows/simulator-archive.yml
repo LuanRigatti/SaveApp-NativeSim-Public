@@ -1,0 +1,239 @@
+name: SaveApp Simulator Archive
+run-name: SaveApp simulator archive | source=${{ inputs.source_sha }} | public=${{ github.sha }} | preflight=${{ inputs.preflight_run_id }} | Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Private SaveApp source commit recorded in .nativesim-source
+        required: true
+        type: string
+      preflight_run_id:
+        description: Successful Swift Preflight run for this exact public mirror SHA
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: saveapp-simulator-archive-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  simulator-archive:
+    name: Build signed Release Simulator app and upload archive
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the exact public mirror commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate source provenance and successful exact-SHA Swift Preflight
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+        run: |
+          set -euo pipefail
+          PUBLIC_SHA="$(git rev-parse HEAD)"
+          test "$GITHUB_REF" = 'refs/heads/main' || { echo '::error::Archive workflow is restricted to public main'; exit 1; }
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch' || { echo '::error::Only workflow_dispatch is supported'; exit 1; }
+          [[ "$PUBLIC_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Invalid checked out public SHA'; exit 1; }
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Private source SHA must contain 40 lowercase hexadecimal characters'; exit 1; }
+          [[ "$PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || { echo '::error::Swift Preflight run ID is invalid'; exit 1; }
+
+          EXPECTED_PROVENANCE=$(printf 'source_repository=LuanRigatti/SaveApp\nsource_branch=main\nsource_commit=%s' "$SOURCE_SHA")
+          ACTUAL_PROVENANCE="$(cat .nativesim-source)"
+          test "$ACTUAL_PROVENANCE" = "$EXPECTED_PROVENANCE" || {
+            echo '::error::Private-to-public provenance does not match the requested source SHA'
+            exit 1
+          }
+
+          PREFLIGHT_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREFLIGHT_RUN_ID")"
+          jq -e \
+            --arg id "$PREFLIGHT_RUN_ID" \
+            --arg sha "$PUBLIC_SHA" \
+            '(.id|tostring) == $id and
+             .path == ".github/workflows/swift-preflight.yml" and
+             .event == "workflow_dispatch" and
+             .head_branch == "main" and
+             .head_sha == $sha and
+             .status == "completed" and
+             .conclusion == "success"' \
+            <<< "$PREFLIGHT_JSON" >/dev/null || {
+              echo '::error::Swift Preflight is not successful for this exact public workflow_dispatch SHA'
+              exit 1
+            }
+
+          test "$PUBLIC_SHA" = "$(git rev-parse HEAD)"
+          echo "Verified private source provenance and Swift Preflight for public SHA $PUBLIC_SHA."
+
+      - name: Verify Xcode 27.1, Swift 6.4, and iOS Simulator SDK 27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          ruby --version
+          pod --version
+          XCODE_OUTPUT="$(xcodebuild -version)"
+          printf '%s\n' "$XCODE_OUTPUT"
+          XCODE_VERSION="$(printf '%s\n' "$XCODE_OUTPUT" | awk '/^Xcode / { print $2; exit }')"
+          SWIFT_OUTPUT="$(xcrun swift --version)"
+          printf '%s\n' "$SWIFT_OUTPUT"
+          SWIFT_VERSION="$(printf '%s\n' "$SWIFT_OUTPUT" | sed -nE 's/^Apple Swift version ([0-9]+\.[0-9]+).*/\1/p' | head -n 1)"
+          IOS_SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          printf 'iOS Simulator SDK: %s\n' "$IOS_SDK_VERSION"
+          test "$XCODE_VERSION" = '27.1' || { echo "::error::Expected Xcode 27.1, got ${XCODE_VERSION:-unknown}"; exit 1; }
+          test "$SWIFT_VERSION" = '6.4' || { echo "::error::Expected Swift 6.4, got ${SWIFT_VERSION:-unknown}"; exit 1; }
+          test "$IOS_SDK_VERSION" = '27.1' || { echo "::error::Expected iOS SDK 27.1, got $IOS_SDK_VERSION"; exit 1; }
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Install pinned JavaScript dependencies and verify native contracts
+        run: |
+          set -euo pipefail
+          npm ci
+          npx expo install --check
+          node scripts/verify-saveapp-native.js
+
+      - name: Generate iOS project and install CocoaPods
+        run: |
+          set -euo pipefail
+          npx expo prebuild --platform ios --no-install
+          node scripts/verify-saveapp-quick-save-app-intents.js \
+            ios/SaveApp.xcodeproj/project.pbxproj .
+          npx pod-install ios
+          ruby tests/quick-save-xcodeproj-contract.rb \
+            --verify-generated ios/Pods/Pods.xcodeproj .
+
+      - name: Verify generated Live Activity targets and App Group entitlements
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT=ios/SaveApp.xcodeproj/project.pbxproj
+          APP_INFO=ios/SaveApp/Info.plist
+          APP_ENTITLEMENTS=ios/SaveApp/SaveApp.entitlements
+          WIDGET_INFO=ios/ExpoWidgetsTarget/Info.plist
+          WIDGET_ENTITLEMENTS=ios/ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements
+          APP_GROUP=group.com.luanrigatti.saveapp
+          test -f ios/SaveApp.xcworkspace/contents.xcworkspacedata
+          grep -q 'ExpoWidgetsTarget' "$PROJECT"
+          grep -q 'com.apple.product-type.app-extension' "$PROJECT"
+          grep -q 'ExpoWidgetsTarget.appex' "$PROJECT"
+          grep -q 'WidgetLiveActivity()' ios/ExpoWidgetsTarget/index.swift
+          for plist in "$APP_INFO" "$APP_ENTITLEMENTS" "$WIDGET_INFO" "$WIDGET_ENTITLEMENTS"; do
+            test -f "$plist"
+            plutil -lint "$plist"
+          done
+          /usr/libexec/PlistBuddy -c 'Print :NSSupportsLiveActivities' "$APP_INFO" | grep -Fxq true
+          /usr/libexec/PlistBuddy -c 'Print :ExpoWidgetsAppGroupIdentifier' "$APP_INFO" | grep -Fxq "$APP_GROUP"
+          /usr/libexec/PlistBuddy -c 'Print :ExpoWidgetsAppGroupIdentifier' "$WIDGET_INFO" | grep -Fxq "$APP_GROUP"
+          /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$WIDGET_INFO" | grep -Fxq com.apple.widgetkit-extension
+          for entitlements in "$APP_ENTITLEMENTS" "$WIDGET_ENTITLEMENTS"; do
+            /usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups' "$entitlements" | grep -Fq "$APP_GROUP"
+          done
+
+      - name: Verify Release target signing settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="$PWD/ios/SaveApp.xcodeproj"
+          APP_SETTINGS="$RUNNER_TEMP/saveapp-archive-app-settings.json"
+          WIDGET_SETTINGS="$RUNNER_TEMP/saveapp-archive-widget-settings.json"
+          xcodebuild -project "$PROJECT" -target SaveApp -configuration Release -sdk iphonesimulator \
+            -showBuildSettings -json CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=- > "$APP_SETTINGS"
+          xcodebuild -project "$PROJECT" -target ExpoWidgetsTarget -configuration Release -sdk iphonesimulator \
+            -showBuildSettings -json CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=- > "$WIDGET_SETTINGS"
+          node scripts/verify-saveapp-simulator-build-settings.js "$APP_SETTINGS" "$WIDGET_SETTINGS" "$PWD/ios"
+
+      - name: Compile Release app for generic iOS Simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace ios/SaveApp.xcworkspace \
+            -scheme SaveApp \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/saveapp-simulator-derived-data" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_IDENTITY=- \
+            -quiet \
+            build
+
+      - name: Ad hoc sign app and ExpoWidgets extension, then verify both signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/saveapp-simulator-derived-data/Build/Products/Release-iphonesimulator/SaveApp.app"
+          APPEX="$APP/PlugIns/ExpoWidgetsTarget.appex"
+          APP_ENTITLEMENTS="$PWD/ios/SaveApp/SaveApp.entitlements"
+          WIDGET_ENTITLEMENTS="$PWD/ios/ExpoWidgetsTarget/ExpoWidgetsTarget.entitlements"
+          APP_GROUP=group.com.luanrigatti.saveapp
+          test -d "$APP" || { echo '::error::Release SaveApp.app was not produced'; exit 1; }
+          test -d "$APPEX" || { echo '::error::ExpoWidgetsTarget.appex is missing'; exit 1; }
+
+          # Re-sign only each top-level bundle from the extension outward; keep
+          # Xcode's nested framework signatures intact.
+          codesign --force --sign - --entitlements "$WIDGET_ENTITLEMENTS" "$APPEX"
+          codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP"
+
+          verify_bundle() {
+            local bundle="$1"
+            local label="$2"
+            local signed_entitlements="$RUNNER_TEMP/${label}-signed-entitlements.plist"
+            local signature
+            local actual_group
+            codesign --verify --strict "$bundle"
+            signature="$(codesign -dv --verbose=2 "$bundle" 2>&1)"
+            printf '%s\n' "$signature" | grep -F 'Signature=adhoc' >/dev/null || {
+              echo "::error::${label} does not have the expected ad hoc Simulator signature"
+              exit 1
+            }
+            codesign -d --entitlements :- "$bundle" > "$signed_entitlements" 2> "$RUNNER_TEMP/${label}-codesign.log"
+            plutil -lint "$signed_entitlements"
+            actual_group=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$signed_entitlements")
+            test "$actual_group" = "$APP_GROUP" || {
+              echo "::error::${label} signature does not include the SaveApp App Group"
+              exit 1
+            }
+          }
+
+          verify_bundle "$APPEX" ExpoWidgetsTarget
+          verify_bundle "$APP" SaveApp
+          /usr/libexec/PlistBuddy -c 'Print :NSSupportsLiveActivities' "$APP/Info.plist" | grep -Fxq true
+          /usr/libexec/PlistBuddy -c 'Print :ExpoWidgetsAppGroupIdentifier' "$APP/Info.plist" | grep -Fxq "$APP_GROUP"
+          /usr/libexec/PlistBuddy -c 'Print :ExpoWidgetsAppGroupIdentifier' "$APPEX/Info.plist" | grep -Fxq "$APP_GROUP"
+
+      - name: Export SaveApp.app.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/saveapp-simulator-derived-data/Build/Products/Release-iphonesimulator/SaveApp.app"
+          test -d "$APP"
+          tar -C "$(dirname "$APP")" -czf "$RUNNER_TEMP/SaveApp.app.tar.gz" "$(basename "$APP")"
+          test -s "$RUNNER_TEMP/SaveApp.app.tar.gz"
+          tar -tzf "$RUNNER_TEMP/SaveApp.app.tar.gz" | grep -Fxq 'SaveApp.app/Info.plist'
+          tar -tzf "$RUNNER_TEMP/SaveApp.app.tar.gz" | grep -Fxq 'SaveApp.app/PlugIns/ExpoWidgetsTarget.appex/Info.plist'
+          shasum -a 256 "$RUNNER_TEMP/SaveApp.app.tar.gz"
+
+      - name: Upload SaveApp Simulator archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: saveapp-simulator-archive-${{ github.run_id }}
+          path: ${{ runner.temp }}/SaveApp.app.tar.gz
+          if-no-files-found: error
+          retention-days: 7

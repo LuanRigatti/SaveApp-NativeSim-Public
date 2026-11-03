@@ -19,6 +19,7 @@ const quickSaveQueueImport = readSource('../src/features/dynamic-island/quickSav
 const quickSaveQueuePipeline = readSource('../src/features/dynamic-island/quickSaveQueueImportPipeline.ts');
 const clipboardNative = readSource('../modules/clipboard-url-detection/ios/SaveAppClipboardURLDetectionModule.swift');
 const clipboardModule = readSource('../modules/clipboard-url-detection/src/index.ts');
+const settingsBottomSheet = readSource('../src/components/native/HomeSettingsBottomSheet.ios.tsx');
 const clipboardOffer = readSource('../src/features/home-content/useClipboardLinkOffer.ts');
 const savedContentProvider = readSource('../src/features/home-content/LocalSavedContentProvider.tsx');
 const savedContentLibrary = readSource('../src/features/home-content/savedContentLibrary.ts');
@@ -337,7 +338,8 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(quickSaveIntent).toContain('let hasURL = pasteboard.hasURLs');
     expect(quickSaveIntent).toContain('let hasString = pasteboard.hasStrings');
     expect(quickSaveIntent).toContain('guard hasURL || hasString else {');
-    expect(quickSaveIntent).toContain('pasteboard.changeCount == changeCount');
+    expect(quickSaveIntent).toContain('let changeCountAfter = pasteboard.changeCount');
+    expect(quickSaveIntent).toContain('let changeCountChanged = changeCountAfter != changeCount');
     expect(quickSaveIntent).toContain('SaveLinkQuickSaveSQLite.normalize(clipboard.value)');
     expect(quickSaveIntent).toContain('ClipboardQuickSaveMarker.markHandled(changeCount: clipboard.changeCount, operationID: operationID)');
     expect(quickSaveIntent).toContain('Logger(subsystem: "com.luanrigatti.saveapp", category: "quick-save.intent")');
@@ -424,6 +426,38 @@ describe('SaveApp Dynamic Island native quick-save contract', () => {
     expect(savedContentLibrary).toContain("WHERE content_type = 'link' AND normalized_url = ? AND deleted_at IS NULL");
     expect(savedContentLibrary).toContain("'inserted' | 'alreadySaved'");
     expect(savedContentLibrary).toContain('fallbackLinkTitle(normalized.url)');
+  });
+
+  test('records a bounded metadata-only native report for comparing physical and simulator attempts', () => {
+    const diagnosticStart = quickSaveIntent.indexOf('private enum SaveAppQuickSaveDiagnostics {');
+    const diagnosticEnd = quickSaveIntent.indexOf('/// Makes this pod module\'s App Intents metadata discoverable', diagnosticStart);
+    const diagnosticWriter = quickSaveIntent.slice(diagnosticStart, diagnosticEnd);
+    expect(diagnosticWriter).toContain('maximumOperations = 6');
+    expect(diagnosticWriter).toContain('maximumEventsPerOperation = 48');
+    expect(diagnosticWriter).toContain('runtimeOS');
+    expect(diagnosticWriter).toContain('compiledSDK');
+    expect(diagnosticWriter).toContain('buildConfiguration');
+    expect(diagnosticWriter).toContain('applicationState');
+    expect(diagnosticWriter).toContain('sceneStates');
+    expect(diagnosticWriter).toContain('containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)');
+    expect(diagnosticWriter).not.toMatch(/pasteboard\.string|absoluteString|\.host\b|\.path\b/);
+    expect(quickSaveIntent).toContain('"clipboard.snapshot"');
+    expect(quickSaveIntent).toContain('"clipboard.urlRepresentation"');
+    expect(quickSaveIntent).toContain('"clipboard.stringRepresentation"');
+    expect(quickSaveIntent).toContain('"clipboard.readResult"');
+    expect(quickSaveIntent).toContain('SaveAppQuickSaveDiagnostics.record("intent.returned"');
+    expect(quickSaveIntent).toContain('SaveAppQuickSaveDiagnostics.begin(operationID: operationID, activityIDPresent: hasActivityID)');
+    expect(quickSaveIntent).not.toContain('await SaveAppQuickSaveDiagnostics.begin');
+    expect(diagnosticWriter).not.toContain('synchronize()');
+    expect(clipboardNative).toContain('Function("getQuickSaveDiagnosticReport")');
+    expect(clipboardNative).toContain('Function("clearQuickSaveDiagnosticReport")');
+    expect(clipboardNative).toContain('pasteboard.detectedPatterns(for: [probableWebURL])');
+    expect(clipboardNative).not.toContain('detectedValues(for:');
+    expect(clipboardModule).toContain('parseQuickSaveDiagnosticReport');
+    expect(settingsBottomSheet).toContain('Diagnóstico do Quick Save');
+    expect(settingsBottomSheet).toContain('getQuickSaveDiagnosticReport()');
+    expect(settingsBottomSheet).toContain('getClipboardURLDetectionSnapshot()');
+    expect(settingsBottomSheet).toContain('Verifica somente metadados; não lê nem mostra o conteúdo copiado.');
   });
 
   test('enriches Quick Save metadata after commit without delaying import or overwriting a changed row', () => {

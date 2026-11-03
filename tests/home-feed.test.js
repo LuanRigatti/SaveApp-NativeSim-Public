@@ -8,6 +8,7 @@ const {
   shouldShowGlobalHomeEmptyState,
   sortHomeItemsChronologically,
 } = require('../src/features/home-content/homeFeed');
+const { filterHomeFolderItems } = require('../src/features/home-folders/homeFolderTypes');
 
 const today = new Date(2026, 9, 23, 15, 0, 0);
 const todayMorning = new Date(2026, 9, 23, 8, 0, 0).getTime();
@@ -113,6 +114,7 @@ describe('Home mixed feed day grouping', () => {
 describe('global Home empty state eligibility', () => {
   const emptyLibrary = {
     catalogsLoadedSuccessfully: true,
+    visibleItemCount: 0,
     mediaCount: 0,
     savedContentCount: 0,
     documentCount: 0,
@@ -122,18 +124,54 @@ describe('global Home empty state eligibility', () => {
     folderFilterKind: 'all-items',
   };
 
-  test('shows the first-content state only after every catalog confirms zero items', () => {
+  test('shows the first-content state in Todos after successful reads when no item is visible', () => {
     expect(shouldShowGlobalHomeEmptyState(emptyLibrary)).toBe(true);
     expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, catalogsLoadedSuccessfully: false })).toBe(false);
   });
 
+  test('shows the existing state when the last visible item was moved into a protected folder', () => {
+    const link = { id: 11, contentType: 'link', createdAt: todayMorning, url: 'https://private.example' };
+    const visibleItems = filterHomeFolderItems(
+      [link],
+      { kind: 'all-items' },
+      new Map([['link:11', 'protected-folder']]),
+      new Set(['protected-folder']),
+      new Set(),
+    );
+
+    expect(visibleItems).toEqual([]);
+    expect(shouldShowGlobalHomeEmptyState({
+      ...emptyLibrary,
+      savedContentCount: 1,
+      visibleItemCount: visibleItems.length,
+    })).toBe(true);
+  });
+
+  test('does not expose an item hidden by folder authorization', () => {
+    const protectedLink = { id: 12, contentType: 'link', createdAt: todayMorning, url: 'https://protected.example' };
+    const visibleItems = filterHomeFolderItems(
+      [protectedLink],
+      { kind: 'all-items' },
+      new Map([['link:12', 'locked-folder']]),
+      new Set(['locked-folder']),
+      new Set(),
+    );
+
+    expect(visibleItems).toEqual([]);
+    expect(shouldShowGlobalHomeEmptyState({
+      ...emptyLibrary,
+      savedContentCount: 1,
+      visibleItemCount: visibleItems.length,
+    })).toBe(true);
+  });
+
   test.each([
-    ['photo or video', { mediaCount: 1 }],
-    ['link', { savedContentCount: 1 }],
-    ['text', { savedContentCount: 1 }],
-    ['document', { documentCount: 1 }],
-    ['checklist', { checklistCount: 1 }],
-  ])('hides the global empty state when the library contains a %s', (_label, count) => {
+    ['photo or video', { mediaCount: 1, visibleItemCount: 1 }],
+    ['link', { savedContentCount: 1, visibleItemCount: 1 }],
+    ['text', { savedContentCount: 1, visibleItemCount: 1 }],
+    ['document', { documentCount: 1, visibleItemCount: 1 }],
+    ['checklist', { checklistCount: 1, visibleItemCount: 1 }],
+  ])('hides the state when a %s is visible in Todos', (_label, count) => {
     expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, ...count })).toBe(false);
   });
 
@@ -147,7 +185,19 @@ describe('global Home empty state eligibility', () => {
   });
 
   test('automatically stops qualifying after the first saved item reaches its catalog', () => {
-    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, savedContentCount: 1 })).toBe(false);
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, savedContentCount: 1, visibleItemCount: 1 })).toBe(false);
+  });
+
+  test('automatically hides when new visible content arrives', () => {
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, visibleItemCount: 1 })).toBe(false);
+  });
+
+  test('waits for catalog readiness and preserves specific empty states', () => {
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, catalogsLoadedSuccessfully: false })).toBe(false);
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, searchQuery: 'no match' })).toBe(false);
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, favoritesOnly: true })).toBe(false);
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, folderFilterKind: 'folder' })).toBe(false);
+    expect(shouldShowGlobalHomeEmptyState({ ...emptyLibrary, folderFilterKind: 'unfiled' })).toBe(false);
   });
 
   test('keeps the global first-content state for an empty category only when the whole library is empty', () => {

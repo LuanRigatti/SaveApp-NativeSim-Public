@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NativeButton } from '@/components/native';
 import { submitLinkFromNativePrompt } from '@/features/home-content/nativeLinkPromptSubmission';
+import {
+  getClipboardOfferCorrelationID,
+  traceClipboardOfferEvent,
+  type ClipboardOfferTraceSource,
+} from '@/features/home-content/clipboardLinkOfferState';
 import { getNativeCapabilities } from '@/platform/nativeCapabilities';
 import { useAppTheme } from '@/theme';
 
@@ -25,10 +30,18 @@ export type { HomeComposerKind } from './HomeContentComposerController';
 export function HomeContentComposer({
   kind,
   initialLink,
+  onLinkSaveSuccess,
+  diagnosticSource = 'home-manual',
+  diagnosticChangeCount = null,
+  diagnosticDetectorInstanceID = null,
   onClose,
 }: {
   kind: HomeComposerKind;
   initialLink?: string | null;
+  onLinkSaveSuccess?: (submittedValue: string) => void;
+  diagnosticSource?: ClipboardOfferTraceSource;
+  diagnosticChangeCount?: number | null;
+  diagnosticDetectorInstanceID?: string | null;
   onClose: () => void;
 }) {
   if (!kind) return null;
@@ -36,23 +49,70 @@ export function HomeContentComposer({
   // Alert.prompt is backed by UIAlertController and remains native even when
   // Expo UI is unavailable in the current iOS runtime.
   if (kind === 'link' && Platform.OS === 'ios') {
-    return <NativeLinkPrompt initialLink={initialLink} onClose={onClose} />;
+    return (
+      <NativeLinkPrompt
+        initialLink={initialLink}
+        onLinkSaveSuccess={onLinkSaveSuccess}
+        diagnosticSource={diagnosticSource}
+        diagnosticChangeCount={diagnosticChangeCount}
+        diagnosticDetectorInstanceID={diagnosticDetectorInstanceID}
+        onClose={onClose}
+      />
+    );
   }
 
-  if (kind === 'link') return <AddLinkFallback initialLink={initialLink} onClose={onClose} />;
+  if (kind === 'link') {
+    return (
+      <AddLinkFallback
+        initialLink={initialLink}
+        onLinkSaveSuccess={onLinkSaveSuccess}
+        diagnosticSource={diagnosticSource}
+        diagnosticChangeCount={diagnosticChangeCount}
+        diagnosticDetectorInstanceID={diagnosticDetectorInstanceID}
+        onClose={onClose}
+      />
+    );
+  }
   return null;
 }
 
-function NativeLinkPrompt({ initialLink, onClose }: { initialLink?: string | null; onClose: () => void }) {
-  const { close, isSaving, submit } = useLinkComposerController({ onClose });
+function NativeLinkPrompt({
+  initialLink,
+  onLinkSaveSuccess,
+  diagnosticSource,
+  diagnosticChangeCount,
+  diagnosticDetectorInstanceID,
+  onClose,
+}: {
+  initialLink?: string | null;
+  onLinkSaveSuccess?: (submittedValue: string) => void;
+  diagnosticSource: ClipboardOfferTraceSource;
+  diagnosticChangeCount: number | null;
+  diagnosticDetectorInstanceID: string | null;
+  onClose: () => void;
+}) {
+  const { close, isSaving, submit } = useLinkComposerController({
+    onClose,
+    onLinkSaveSuccess,
+    diagnosticSource,
+    diagnosticChangeCount,
+    diagnosticDetectorInstanceID,
+  });
   const promptIsVisible = useRef(false);
   const initialValueRef = useRef(initialLink ?? '');
   const presentPromptRef = useRef<(initialValue: string) => void>(() => undefined);
+  const traceContext = useMemo(() => ({
+    source: diagnosticSource,
+    detectorInstanceID: diagnosticDetectorInstanceID ?? undefined,
+    correlationID: getClipboardOfferCorrelationID(diagnosticChangeCount),
+    changeCount: diagnosticChangeCount,
+  }), [diagnosticChangeCount, diagnosticDetectorInstanceID, diagnosticSource]);
 
   const presentPrompt = useCallback(
     (initialValue: string) => {
       if (promptIsVisible.current) return;
       promptIsVisible.current = true;
+      traceClipboardOfferEvent('composer-presented', traceContext);
 
       Alert.prompt(
         'Adicionar link',
@@ -63,6 +123,10 @@ function NativeLinkPrompt({ initialLink, onClose }: { initialLink?: string | nul
             style: 'cancel',
             onPress: () => {
               promptIsVisible.current = false;
+              traceClipboardOfferEvent('composer-cancelled', {
+                ...traceContext,
+                result: 'cancelled',
+              });
               close();
             },
           },
@@ -71,20 +135,32 @@ function NativeLinkPrompt({ initialLink, onClose }: { initialLink?: string | nul
             onPress: (enteredValue) => {
               promptIsVisible.current = false;
               const submittedValue = enteredValue ?? initialValue;
+              traceClipboardOfferEvent('composer-confirmed', traceContext);
 
-              void submitLinkFromNativePrompt(submittedValue, submit, (message, retryValue) => {
-                Alert.alert('Não foi possível adicionar o link', message, [
-                  {
-                    text: 'Cancelar',
-                    style: 'cancel',
-                    onPress: close,
-                  },
-                  {
-                    text: 'Tentar novamente',
-                    onPress: () => presentPromptRef.current(retryValue),
-                  },
-                ]);
-              });
+              void submitLinkFromNativePrompt(
+                submittedValue,
+                submit,
+                (message, retryValue) => {
+                  traceClipboardOfferEvent('save-error-presented', {
+                    ...traceContext,
+                    result: 'failed',
+                  });
+                  Alert.alert('Não foi possível adicionar o link', message, [
+                    {
+                      text: 'Cancelar',
+                      style: 'cancel',
+                      onPress: close,
+                    },
+                    {
+                      text: 'Tentar novamente',
+                      onPress: () => {
+                        traceClipboardOfferEvent('save-retry-selected', traceContext);
+                        presentPromptRef.current(retryValue);
+                      },
+                    },
+                  ]);
+                },
+              );
             },
           },
         ],
@@ -93,7 +169,7 @@ function NativeLinkPrompt({ initialLink, onClose }: { initialLink?: string | nul
         'url',
       );
     },
-    [close, submit],
+    [close, submit, traceContext],
   );
 
   useEffect(() => {
@@ -126,11 +202,29 @@ function NativeLinkPrompt({ initialLink, onClose }: { initialLink?: string | nul
   return null;
 }
 
-function AddLinkFallback({ initialLink, onClose }: { initialLink?: string | null; onClose: () => void }) {
+function AddLinkFallback({
+  initialLink,
+  onLinkSaveSuccess,
+  diagnosticSource,
+  diagnosticChangeCount,
+  diagnosticDetectorInstanceID,
+  onClose,
+}: {
+  initialLink?: string | null;
+  onLinkSaveSuccess?: (submittedValue: string) => void;
+  diagnosticSource: ClipboardOfferTraceSource;
+  diagnosticChangeCount: number | null;
+  diagnosticDetectorInstanceID: string | null;
+  onClose: () => void;
+}) {
   const { theme } = useAppTheme();
   const [link, setLink] = useState(initialLink ?? '');
   const { clearError, close, errorMessage, isSaving, submit } = useLinkComposerController({
     onClose,
+    onLinkSaveSuccess,
+    diagnosticSource,
+    diagnosticChangeCount,
+    diagnosticDetectorInstanceID,
   });
 
   return (

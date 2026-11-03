@@ -37,6 +37,12 @@ const {
 } = require('../src/features/home-folders/homeFolderSelectionStorage');
 const { ensureHomeFolderSchema, HOME_FOLDER_SCHEMA_VERSION } = require('../src/features/home-folders/folderSchemaMigration');
 const { readHomeFolderAssociation, restoreHomeFolderAssociation } = require('../src/features/home-folders/folderAssociationDatabase');
+const {
+  authorizeAndRunHomeFolderAction,
+  lockAuthorizedHomeFolder,
+} = require('../src/features/home-folders/folderFaceIdAuthentication');
+const { filterHomeFavoriteItems } = require('../src/features/home-content/homeFavorites');
+const { getSavedHomeItemKey } = require('../src/features/home-content/homeContentTypes');
 
 function createIsolatedLegacySqliteDatabase() {
   const { DatabaseSync } = require('node:sqlite');
@@ -101,7 +107,7 @@ function createIsolatedLegacySqliteDatabase() {
   };
 }
 
-function createFolderLibraryDatabase(seedItems = []) {
+function createFolderLibraryDatabase(seedItems = [], behavior = {}) {
   const folders = new Map();
   const assignments = new Map();
   const items = new Set(seedItems);
@@ -215,8 +221,10 @@ function createFolderLibraryDatabase(seedItems = []) {
       return { changes: Number(assignments.delete(`${itemType}:${itemId}`)) };
     }
     if (/INSERT INTO saved_folder_items/i.test(sql)) {
+      if (behavior.failAssignmentWrite) throw new Error('simulated assignment write failure');
       const [itemType, itemId, folderId] = parameters;
       assignments.set(`${itemType}:${itemId}`, folderId);
+      behavior.afterAssignmentWrite?.();
       return { changes: 1 };
     }
     return { changes: 0 };
@@ -330,6 +338,30 @@ describe('home folder names, filters, and persistence', () => {
     await expect(setHomeFolderProtection(folder.id, false, false)).resolves.toBe(false);
     await expect(setHomeFolderItemAssignment('photo', 5, null, null)).rejects.toThrow('HOME_FOLDER_ASSIGNMENT_CHANGED');
     expect(database.assignments.get('photo:5')).toBe(folder.id);
+  });
+
+  test('rolls back a folder move when authorization is revoked before commit or SQLite write fails', async () => {
+    const behavior = { failAssignmentWrite: false };
+    const database = createFolderLibraryDatabase(['photo:5'], behavior);
+    const source = await createHomeFolder('Origem');
+    const destination = await createHomeFolder('Destino');
+    await setHomeFolderItemAssignment('photo', 5, source.id);
+
+    await expect(setHomeFolderItemAssignment('photo', 5, destination.id, source.id, () => false))
+      .rejects.toThrow('HOME_FOLDER_OPERATION_CANCELLED');
+    expect(database.assignments.get('photo:5')).toBe(source.id);
+
+    let operationCurrent = true;
+    behavior.afterAssignmentWrite = () => { operationCurrent = false; };
+    await expect(setHomeFolderItemAssignment('photo', 5, destination.id, source.id, () => operationCurrent))
+      .rejects.toThrow('HOME_FOLDER_OPERATION_CANCELLED');
+    expect(database.assignments.get('photo:5')).toBe(source.id);
+    behavior.afterAssignmentWrite = undefined;
+
+    behavior.failAssignmentWrite = true;
+    await expect(setHomeFolderItemAssignment('photo', 5, destination.id, source.id, () => true))
+      .rejects.toThrow('simulated assignment write failure');
+    expect(database.assignments.get('photo:5')).toBe(source.id);
   });
 
   test('persists folder protection without changing its stable identity or assignments', async () => {
@@ -459,6 +491,85 @@ describe('home folder names, filters, and persistence', () => {
       .toEqual([items[2]]);
   });
 
+  test('keeps the previous Home content during the Face ID inactive transition and applies the protected filter on active', async () => {
+    const protectedItem = { id: 7, contentType: 'link', createdAt: 7 };
+    const publicItem = { id: 8, contentType: 'text', createdAt: 8 };
+    const assignments = new Map([[getHomeFolderItemKey('link', protectedItem.id), 'private']]);
+    const protectedFolders = new Set(['private']);
+    let appState = 'active';
+    let sessionAuthorized = false;
+    let selection = { kind: 'view', view: 'all-items' };
+    let finishActiveTransition;
+    const getVisibleItems = () => filterHomeFolderItems(
+      [protectedItem, publicItem],
+      getHomeFolderItemFilterForSelection(selection),
+      assignments,
+      protectedFolders,
+      appState === 'active' && sessionAuthorized ? new Set(['private']) : new Set(),
+    );
+
+    const pendingSelection = authorizeAndRunHomeFolderAction({
+      authorize: async () => {
+        appState = 'inactive';
+        sessionAuthorized = true;
+        return 'authenticated';
+      },
+      isRequestCurrent: () => true,
+      getAppState: () => appState,
+      waitUntilActive: () => new Promise((resolve) => { finishActiveTransition = resolve; }),
+      isProtected: () => true,
+      hasSessionAuthorization: () => sessionAuthorized,
+      runAction: () => { selection = { kind: 'folder', folderId: 'private' }; },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(selection).toEqual({ kind: 'view', view: 'all-items' });
+    expect(getVisibleItems()).toEqual([publicItem]);
+
+    appState = 'active';
+    finishActiveTransition(true);
+    await expect(pendingSelection).resolves.toBe('authenticated');
+    expect(selection).toEqual({ kind: 'folder', folderId: 'private' });
+    expect(getVisibleItems()).toEqual([protectedItem]);
+  });
+
+  test('manual lock removes a protected link from folder, category, Todos and Favorites filters', () => {
+    const item = { id: 7, contentType: 'link', createdAt: 7 };
+    const itemKey = getHomeFolderItemKey('link', item.id);
+    const assignments = new Map([[itemKey, 'private']]);
+    const protectedFolders = new Set(['private']);
+    const unlockedFolderIds = new Set(['private']);
+    let selectedFilter = { kind: 'folder', folderId: 'private' };
+    let nextUnlockedFolderIds = unlockedFolderIds;
+
+    expect(lockAuthorizedHomeFolder({
+      folderId: 'private',
+      isProtected: true,
+      appState: 'active',
+      unlockedFolderIds,
+      invalidatePending: () => undefined,
+      replaceUnlockedFolderIds: (ids) => { nextUnlockedFolderIds = ids; },
+      returnToAllItems: () => { selectedFilter = { kind: 'view', view: 'all-items' }; },
+    })).toBe(true);
+    expect(selectedFilter).toEqual({ kind: 'view', view: 'all-items' });
+
+    for (const filter of [
+      { kind: 'all-items' },
+      { kind: 'category', category: 'links' },
+      { kind: 'folder', folderId: 'private' },
+    ]) {
+      expect(filterHomeFolderItems([item], filter, assignments, protectedFolders, nextUnlockedFolderIds)).toEqual([]);
+    }
+    expect(filterHomeFavoriteItems(
+      [item],
+      new Set([getSavedHomeItemKey(item)]),
+      assignments,
+      protectedFolders,
+      nextUnlockedFolderIds,
+    )).toEqual([]);
+  });
+
   test('uses typed folder selections as direct Home filters and derives the selected folder title', () => {
     const selection = { kind: 'folder', folderId: 'folders' };
     expect(getHomeFolderItemFilterForSelection(selection)).toEqual({
@@ -483,6 +594,25 @@ describe('home folder names, filters, and persistence', () => {
     await expect(restoreHomeFolderSelection(storage, [folder])).resolves.toEqual(selection);
 
     await expect(restoreHomeFolderSelection(storage, [])).resolves.toEqual({
+      kind: 'view',
+      view: 'all-items',
+    });
+    expect(JSON.parse(values.get(HOME_FOLDER_SELECTION_STORAGE_KEY))).toEqual({
+      kind: 'view',
+      view: 'all-items',
+    });
+  });
+
+  test('does not restore a protected folder as the active Home selection without a new user action', async () => {
+    const values = new Map();
+    const storage = {
+      async getItem(key) { return values.get(key) ?? null; },
+      async setItem(key, value) { values.set(key, value); },
+    };
+    const protectedFolder = { id: 'private', name: 'Privada', isProtected: true };
+    await persistHomeFolderSelection(storage, { kind: 'folder', folderId: protectedFolder.id });
+
+    await expect(restoreHomeFolderSelection(storage, [protectedFolder])).resolves.toEqual({
       kind: 'view',
       view: 'all-items',
     });

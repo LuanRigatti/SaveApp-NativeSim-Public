@@ -97,7 +97,12 @@ export async function restoreHomeFolderSelection(
   if (storedSelection === undefined) return getViewSelection('all-items');
   if (storedSelection !== null) {
     const selection = parseCurrentSelection(storedSelection, folders);
-    if (selection && !(selection.kind === 'view' && selection.view === 'unfiled')) return selection;
+    if (selection && !(selection.kind === 'view' && selection.view === 'unfiled')) {
+      const selectedFolder = selection.kind === 'folder'
+        ? folders.find((folder) => folder.id === selection.folderId)
+        : null;
+      if (!selectedFolder?.isProtected) return selection;
+    }
 
     const fallback = getViewSelection('all-items');
     await persistHomeFolderSelection(storage, fallback);

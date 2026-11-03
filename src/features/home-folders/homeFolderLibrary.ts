@@ -264,6 +264,7 @@ export async function setHomeFolderItemAssignment(
   itemId: number,
   folderId: string | null,
   expectedPreviousFolderId?: string | null,
+  validateBeforeCommit?: () => boolean,
 ): Promise<string | null> {
   if (!Number.isSafeInteger(itemId) || itemId <= 0) throw new Error('HOME_FOLDER_ITEM_NOT_FOUND');
   const database = await getDatabase();
@@ -271,15 +272,24 @@ export async function setHomeFolderItemAssignment(
 
   await database.withExclusiveTransactionAsync(async (transaction) => {
     previousFolderId = await readAssignment(transaction, itemType, itemId);
+    if (validateBeforeCommit && !validateBeforeCommit()) {
+      throw new Error('HOME_FOLDER_OPERATION_CANCELLED');
+    }
     if (expectedPreviousFolderId !== undefined && previousFolderId !== expectedPreviousFolderId) {
       throw new Error('HOME_FOLDER_ASSIGNMENT_CHANGED');
     }
     if (folderId == null) {
+      if (validateBeforeCommit && !validateBeforeCommit()) {
+        throw new Error('HOME_FOLDER_OPERATION_CANCELLED');
+      }
       await transaction.runAsync(
         'DELETE FROM saved_folder_items WHERE item_type = ? AND item_id = ?;',
         itemType,
         String(itemId),
       );
+      if (validateBeforeCommit && !validateBeforeCommit()) {
+        throw new Error('HOME_FOLDER_OPERATION_CANCELLED');
+      }
       return;
     }
 
@@ -290,6 +300,9 @@ export async function setHomeFolderItemAssignment(
     const item = await transaction.getFirstAsync<{ id: number }>(ITEM_EXISTS_SQL[itemType], itemId);
     if (!folder) throw new Error('HOME_FOLDER_NOT_FOUND');
     if (!item) throw new Error('HOME_FOLDER_ITEM_NOT_FOUND');
+    if (validateBeforeCommit && !validateBeforeCommit()) {
+      throw new Error('HOME_FOLDER_OPERATION_CANCELLED');
+    }
 
     await transaction.runAsync(
       `INSERT INTO saved_folder_items (item_type, item_id, folder_id)
@@ -299,6 +312,9 @@ export async function setHomeFolderItemAssignment(
       String(itemId),
       folderId,
     );
+    if (validateBeforeCommit && !validateBeforeCommit()) {
+      throw new Error('HOME_FOLDER_OPERATION_CANCELLED');
+    }
   });
 
   return previousFolderId;

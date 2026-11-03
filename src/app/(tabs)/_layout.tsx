@@ -34,7 +34,16 @@ function TabsLayoutContent() {
   const router = useRouter();
   const { setViewMode, viewMode } = useHomeViewMode();
   const { favoritesOnly, isReady: favoritesReady, setFavoritesOnly } = useHomeFavorites();
-  const { authorizeFolder, folders, isFolderAuthorized, selectCategory, selectFolder, selectView, selection, view } = useLocalHomeFolders();
+  const {
+    folders,
+    isFolderAuthorized,
+    lockFolder,
+    selectCategory,
+    selectFolderAfterAuthorization,
+    selectView,
+    selection,
+    view,
+  } = useLocalHomeFolders();
   const { openSettingsSheet } = useHomeSettingsSheet();
   const { setSearchQuery } = useHomeSearch();
   const supportsSearchBar = supportsNativeHomeSearch(Platform.OS, Platform.Version);
@@ -43,6 +52,7 @@ function TabsLayoutContent() {
   const selectedCategory = selection.kind === 'category' ? selection.category : null;
   const currentFolderId = routeFolderId ?? selectedHomeFolderId;
   const currentFolder = folders.find((folder) => folder.id === currentFolderId);
+  const canLockCurrentFolder = currentFolder?.isProtected === true && isFolderAuthorized(currentFolder.id);
   const folderToolbarTint = currentFolder
     ? getHomeFolderAccentColor(currentFolder.color, accentColor, resolvedMode)
     : theme.colors.primary;
@@ -72,21 +82,23 @@ function TabsLayoutContent() {
   }, [routeFolderId, router, selectCategory, setFavoritesOnly]);
   const handleFolderPress = useCallback((folderId: string) => {
     void (async () => {
-      const outcome = await authorizeFolder(folderId);
-      if (outcome !== 'authenticated' || !isFolderAuthorized(folderId)) {
+      const outcome = await selectFolderAfterAuthorization(folderId, () => {
+        setFavoritesOnly(false);
+        if (routeFolderId) router.replace(getHomeFolderRoute(folderId));
+      });
+      if (outcome !== 'authenticated') {
         if (outcome === 'unavailable' || outcome === 'failed') {
           Alert.alert('Pasta protegida', getFolderAuthenticationFailureMessage(outcome));
         }
         return;
       }
-      setFavoritesOnly(false);
-      if (routeFolderId) {
-        router.replace(getHomeFolderRoute(folderId));
-        return;
-      }
-      selectFolder(folderId);
     })();
-  }, [authorizeFolder, isFolderAuthorized, routeFolderId, router, selectFolder, setFavoritesOnly]);
+  }, [routeFolderId, router, selectFolderAfterAuthorization, setFavoritesOnly]);
+  const handleLockFolderPress = useCallback((folderId: string) => {
+    if (!lockFolder(folderId)) return;
+    setFavoritesOnly(false);
+    if (routeFolderId === folderId) router.dismissTo('/');
+  }, [lockFolder, routeFolderId, router, setFavoritesOnly]);
   const handleFavoritesPress = useCallback(() => {
     triggerSelectionHaptic();
     setFavoritesOnly(!favoritesOnly);
@@ -137,7 +149,9 @@ function TabsLayoutContent() {
               folders,
               hidden: !shouldShowHomeToolbarItems,
               tintColor: folderToolbarTint,
+              canLockCurrentFolder,
               onOpenFolder: handleFolderPress,
+              onLockFolder: handleLockFolderPress,
               onSelectCategory: handleCategoryPress,
               onSelectHomeView: handleHomeViewPress,
               onSelectViewMode: setViewMode,

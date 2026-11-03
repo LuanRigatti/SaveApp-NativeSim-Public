@@ -3,6 +3,7 @@
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { shouldKeepHomeToolbarItemsMounted } = require('../src/features/home-content/homeToolbarVisibility');
+const { saveFolderSettingsName } = require('../src/features/home-folders/folderSettingsSave');
 
 const readSource = (path) => readFileSync(join(__dirname, path), 'utf8');
 const homeSource = readSource('../src/app/(tabs)/index.tsx');
@@ -81,8 +82,23 @@ describe('home folder regression contract', () => {
 
     expect(menuOpening).not.toMatch(/onPress|onOpenChange|triggerSelectionHaptic/);
     expect(toolbarMenuSource).toMatch(/function withSelectionHaptic\(action: \(\) => void\): \(\) => void \{\s*return \(\) => \{\s*triggerSelectionHaptic\(\);\s*action\(\);/);
-    expect((toolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).length).toBe(9);
+    expect((toolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).length).toBe(10);
     expect(toolbarMenuSource).not.toMatch(/onPress=\{\(\) => \{\s*triggerSelectionHaptic/);
+  });
+
+  test('exposes manual lock only for the active authorized protected folder and revokes the session', () => {
+    const authentication = readSource('../src/features/home-folders/folderFaceIdAuthentication.ts');
+    expect(tabsLayoutSource).toMatch(/currentFolder\?\.isProtected === true && isFolderAuthorized\(currentFolder\.id\)/);
+    expect(toolbarMenuSource).toMatch(/currentFolderId && canLockCurrentFolder \? \([\s\S]*?icon="lock\.fill"[\s\S]*?>\s*Bloquear pasta/);
+    expect(toolbarMenuSource).toMatch(/onPress=\{withSelectionHaptic\(\(\) => onLockFolder\(currentFolderId\)\)\}/);
+    expect(tabsLayoutSource).toMatch(/const handleLockFolderPress = useCallback\(\(folderId: string\) => \{[\s\S]*?if \(!lockFolder\(folderId\)\) return;[\s\S]*?setFavoritesOnly\(false\);[\s\S]*?if \(routeFolderId === folderId\) router\.dismissTo\('\/'\)/);
+    expect(authentication).toMatch(/!options\.isProtected\s*\|\|\s*options\.appState !== 'active'\s*\|\|\s*!options\.unlockedFolderIds\.has\(options\.folderId\)/);
+    expect(authentication).toMatch(/nextUnlockedFolderIds\.delete\(options\.folderId\)[\s\S]*?options\.invalidatePending\(\)[\s\S]*?options\.replaceUnlockedFolderIds\(nextUnlockedFolderIds\)[\s\S]*?options\.returnToAllItems\(\)/);
+    expect(folderProviderSource).toMatch(/folderSelectionGenerationRef\.current \+= 1;[\s\S]*?lockEpochRef\.current \+= 1;[\s\S]*?authorizationRequestsRef\.current\.delete\(folderId\)/);
+    expect(folderFilterNativeSource).toMatch(/selectedFolder\?\.isProtected && selectedFolderId && isFolderAuthorized\(selectedFolderId\)/);
+    expect(folderFilterNativeSource).toMatch(/canLockSelectedFolder && selectedFolderId[\s\S]*?title: 'Bloquear pasta'[\s\S]*?lockFolder\(selectedFolder\.id\)/);
+    expect(folderFilterSource).toMatch(/selectedFolder\?\.isProtected && isFolderAuthorized\(selectedFolder\.id\)[\s\S]*?Bloquear pasta[\s\S]*?lockCurrentFolder/);
+    expect(gallerySource).toMatch(/folderAndFavoriteFilteredItems[\s\S]*?protectedFolderIds[\s\S]*?accessibleUnlockedFolderIds[\s\S]*?createHomeSearchIndex\(folderAndFavoriteFilteredItems\)/);
   });
 
   test('keeps the toolbar menu independent of Home content states and visible after folder detail return', () => {
@@ -116,7 +132,8 @@ describe('home folder regression contract', () => {
     expect(selectionStorageSource).toMatch(/HOME_FOLDER_VIEW_STORAGE_KEY = '@saveapp\/home-folder-view-v3'/);
     expect(selectionStorageSource).toMatch(/PREVIOUS_HOME_FOLDER_VIEW_STORAGE_KEY = '@saveapp\/home-folder-view-v2'/);
     expect(selectionStorageSource).toMatch(/value === 'all-folders'\) return getViewSelection\('folders'\)/);
-    expect(selectionStorageSource).toMatch(/selection && !\(selection\.kind === 'view' && selection\.view === 'unfiled'\)\) return selection/);
+    expect(selectionStorageSource).toMatch(/selectedFolder = selection\.kind === 'folder'[\s\S]*?if \(!selectedFolder\?\.isProtected\) return selection/);
+    expect(selectionStorageSource).toMatch(/persistHomeFolderSelection\(storage, fallback\)/);
     expect(selectionStorageSource).toMatch(/isHomeFolderHomeView\(storedView\) && storedView !== 'unfiled' \? storedView : 'all-items'/);
     expect(folderProviderSource).toMatch(/useState<HomeFolderSelection>\([\s\S]*?kind: 'view',[\s\S]*?view: 'all-items'/);
     expect(folderProviderSource).toMatch(/restoreHomeFolderSelection\(AsyncStorage, nextFolders\)/);
@@ -130,18 +147,19 @@ describe('home folder regression contract', () => {
 
   test('filters directly from the toolbar while the Pastas overview keeps its dedicated route', () => {
     expect(overviewSource).toMatch(/router\.push\(getHomeFolderRoute\(item\.id\)\)/);
+    expect(overviewSource).toMatch(/authorizeFolderAndContinue\([\s\S]*?router\.push\(getHomeFolderRoute\(item\.id\)\)/);
     expect(overviewSource).not.toMatch(/selectFolder|selectView/);
     expect(toolbarMenuSource).toMatch(/onPress=\{withSelectionHaptic\(\(\) => onOpenFolder\(folder\.id\)\)\}/);
     expect(tabsLayoutSource).toMatch(/getHomeFolderRoute\(folderId\)/);
-    expect(tabsLayoutSource).toMatch(/const handleFolderPress = useCallback\(\(folderId: string\) => \{[\s\S]*?if \(routeFolderId\) \{[\s\S]*?router\.replace\(getHomeFolderRoute\(folderId\)\);[\s\S]*?return;[\s\S]*?selectFolder\(folderId\);/);
+    expect(tabsLayoutSource).toMatch(/const handleFolderPress = useCallback\(\(folderId: string\) => \{[\s\S]*?await selectFolderAfterAuthorization\(folderId, \(\) => \{[\s\S]*?if \(routeFolderId\) router\.replace\(getHomeFolderRoute\(folderId\)\);/);
     expect(tabsLayoutSource).not.toMatch(/else router\.push\(route\)/);
     expect(homeSource).toMatch(/getHomeFolderItemFilterForSelection\(selection\)/);
-    expect(tabsLayoutSource).toMatch(/selectFolder\(folderId\)/);
+    expect(tabsLayoutSource).toMatch(/selectFolderAfterAuthorization\(folderId, \(\) => \{/);
     for (const fallbackSource of [
       readSource('../src/features/home-folders/HomeFolderFilterButton.native.tsx'),
       readSource('../src/features/home-folders/HomeFolderFilterButton.tsx'),
     ]) {
-      expect(fallbackSource).toMatch(/selectFolder\(/);
+      expect(fallbackSource).toMatch(/selectFolderAfterAuthorization\(|selectAuthorizedFolder\(/);
       expect(fallbackSource).not.toMatch(/router\.push\(getHomeFolderRoute/);
     }
     expect(folderScreenSource).toMatch(/useLocalSearchParams/);
@@ -268,10 +286,13 @@ describe('home folder regression contract', () => {
     expect(settingsSource).toMatch(/onSetColor=\{updateFolderSettingsColor\}/);
     expect(settingsFallbackSource).toMatch(/COR DA PASTA[\s\S]*?Padrão[\s\S]*?Acompanha a cor do aplicativo[\s\S]*?getAccentColorRows\(\)/);
     expect(folderProviderSource).toMatch(/setHomeFolderColor\(folderId, color\)[\s\S]*?foldersRef\.current = nextFolders[\s\S]*?setFolders\(nextFolders\)/);
-    expect(settingsSource).toMatch(/await onRename\(folder\.id, nextName\)/);
+    expect(settingsSource).toMatch(/rename: \(name\) => onRename\(folder\.id, name\)/);
     expect(settingsSource).toMatch(/label="Salvar"[\s\S]*?saveName\(\)/);
     expect(settingsSource).toMatch(/<Toggle[\s\S]*?isOn=\{folder\.isProtected\}[\s\S]*?label="Proteger com Face ID"[\s\S]*?onIsOnChange=\{\(nextValue\) => void toggleProtection\(nextValue\)\}/);
     expect(settingsSource).toMatch(/pendingOperationRef\.current = true[\s\S]*?onToggleProtection\(folder, nextIsProtected\)/);
+    expect(settingsSource).toMatch(/const toggleProtection = async \(nextIsProtected: boolean\) => \{[\s\S]*?if \(pendingOperationRef\.current\) return;[\s\S]*?pendingOperationRef\.current = true;[\s\S]*?await onToggleProtection\(folder, nextIsProtected\)[\s\S]*?finally \{[\s\S]*?pendingOperationRef\.current = false/);
+    expect(settingsSource).toMatch(/const toggleProtection = async[\s\S]*?finally \{\s*pendingOperationRef\.current = false;\s*setPendingOperation\(null\);\s*\}/);
+    expect(settingsSource).toMatch(/label="Salvar"[\s\S]*?saveName\(\)[\s\S]*?disabled\(isBusy\)/);
     expect(settingsSource).toMatch(/disabled\(isBusy\)/);
     expect(settingsSource).toMatch(/Exigir autenticação para acessar os conteúdos desta pasta/);
     expect(settingsSource).toMatch(/label="Excluir pasta"[\s\S]*?role="destructive"/);
@@ -279,6 +300,33 @@ describe('home folder regression contract', () => {
     expect(settingsSource).toMatch(/setPath\(\(current\) => current\.slice\(0, -1\)\)/);
     expect(settingsSource).not.toMatch(/queueFolderOpenAfterReturn|onIsPresentedChange\(false\)/);
     expect(settingsFallbackSource).toMatch(/setCurrentPage\('folders'\)/);
+  });
+
+  test('Save closes folder settings after a no-op or successful rename, and stays open on rename failure', async () => {
+    const rename = jest.fn(async (name) => ({ name: name.trim() }));
+    await expect(saveFolderSettingsName({ currentName: 'Privada', nextName: '  Privada  ', rename }))
+      .resolves.toEqual({ name: 'Privada', changed: false });
+    expect(rename).not.toHaveBeenCalled();
+
+    await expect(saveFolderSettingsName({ currentName: 'Privada', nextName: 'Documentos', rename }))
+      .resolves.toEqual({ name: 'Documentos', changed: true });
+    expect(rename).toHaveBeenCalledWith('Documentos');
+
+    const failedRename = jest.fn(async () => { throw new Error('write failed'); });
+    await expect(saveFolderSettingsName({ currentName: 'Privada', nextName: 'Nova', rename: failedRename }))
+      .rejects.toThrow('write failed');
+    expect(settingsSource).toMatch(/const result = await saveFolderSettingsName\([\s\S]*?nameState\.set\(result\.name\)[\s\S]*?shouldClose = true/);
+    expect(settingsSource).toMatch(/finally \{[\s\S]*?pendingOperationRef\.current = false;[\s\S]*?\}\s*if \(shouldClose\) onDone\(\)/);
+    expect(settingsSource).toMatch(/onDone=\{\(\) => setPath\(\(current\) => current\.at\(-1\) === routeValue[\s\S]*?current\.slice\(0, -1\)/);
+    expect(settingsSource).toContain('onToggleProtection={toggleFolderProtection}');
+    expect(settingsSource).not.toMatch(/saveName\([\s\S]*?onToggleProtection\(/);
+  });
+
+  test('movement reports the specific failure and silently treats authentication cancellation as cancellation', () => {
+    expect(gallerySource).toMatch(/catch \(error\)[\s\S]*?getHomeFolderAssignmentAlert\(error\)[\s\S]*?if \(failure\) Alert\.alert\(failure\.title, failure\.message\)/);
+    expect(folderProviderSource).toMatch(/runExclusiveFolderAssignment\(folderAssignmentOperationLockRef[\s\S]*?authorizeAndPersistFolderAssignment\([\s\S]*?allowInactiveAfterAuthentication: true[\s\S]*?setHomeFolderItemAssignment\([\s\S]*?validateBeforeCommit/);
+    expect(folderProviderSource).not.toMatch(/setItemFolder = useCallback\([\s\S]*?authorizeFolder\(protectedId\)/);
+    expect(folderProviderSource).toMatch(/operationFaceIdSucceeded && appStateRef\.current === 'inactive'/);
   });
 
   test('removes hidden folder settings actions from the list but keeps item organization menus', () => {

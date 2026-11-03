@@ -80,11 +80,21 @@ function Test-SaveAppMirrorAllowedRelativePath {
   )
 
   $path = $RelativePath.Replace('\','/')
+  if (Test-SaveAppMirrorPrivateOnlyPath -RelativePath $path) { return $false }
   if ($AllowedFiles -contains $path) { return $true }
   foreach ($directory in $AllowedDirectories) {
     if ($path.StartsWith($directory + '/',[StringComparison]::OrdinalIgnoreCase)) { return $true }
   }
   return $false
+}
+
+function Test-SaveAppMirrorPrivateOnlyPath {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$RelativePath)
+
+  $path = $RelativePath.Replace('\','/').TrimEnd('/')
+  $privateOnlyPrefix = '.agents/skills/saveapp-archive-pipeline'
+  return $path -eq $privateOnlyPrefix -or $path.StartsWith($privateOnlyPrefix + '/',[StringComparison]::OrdinalIgnoreCase)
 }
 
 function Test-SaveAppMirrorBlockedName {
@@ -149,9 +159,11 @@ function Get-SaveAppMirrorAllowlist {
     'scripts/create-saveapp-provisional-icon.ps1',
     'scripts/mirror-saveapp.ps1','scripts/Invoke-SaveAppSwiftPreflight.ps1',
     'scripts/Start-SaveAppNativeSim.ps1','scripts/Download-SaveAppSimulatorArchive.ps1',
+    'scripts/Download-SaveAppArchivePipelineArtifact.ps1',
     'scripts/SaveAppMirrorSecurity.psm1','scripts/SaveAppNativeSimCliGuard.psm1',
     'tests/quick-save-xcodeproj-contract.rb',
     '.github/workflows/native-sim.yml','.github/workflows/swift-preflight.yml',
+    '.github/workflows/simulator-archive.yml',
     '.github/workflows/eas-build.yml','.github/native-sim/gate.cjs',
     '.github/native-sim/oslog-capture.sh',
     '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
@@ -166,6 +178,7 @@ function Get-SaveAppMirrorAllowlist {
     'modules/rich-note-keyboard-toolbar/ios/SaveAppRichNoteKeyboardToolbarModule.swift',
     'modules/rich-note-keyboard-toolbar/src/index.ts',
     'scripts/verify-saveapp-simulator-build-settings.js',
+    'scripts/Download-SaveAppArchivePipelineArtifact.ps1',
     'plugins/withSaveLinkQuickSave.js',
     'scripts/verify-saveapp-quick-save-app-intents.js',
     'tests/quick-save-xcodeproj-contract.rb',
@@ -180,6 +193,7 @@ function Get-SaveAppMirrorAllowlist {
     'src/features/home-content/quickSaveLinkPreviewEnrichment.ts',
     'src/features/home-content/quickSavePreviewEnrichmentSchemaMigration.ts',
     '.github/native-sim/oslog-capture.sh',
+    '.github/workflows/simulator-archive.yml',
     '.agents/skills/saveapp-nativesim-nopreflight/SKILL.md'
   )
   foreach ($required in $requiredFiles) {
@@ -224,6 +238,7 @@ function Get-SaveAppMirrorCandidateFiles {
         $itemRelative = [IO.Path]::GetRelativePath($SourceRoot,$item.FullName).Replace('\','/')
         $expectedType = if ($item.PSIsContainer) { 'Directory' } else { 'File' }
         $null = Resolve-SaveAppMirrorPath -Base $SourceRoot -RelativePath $itemRelative -ExpectedType $expectedType
+        if (Test-SaveAppMirrorPrivateOnlyPath -RelativePath $itemRelative) { continue }
         if ($item.PSIsContainer) {
           $pending.Push($itemRelative)
         } else {
@@ -491,4 +506,4 @@ function Write-SaveAppProvenance {
   }
 }
 
-Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Test-SaveAppMirrorAllowedRelativePath,Test-SaveAppMirrorBlockedName,Get-SaveAppMirrorAllowlist,Get-SaveAppMirrorCandidateFiles,Get-SaveAppMirrorStagedPathResult,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance
+Export-ModuleMember -Function Assert-SaveAppSafeContent,Test-SaveAppGitHubRemote,Test-SaveAppMirrorAllowedRelativePath,Test-SaveAppMirrorPrivateOnlyPath,Test-SaveAppMirrorBlockedName,Get-SaveAppMirrorAllowlist,Get-SaveAppMirrorCandidateFiles,Get-SaveAppMirrorStagedPathResult,Assert-SaveAppMirrorRoot,Resolve-SaveAppMirrorPath,Ensure-SaveAppMirrorDirectory,Copy-SaveAppMirrorFile,Write-SaveAppProvenance

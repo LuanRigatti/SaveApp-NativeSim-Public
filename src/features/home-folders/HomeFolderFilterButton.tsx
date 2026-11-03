@@ -13,7 +13,16 @@ import { triggerSelectionHaptic } from '@/utils/haptics';
 
 export default function HomeFolderFilterButton() {
   const { setViewMode, viewMode } = useHomeViewMode();
-  const { authorizeFolder, folders, isFolderAuthorized, selectCategory, selectFolder, selectView, selection, view } = useLocalHomeFolders();
+  const {
+    folders,
+    isFolderAuthorized,
+    lockFolder,
+    selectCategory,
+    selectFolderAfterAuthorization: selectAuthorizedFolder,
+    selectView,
+    selection,
+    view,
+  } = useLocalHomeFolders();
   const { accentColor, resolvedMode, theme } = useAppTheme();
   const { favoritesOnly, setFavoritesOnly } = useHomeFavorites();
   const [isOpen, setIsOpen] = useState(false);
@@ -33,12 +42,17 @@ export default function HomeFolderFilterButton() {
     setIsOpen(false);
   };
 
-  const selectFolderAfterAuthorization = async (folderId: string) => {
-    const outcome = await authorizeFolder(folderId);
-    if (outcome !== 'authenticated' || !isFolderAuthorized(folderId)) return;
-    selectFolder(folderId);
+  const lockCurrentFolder = () => {
+    if (!selectedFolder || !lockFolder(selectedFolder.id)) return;
     setFavoritesOnly(false);
     setIsOpen(false);
+  };
+
+  const selectFolderAfterAuthorization = async (folderId: string) => {
+    await selectAuthorizedFolder(folderId, () => {
+      setFavoritesOnly(false);
+      setIsOpen(false);
+    });
   };
 
   const renderOption = (
@@ -46,7 +60,7 @@ export default function HomeFolderFilterButton() {
     title: string,
     selected: boolean,
     onPress: () => void,
-    icon: 'folder-outline' | 'grid-outline' | 'grid' | 'list-outline' | 'list' | 'menu-outline' |
+    icon: 'folder-outline' | 'lock-closed-outline' | 'grid-outline' | 'grid' | 'list-outline' | 'list' | 'menu-outline' |
       'images-outline' | 'document-text-outline' | 'link-outline' | 'checkbox-outline' | 'text-outline',
     iconColor?: string,
   ) => (
@@ -145,6 +159,9 @@ export default function HomeFolderFilterButton() {
               <View style={{ borderBottomColor: theme.colors.separator, borderBottomWidth: 0.5, paddingHorizontal: theme.spacing.md, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.xs }}>
                 <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>MINHAS PASTAS</Text>
               </View>
+              {selectedFolder?.isProtected && isFolderAuthorized(selectedFolder.id)
+                ? renderOption('lock-current-folder', 'Bloquear pasta', false, lockCurrentFolder, 'lock-closed-outline')
+                : null}
               {folders.map((folder) => renderOption(
                 `folder:${folder.id}`,
                 folder.name,

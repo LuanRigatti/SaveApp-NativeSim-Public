@@ -140,15 +140,34 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(swiftPreflightWorkflow).toContain('CODE_SIGNING_ALLOWED=NO');
   });
 
-  test('places one native no-subtitle toggle above Personalização', () => {
+  test('groups both Dynamic Island setting rows in one native card above Personalização', () => {
     const settingsList = settingsSource.match(
       /<List modifiers=\{\[navigationTitle\('Configurações'\)[\s\S]*?<\/List>/,
     )?.[0] ?? '';
-    const firstSection = settingsList.match(/<Section>[\s\S]*?<\/Section>/)?.[0] ?? '';
-    expect(firstSection).toMatch(/<Text>Dynamic Island<\/Text>[\s\S]*?<Toggle[\s\S]*?isOn=\{isSaveLinkModeEnabled\}/);
-    expect(firstSection).toContain('onIsOnChange=');
-    expect(firstSection).not.toMatch(/subtitle|NavigationLink/);
+    const firstSection = settingsList.match(/<Section title="Dynamic Island">[\s\S]*?<\/Section>/)?.[0] ?? '';
+    const rows = firstSection.match(/<HStack alignment="center" spacing=\{theme\.spacing\.sm\}>[\s\S]*?<\/HStack>/g) ?? [];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('<Text>Ativar Dynamic Island</Text>');
+    expect(rows[0]).toContain('Salve links diretamente pela Dynamic Island.');
+    expect(rows[0]).toContain('isOn={isSaveLinkModeEnabled}');
+    expect(rows[0]).toContain('accessibilityLabel(\'Ativar Dynamic Island\')');
+    expect(rows[0]).toContain('onIsOnChange=');
+    expect(rows[1]).toContain('<Text>Links recentes</Text>');
+    expect(rows[1]).toContain('Mostra os domínios dos 3 últimos links salvos na Dynamic Island e na tela bloqueada.');
+    expect(rows[1]).toContain('isOn={showRecentLinksOnLockScreen}');
+    expect(rows[1]).toContain('onIsOnChange=');
+    for (const row of rows) {
+      expect(row).toContain("font({ textStyle: 'footnote' })");
+      expect(row).toContain('foregroundStyle(theme.colors.textSecondary)');
+      expect(row).toMatch(/<Spacer \/>[\s\S]*?<Toggle/);
+      expect(row).not.toMatch(/<Image|lineLimit\(/);
+    }
+    expect(firstSection.match(/<Toggle\n/g)).toHaveLength(2);
+    expect(firstSection).not.toContain('<Divider');
+    expect(firstSection).not.toMatch(/subtitle|NavigationLink|<Image|lineLimit\(/);
     expect(settingsList.indexOf(firstSection)).toBeLessThan(settingsList.indexOf('<Section title="Personalização">'));
+    const firstSectionEnd = settingsList.indexOf(firstSection) + firstSection.length;
+    expect(settingsList.slice(firstSectionEnd).trimStart()).toMatch(/^<Section title="Personalização">/);
     expect(settingsSource).toContain('setSaveLinkModeEnabled(nextValue)');
     expect(settingsSource).toContain('.catch((error: unknown) =>');
     expect(settingsSource).toContain('createLiveActivityFailureAlert');
@@ -195,7 +214,8 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     expect(providerSource).toContain('if (availableRef.current) {');
     expect(providerSource).toContain('if (!availableRef.current) throw new Error');
     expect(settingsSource).toContain('!isSaveLinkModeAvailable || isSaveLinkModeBusy');
-    expect(settingsSource).toContain('Indisponível nesta versão. A preferência será mantida.');
+    expect(settingsSource).not.toContain('Indisponível nesta versão. A preferência será mantida.');
+    expect(settingsSource).toMatch(/accessibilityValue\(\s*!isSaveLinkModeAvailable/);
   });
 
   test('keeps Live Activity payload free of saved URLs and reserves the sensor region', () => {
@@ -568,8 +588,17 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
 
     expect(providerSource).toContain('useState(false);');
     expect(providerSource).toContain('setQuickSaveLockScreenRecentLinksVisible(visible)');
-    expect(settingsSource).toContain('Links recentes na tela bloqueada');
-    expect(settingsSource).toContain('Desativado por padrão');
+    expect(settingsSource).toContain('<Section title="Dynamic Island">');
+    expect(settingsSource).toContain('<Text>Links recentes</Text>');
+    expect(settingsSource).not.toContain('<Text>Links recentes na tela bloqueada</Text>');
+    expect(settingsSource).not.toContain('Desativado por padrão. Quando ativado, mostra somente domínios dos três últimos links salvos pelo Quick Save.');
+    const islandSectionStart = settingsSource.indexOf('<Section title="Dynamic Island">');
+    const islandSectionEnd = settingsSource.indexOf('</Section>', islandSectionStart) + '</Section>'.length;
+    const islandCard = settingsSource.slice(islandSectionStart, islandSectionEnd);
+    expect(islandCard.match(/<Toggle\n/g)).toHaveLength(2);
+    expect(islandCard).toContain('Salve links diretamente pela Dynamic Island.');
+    expect(islandCard).toContain('Mostra os domínios dos 3 últimos links salvos na Dynamic Island e na tela bloqueada.');
+    expect(islandSectionEnd).toBeLessThan(settingsSource.indexOf('<Section title="Personalização">', islandSectionEnd));
     expect(updateSource).toContain('factory.getInstances().find((candidate) => candidate.getId() === authorization.activityId)');
     expect(updateSource).toContain('await activity.update({');
     expect(updateSource).toContain("quickSaveStatus: confirmedSettings?.quickSaveStatus ?? 'ready'");
@@ -607,21 +636,21 @@ describe('SaveApp Dynamic Island link-saving mode', () => {
     const authorizationIndex = composerRouteSource.indexOf(
       'await isAuthorizedSaveLinkActivityURL(params.activityToken)',
     );
-    const eventConsumptionIndex = composerRouteSource.indexOf(
-      'markClipboardLinkChangeCountHandled(beforeRead?.changeCount)',
-    );
     const clipboardReadIndex = composerRouteSource.indexOf('Clipboard.getUrlAsync()');
 
     expect(composerRouteSource).toContain("source === 'dynamic-island'");
     expect(flowGuardIndex).toBeGreaterThanOrEqual(0);
     expect(composerRouteSource.indexOf('useLayoutEffect')).toBeGreaterThanOrEqual(0);
     expect(flowGuardIndex).toBeLessThan(authorizationIndex);
-    expect(authorizationIndex).toBeLessThan(eventConsumptionIndex);
-    expect(eventConsumptionIndex).toBeLessThan(clipboardReadIndex);
+    expect(authorizationIndex).toBeLessThan(clipboardReadIndex);
     expect(composerRouteSource).toContain('Clipboard.getUrlAsync()');
     expect(composerRouteSource).toContain('Clipboard.getStringAsync()');
     expect(composerRouteSource).toContain('prepareClipboardLinkCandidate');
     expect(composerRouteSource).toContain('markClipboardLinkChangeCountHandled');
+    expect(composerRouteSource).toContain('onLinkSaveSuccess={clipboardOfferContext ? handleClipboardLinkSaveSuccess : undefined}');
+    expect(composerRouteSource).toContain('markClipboardLinkChangeCountHandled(clipboardOfferContext.changeCount)');
+    expect(composerRouteSource).not.toContain('markClipboardLinkChangeCountHandled(beforeRead?.changeCount)');
+    expect(composerRouteSource).toContain('deferClipboardLinkOfferUntilResume(clipboardOfferContext.changeCount)');
     expect(composerRouteSource).toContain('<HomeContentComposer');
     expect(composerRouteSource).toContain('router.replace(\'/\')');
     expect(clipboardHookSource).toContain('export function markClipboardLinkChangeCountHandled');

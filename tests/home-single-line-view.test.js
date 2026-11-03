@@ -56,6 +56,7 @@ describe('Home Linha única view', () => {
     expect(gallerySource).toMatch(/function getSingleLineTitleTextStyle\(theme: AppTheme\): TextStyle[\s\S]*?flexBasis: 0,[\s\S]*?flexGrow: 1,[\s\S]*?flexShrink: 1,[\s\S]*?minWidth: 0/);
     expect((gallerySource.match(/getSingleLineTitleTextStyle\(theme\)/g) ?? [])).toHaveLength(5);
     expect((gallerySource.match(/<HomeFolderIndicator flexShrink=\{0\} maxWidth="42%"/g) ?? [])).toHaveLength(5);
+    expect((gallerySource.match(/<HomeTagDots maxWidth=\{folderName \? '28%' : '32%'\}/g) ?? [])).toHaveLength(5);
     expect(gallerySource).toMatch(/function getSingleLineRowLayoutStyle[\s\S]*?gap: theme\.spacing\.xs/);
     expect(gallerySource).toMatch(/const trigger = isSingleLineView \? \([\s\S]*?HomeFolderIndicator flexShrink=\{0\} maxWidth="42%"[\s\S]*?<HomeTagDots[\s\S]*?\) : isListView/);
     expect(gallerySource).not.toMatch(/maxWidth="(?:24|28)%" folderColor=\{folder\?\.color \?\? null\} name=\{folderName\}/);

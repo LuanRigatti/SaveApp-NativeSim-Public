@@ -1,6 +1,6 @@
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef } from 'react';
-import { Text, View } from 'react-native';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { AppState, Text, View } from 'react-native';
 
 import { PhotoMasonryGallery } from '@/components/photos/PhotoMasonryGallery';
 import { ProgressiveCollapsibleScreen } from '@/components/premium';
@@ -29,7 +29,7 @@ export default function HomeFolderScreen() {
   const { documents, isReady: documentLibraryReady } = useLocalDocumentLibrary();
   const { isReady: viewModeReady } = useHomeViewMode();
   const { favoriteKeys } = useHomeFavorites();
-  const { folders, isReady: homeFoldersReady } = useLocalHomeFolders();
+  const { folders, isReady: homeFoldersReady, selectView } = useLocalHomeFolders();
   const authorization = useHomeFolderAuthorization(rawFolderId ?? null);
   const folder = folders.find((item) => item.id === rawFolderId);
   const hasReturnedToHomeRef = useRef(false);
@@ -59,6 +59,18 @@ export default function HomeFolderScreen() {
     hasReturnedToHomeRef.current = true;
     router.dismissTo('/');
   }, [folder, homeFoldersReady, router]);
+
+  useFocusEffect(useCallback(() => {
+    if (!folder?.isProtected) return undefined;
+    let returnedToHome = false;
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'background' || returnedToHome) return;
+      returnedToHome = true;
+      selectView('all-items');
+      router.dismissTo('/');
+    });
+    return () => subscription.remove();
+  }, [folder?.isProtected, router, selectView]));
 
   const folderTitle = folder?.name ?? 'Pasta';
 

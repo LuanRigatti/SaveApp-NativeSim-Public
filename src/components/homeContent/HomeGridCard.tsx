@@ -39,7 +39,7 @@ export function HomeGridCard({
   const isCompact = mode === 'small';
   const titleStyle = isCompact ? theme.typography.subheadline : theme.typography.headline;
   const metadataAccessories = folderName || tagDots.length > 0 ? (
-    <View style={{ alignItems: 'center', flexDirection: 'row', flexShrink: 0, gap: theme.spacing.xxs, maxWidth: '48%', minWidth: 0 }}>
+    <View style={{ alignItems: 'center', flexDirection: 'row', flexShrink: 1, gap: theme.spacing.xxs, maxWidth: '48%', minWidth: 0 }}>
       {folderName ? <HomeFolderIndicator folderColor={folderColor} maxWidth="100%" name={folderName} /> : null}
       <HomeTagDots tags={tagDots} />
     </View>
@@ -108,7 +108,7 @@ export function HomeGridCard({
               style={{
                 alignItems: 'center',
                 flexDirection: 'row',
-                height: 14,
+                height: 16,
                 justifyContent: 'space-between',
                 minWidth: 0,
               }}

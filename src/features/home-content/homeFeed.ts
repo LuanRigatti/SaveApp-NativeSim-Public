@@ -96,6 +96,7 @@ export function areHomeFeedSourcesReady(startupState: HomeFeedStartupState): boo
 
 export function shouldShowGlobalHomeEmptyState(input: {
   catalogsLoadedSuccessfully: boolean;
+  visibleItemCount: number;
   mediaCount: number;
   savedContentCount: number;
   documentCount: number;
@@ -104,14 +105,19 @@ export function shouldShowGlobalHomeEmptyState(input: {
   favoritesOnly: boolean;
   folderFilterKind: 'all-items' | 'category' | 'folder' | 'unfiled';
 }): boolean {
-  return input.catalogsLoadedSuccessfully &&
+  if (!input.catalogsLoadedSuccessfully || input.favoritesOnly || input.searchQuery.trim().length > 0) {
+    return false;
+  }
+
+  if (input.folderFilterKind === 'all-items') {
+    return input.visibleItemCount === 0;
+  }
+
+  return input.folderFilterKind === 'category' &&
     input.mediaCount === 0 &&
     input.savedContentCount === 0 &&
     input.documentCount === 0 &&
-    input.checklistCount === 0 &&
-    (input.folderFilterKind === 'all-items' || input.folderFilterKind === 'category') &&
-    !input.favoritesOnly &&
-    input.searchQuery.trim().length === 0;
+    input.checklistCount === 0;
 }
 
 export function shouldShowHomeCategoryEmptyState(input: {

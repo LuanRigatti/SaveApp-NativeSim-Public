@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentProvider';
 import { EmptySavedTextError } from '@/features/home-content/contentSavePipeline';
@@ -6,6 +6,11 @@ import {
   createLinkSaveSubmissionRunner,
   type LinkSaveSubmissionResult,
 } from '@/features/home-content/linkSaveSubmission';
+import {
+  getClipboardOfferCorrelationID,
+  traceClipboardOfferEvent,
+  type ClipboardOfferTraceSource,
+} from '@/features/home-content/clipboardLinkOfferState';
 
 export type HomeComposerKind = 'link' | null;
 
@@ -16,9 +21,19 @@ export type LinkComposerSubmitResult = {
 
 type ComposerControllerOptions = {
   onClose: () => void;
+  onLinkSaveSuccess?: (submittedValue: string) => void;
+  diagnosticSource?: ClipboardOfferTraceSource;
+  diagnosticChangeCount?: number | null;
+  diagnosticDetectorInstanceID?: string | null;
 };
 
-export function useLinkComposerController({ onClose }: ComposerControllerOptions) {
+export function useLinkComposerController({
+  onClose,
+  onLinkSaveSuccess,
+  diagnosticSource = 'home-manual',
+  diagnosticChangeCount = null,
+  diagnosticDetectorInstanceID = null,
+}: ComposerControllerOptions) {
   const { saveLink } = useLocalSavedContent();
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -26,19 +41,46 @@ export function useLinkComposerController({ onClose }: ComposerControllerOptions
   const isMounted = useRef(false);
   const didClose = useRef(false);
   const onCloseRef = useRef(onClose);
+  const onLinkSaveSuccessRef = useRef(onLinkSaveSuccess);
+  const diagnosticContextRef = useRef({
+    diagnosticSource,
+    diagnosticChangeCount,
+    diagnosticDetectorInstanceID,
+  });
   const submissionRunner = useRef<ReturnType<typeof createLinkSaveSubmissionRunner> | null>(null);
+
+  const trace = useCallback((
+    event: Parameters<typeof traceClipboardOfferEvent>[0],
+    extra: Parameters<typeof traceClipboardOfferEvent>[1] = {},
+  ) => {
+    const context = diagnosticContextRef.current;
+    traceClipboardOfferEvent(event, {
+      source: context.diagnosticSource,
+      detectorInstanceID: context.diagnosticDetectorInstanceID ?? undefined,
+      correlationID: getClipboardOfferCorrelationID(context.diagnosticChangeCount),
+      changeCount: context.diagnosticChangeCount,
+      ...extra,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+    onLinkSaveSuccessRef.current = onLinkSaveSuccess;
+    diagnosticContextRef.current = {
+      diagnosticSource,
+      diagnosticChangeCount,
+      diagnosticDetectorInstanceID,
+    };
+  }, [diagnosticChangeCount, diagnosticDetectorInstanceID, diagnosticSource, onClose, onLinkSaveSuccess]);
 
   if (submissionRunner.current == null) {
     submissionRunner.current = createLinkSaveSubmissionRunner();
   }
 
   useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  useEffect(() => {
     isMounted.current = true;
     didClose.current = false;
+    trace('composer-mounted');
 
     return () => {
       isMounted.current = false;
@@ -46,18 +88,23 @@ export function useLinkComposerController({ onClose }: ComposerControllerOptions
       linkAbortController.current = null;
       controller?.abort();
     };
-  }, []);
+  }, [trace]);
 
-  const close = useCallback(() => {
+  const closeWithReason = useCallback((reason: 'saved' | 'cancelled') => {
     if (!isMounted.current || didClose.current) return;
     didClose.current = true;
     const controller = linkAbortController.current;
     linkAbortController.current = null;
     controller?.abort();
+    trace(reason === 'saved' ? 'composer-close-requested' : 'composer-cancelled', {
+      result: reason === 'saved' ? 'saved' : 'cancelled',
+    });
     setIsSaving(false);
     setErrorMessage(null);
     onCloseRef.current();
-  }, []);
+  }, [trace]);
+
+  const close = useCallback(() => closeWithReason('cancelled'), [closeWithReason]);
 
   const clearError = useCallback(() => {
     if (isMounted.current && !didClose.current) setErrorMessage(null);
@@ -69,10 +116,20 @@ export function useLinkComposerController({ onClose }: ComposerControllerOptions
       if (!isMounted.current || didClose.current) return { status: 'cancelled' };
       const controller = new AbortController();
       linkAbortController.current = controller;
+      trace('persistence-started');
 
       let submissionError: string | null = null;
       const status = await submissionRunner.current?.(
-        () => saveLink(link, controller.signal),
+        async () => {
+          try {
+            const saved = await saveLink(link, controller.signal);
+            trace('persistence-succeeded', { result: 'saved' });
+            return saved;
+          } catch (error) {
+            trace('persistence-failed', { result: 'failed' });
+            throw error;
+          }
+        },
         controller.signal,
         {
           isCurrent: () =>
@@ -89,18 +146,28 @@ export function useLinkComposerController({ onClose }: ComposerControllerOptions
           setSaving: setIsSaving,
           onSuccess: () => {
             if (linkAbortController.current !== controller || controller.signal.aborted) return;
+            // Consume the exact clipboard event before close() makes Home eligible to check it.
+            trace('composer-confirmed', { result: 'saved' });
+            try {
+              onLinkSaveSuccessRef.current?.(link);
+            } catch {
+              // Clipboard bookkeeping must not turn an already-persisted link into a failed save.
+              trace('clipboard-consumption-callback-failed', { result: 'failed' });
+            }
             linkAbortController.current = null;
-            close();
+            closeWithReason('saved');
           },
         },
       );
+
+      trace('submission-result', { result: status ?? 'cancelled' });
 
       return {
         status: status ?? 'cancelled',
         ...(submissionError ? { message: submissionError } : {}),
       };
     },
-    [close, isSaving, saveLink],
+    [closeWithReason, isSaving, saveLink, trace],
   );
 
   return { clearError, close, errorMessage, isSaving, submit };

@@ -58,7 +58,7 @@ describe('mixed-media masonry regression contract', () => {
     expect(gallerySource).toMatch(/if \(offset != null && offset > 0\)/);
   });
 
-  test('shows the minimal first-content empty state only after successful unfiltered catalog reads', () => {
+  test('shows the existing first-content state in Todos from the ready filtered visible list', () => {
     const emptyStateStart = gallerySource.indexOf('ListEmptyComponent=');
     const emptyStateEnd = gallerySource.indexOf('masonry={viewLayout.masonry}', emptyStateStart);
     const emptyStateSource = gallerySource.slice(emptyStateStart, emptyStateEnd);
@@ -69,6 +69,11 @@ describe('mixed-media masonry regression contract', () => {
     expect(homeSource).toContain('documentCatalogLoadSucceeded &&');
     expect(homeSource).toContain('checklistCatalogLoadSucceeded');
     expect(gallerySource).toContain('shouldShowGlobalHomeEmptyState({');
+    expect(gallerySource).toContain('visibleItemCount: filteredItems.length');
+    expect(gallerySource).toMatch(/const showGlobalEmptyState = isInitialFeedReady && homeFoldersReady && shouldShowGlobalHomeEmptyState/);
+    expect(gallerySource.indexOf('const filteredItems = useMemo')).toBeLessThan(
+      gallerySource.indexOf('const showGlobalEmptyState ='),
+    );
     expect(gallerySource).toContain('mediaCount: media.length');
     expect(gallerySource).toContain('savedContentCount: contents.length');
     expect(gallerySource).toContain('documentCount: documents.length');

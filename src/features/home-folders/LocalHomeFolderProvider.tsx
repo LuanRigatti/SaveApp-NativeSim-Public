@@ -43,8 +43,17 @@ import {
 } from './homeFolderTypes';
 import {
   authenticateWithFaceId,
+  authorizeAndRunHomeFolderAction,
+  canContinueAfterFaceId,
+  lockAuthorizedHomeFolder,
   type FolderAuthenticationOutcome,
 } from './folderFaceIdAuthentication';
+import {
+  authorizeAndPersistFolderAssignment,
+  HomeFolderAssignmentError,
+  runExclusiveFolderAssignment,
+  toHomeFolderAssignmentPersistenceError,
+} from './folderAssignmentOperations';
 
 type HomeFolderLibraryContextValue = {
   folders: HomeFolder[];
@@ -56,7 +65,19 @@ type HomeFolderLibraryContextValue = {
   lockEpoch: number;
   unlockedFolderIds: ReadonlySet<string>;
   isFolderAuthorized: (folderId: string) => boolean;
-  authorizeFolder: (folderId: string) => Promise<FolderAuthenticationOutcome>;
+  authorizeFolder: (
+    folderId: string,
+    options?: { allowInactiveAfterAuthentication?: boolean },
+  ) => Promise<FolderAuthenticationOutcome>;
+  authorizeFolderAndContinue: (
+    folderId: string,
+    onAuthorized: () => void,
+  ) => Promise<FolderAuthenticationOutcome>;
+  selectFolderAfterAuthorization: (
+    folderId: string,
+    onSelected?: () => void,
+  ) => Promise<FolderAuthenticationOutcome>;
+  lockFolder: (folderId: string) => boolean;
   setFolderProtection: (
     folderId: string,
     isProtected: boolean,
@@ -74,6 +95,11 @@ type HomeFolderLibraryContextValue = {
     folderId: string | null,
   ) => Promise<void>;
   refresh: () => Promise<void>;
+};
+
+type FolderAuthorizationRequest = {
+  allowInactiveAfterAuthentication: boolean;
+  promise: Promise<FolderAuthenticationOutcome>;
 };
 
 const HomeFolderLibraryContext = createContext<HomeFolderLibraryContextValue | null>(null);
@@ -117,7 +143,9 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
   const appStateRef = useRef<string>(AppState.currentState ?? 'active');
   const [lockEpoch, setLockEpoch] = useState(0);
   const lockEpochRef = useRef(0);
-  const authorizationRequestsRef = useRef(new Map<string, Promise<FolderAuthenticationOutcome>>());
+  const folderSelectionGenerationRef = useRef(0);
+  const authorizationRequestsRef = useRef(new Map<string, FolderAuthorizationRequest>());
+  const folderAssignmentOperationLockRef = useRef(false);
   const initializedRef = useRef(false);
   const lastCatalogSignatureRef = useRef<string | null>(null);
   const selectionWriteQueueRef = useRef(Promise.resolve());
@@ -139,6 +167,7 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
   }, []);
 
   const updateSelection = useCallback((nextSelection: HomeFolderSelection) => {
+    folderSelectionGenerationRef.current += 1;
     selectionRef.current = nextSelection;
     setSelectionState(nextSelection);
     persistSelection(nextSelection);
@@ -155,6 +184,7 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
       setIsAppActive(nextState === 'active');
       if (nextState !== 'background') return;
 
+      folderSelectionGenerationRef.current += 1;
       lockEpochRef.current += 1;
       setLockEpoch(lockEpochRef.current);
       replaceUnlockedFolderIds(new Set());
@@ -181,7 +211,11 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
     return appStateRef.current === 'active' && unlockedFolderIdsRef.current.has(folderId);
   }, [isReady]);
 
-  const requestFaceId = useCallback(async (folderId: string, promptMessage: string) => {
+  const requestFaceId = useCallback(async (
+    folderId: string,
+    promptMessage: string,
+    options: { allowInactiveAfterAuthentication?: boolean | (() => boolean) } = {},
+  ) => {
     if (appStateRef.current !== 'active') return 'cancelled' as const;
     const requestEpoch = lockEpochRef.current;
     let removeBackgroundSubscription: () => void = () => undefined;
@@ -198,7 +232,16 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
     ]);
     removeBackgroundSubscription();
     if (outcome !== 'authenticated') return outcome;
-    if (lockEpochRef.current !== requestEpoch || appStateRef.current !== 'active') {
+    const allowInactiveAfterAuthentication = typeof options.allowInactiveAfterAuthentication === 'function'
+      ? options.allowInactiveAfterAuthentication()
+      : options.allowInactiveAfterAuthentication;
+    if (!canContinueAfterFaceId({
+      outcome,
+      requestEpoch,
+      currentEpoch: lockEpochRef.current,
+      appState: appStateRef.current,
+      allowInactiveAfterAuthentication,
+    })) {
       return 'cancelled' as const;
     }
     if (!foldersRef.current.some((folder) => folder.id === folderId)) {
@@ -207,21 +250,41 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
     return 'authenticated' as const;
   }, []);
 
-  const authorizeFolder = useCallback((folderId: string): Promise<FolderAuthenticationOutcome> => {
+  const authorizeFolder = useCallback((
+    folderId: string,
+    options: { allowInactiveAfterAuthentication?: boolean } = {},
+  ): Promise<FolderAuthenticationOutcome> => {
     const folder = foldersRef.current.find((item) => item.id === folderId);
     if (!isReady || !folder) return Promise.resolve('failed');
     if (!folder.isProtected) return Promise.resolve('authenticated');
     if (isFolderAuthorized(folderId)) return Promise.resolve('authenticated');
 
     const existingRequest = authorizationRequestsRef.current.get(folderId);
-    if (existingRequest) return existingRequest;
+    if (existingRequest) {
+      existingRequest.allowInactiveAfterAuthentication ||= options.allowInactiveAfterAuthentication === true;
+      return existingRequest.promise;
+    }
 
     const requestEpoch = lockEpochRef.current;
-    const request = requestFaceId(folderId, `Autentique para acessar ${folder.name}.`)
+    const requestPolicy: FolderAuthorizationRequest = {
+      allowInactiveAfterAuthentication: options.allowInactiveAfterAuthentication === true,
+      promise: Promise.resolve('cancelled'),
+    };
+    const request = requestFaceId(
+      folderId,
+      `Autentique para acessar ${folder.name}.`,
+      { allowInactiveAfterAuthentication: () => requestPolicy.allowInactiveAfterAuthentication },
+    )
       .then((outcome) => {
         const currentFolder = foldersRef.current.find((item) => item.id === folderId);
         if (outcome === 'authenticated' && currentFolder?.isProtected) {
-          if (requestEpoch !== lockEpochRef.current || appStateRef.current !== 'active') {
+          if (!canContinueAfterFaceId({
+            outcome,
+            requestEpoch,
+            currentEpoch: lockEpochRef.current,
+            appState: appStateRef.current,
+            allowInactiveAfterAuthentication: requestPolicy.allowInactiveAfterAuthentication,
+          })) {
             return 'cancelled' as const;
           }
           replaceUnlockedFolderIds(new Set([...unlockedFolderIdsRef.current, folderId]));
@@ -229,11 +292,12 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
         return outcome;
       })
       .finally(() => {
-        if (authorizationRequestsRef.current.get(folderId) === request) {
+        if (authorizationRequestsRef.current.get(folderId) === requestPolicy) {
           authorizationRequestsRef.current.delete(folderId);
         }
       });
-    authorizationRequestsRef.current.set(folderId, request);
+    requestPolicy.promise = request;
+    authorizationRequestsRef.current.set(folderId, requestPolicy);
     return request;
   }, [isFolderAuthorized, isReady, replaceUnlockedFolderIds, requestFaceId]);
 
@@ -249,12 +313,18 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
         nextIsProtected
           ? `Autentique para proteger ${currentFolder.name} com Face ID.`
           : `Autentique para desproteger ${currentFolder.name}.`,
+        { allowInactiveAfterAuthentication: true },
       );
       if (outcome !== 'authenticated') return outcome;
       const latestFolder = foldersRef.current.find((item) => item.id === folderId);
       if (
-        operationEpoch !== lockEpochRef.current ||
-        appStateRef.current !== 'active' ||
+        !canContinueAfterFaceId({
+          outcome,
+          requestEpoch: operationEpoch,
+          currentEpoch: lockEpochRef.current,
+          appState: appStateRef.current,
+          allowInactiveAfterAuthentication: true,
+        }) ||
         !latestFolder ||
         latestFolder.isProtected !== currentFolder.isProtected
       ) {
@@ -358,6 +428,77 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
     updateSelection({ kind: 'folder', folderId });
   }, [isFolderAuthorized, updateSelection]);
 
+  const waitUntilAppIsActive = useCallback((): Promise<boolean> => {
+    if (appStateRef.current === 'active') return Promise.resolve(true);
+    if (appStateRef.current === 'background') return Promise.resolve(false);
+
+    return new Promise((resolve) => {
+      let subscription: ReturnType<typeof AppState.addEventListener> | null = null;
+      const finish = (becameActive: boolean) => {
+        subscription?.remove();
+        resolve(becameActive);
+      };
+      subscription = AppState.addEventListener('change', (nextState) => {
+        if (nextState === 'active') finish(true);
+        else if (nextState === 'background') finish(false);
+      });
+
+      if (appStateRef.current === 'active') finish(true);
+      else if (appStateRef.current === 'background') finish(false);
+    });
+  }, []);
+
+  const authorizeFolderAndContinue = useCallback(async (
+    folderId: string,
+    onAuthorized: () => void,
+  ): Promise<FolderAuthenticationOutcome> => {
+    const folder = foldersRef.current.find((item) => item.id === folderId);
+    if (!isReady || !folder) return 'failed';
+    if (appStateRef.current !== 'active') return 'cancelled';
+
+    const requestGeneration = ++folderSelectionGenerationRef.current;
+    const requestEpoch = lockEpochRef.current;
+    return authorizeAndRunHomeFolderAction({
+      authorize: () => authorizeFolder(folderId, { allowInactiveAfterAuthentication: true }),
+      isRequestCurrent: () => (
+        requestGeneration === folderSelectionGenerationRef.current &&
+        requestEpoch === lockEpochRef.current &&
+        foldersRef.current.some((current) => current.id === folderId)
+      ),
+      getAppState: () => appStateRef.current,
+      waitUntilActive: waitUntilAppIsActive,
+      isProtected: () => foldersRef.current.find((current) => current.id === folderId)?.isProtected ?? true,
+      hasSessionAuthorization: () => unlockedFolderIdsRef.current.has(folderId),
+      runAction: onAuthorized,
+    });
+  }, [authorizeFolder, isReady, waitUntilAppIsActive]);
+
+  const selectFolderAfterAuthorization = useCallback((folderId: string, onSelected?: () => void) => (
+    authorizeFolderAndContinue(folderId, () => {
+      updateSelection({ kind: 'folder', folderId });
+      onSelected?.();
+    })
+  ), [authorizeFolderAndContinue, updateSelection]);
+
+  const lockFolder = useCallback((folderId: string): boolean => {
+    const folder = foldersRef.current.find((item) => item.id === folderId);
+    if (!isReady || !folder) return false;
+    return lockAuthorizedHomeFolder({
+      folderId,
+      isProtected: folder.isProtected,
+      appState: appStateRef.current,
+      unlockedFolderIds: unlockedFolderIdsRef.current,
+      invalidatePending: () => {
+        folderSelectionGenerationRef.current += 1;
+        lockEpochRef.current += 1;
+        setLockEpoch(lockEpochRef.current);
+        authorizationRequestsRef.current.delete(folderId);
+      },
+      replaceUnlockedFolderIds,
+      returnToAllItems: () => updateSelection({ kind: 'view', view: 'all-items' }),
+    });
+  }, [isReady, replaceUnlockedFolderIds, updateSelection]);
+
   const addFolder = useCallback(async (name: string) => {
     const created = await createHomeFolder(name);
     setFolders((current) =>
@@ -430,59 +571,99 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
   );
 
   const setItemFolder = useCallback(
-    async (itemType: HomeFolderItemType, itemId: number, folderId: string | null) => {
-      const itemKey = getHomeFolderItemKey(itemType, itemId);
-      const operationEpoch = lockEpochRef.current;
-      const previousFolderId = await getHomeFolderItemAssignment(itemType, itemId);
-      const candidateFolderIds = new Set([previousFolderId, folderId].filter(
-        (candidate): candidate is string => candidate != null,
-      ));
-      for (const protectedId of candidateFolderIds) {
-        const folder = foldersRef.current.find((item) => item.id === protectedId);
-        if (folder?.isProtected) {
-          const outcome = await authorizeFolder(protectedId);
-          if (outcome !== 'authenticated') {
-            throw new Error('HOME_FOLDER_AUTHORIZATION_REQUIRED');
-          }
+    (itemType: HomeFolderItemType, itemId: number, folderId: string | null) =>
+      runExclusiveFolderAssignment(folderAssignmentOperationLockRef, async () => {
+        if (!isReady) throw new HomeFolderAssignmentError('HOME_FOLDER_ITEM_NOT_FOUND');
+        const itemKey = getHomeFolderItemKey(itemType, itemId);
+        const operationEpoch = lockEpochRef.current;
+        let operationFaceIdSucceeded = false;
+        const isOperationCurrent = () => (
+          operationEpoch === lockEpochRef.current && (
+            appStateRef.current === 'active' ||
+            (operationFaceIdSucceeded && appStateRef.current === 'inactive')
+          )
+        );
+
+        if (appStateRef.current !== 'active') {
+          throw new HomeFolderAssignmentError('HOME_FOLDER_OPERATION_CANCELLED');
         }
-      }
 
-      const protectedIds = [...candidateFolderIds].filter((protectedId) =>
-        foldersRef.current.some((folder) => folder.id === protectedId && folder.isProtected),
-      );
-      if (protectedIds.length > 0 && (
-        operationEpoch !== lockEpochRef.current ||
-        appStateRef.current !== 'active' ||
-        protectedIds.some((protectedId) => !isFolderAuthorized(protectedId))
-      )) {
-        throw new Error('HOME_FOLDER_AUTHORIZATION_REQUIRED');
-      }
+        let previousFolderId: string | null;
+        try {
+          previousFolderId = await getHomeFolderItemAssignment(itemType, itemId);
+        } catch (error) {
+          throw toHomeFolderAssignmentPersistenceError(error);
+        }
+        if (!isOperationCurrent()) {
+          throw new HomeFolderAssignmentError('HOME_FOLDER_OPERATION_CANCELLED');
+        }
+        if (folderId != null && !foldersRef.current.some((folder) => folder.id === folderId)) {
+          throw new HomeFolderAssignmentError('HOME_FOLDER_NOT_FOUND');
+        }
+        if (previousFolderId === folderId) return;
 
-      const persistedPreviousFolderId = await setHomeFolderItemAssignment(
-        itemType,
-        itemId,
-        folderId,
-        previousFolderId,
-      );
-      if (persistedPreviousFolderId === folderId) return;
+        const candidateFolderIds = [...new Set(
+          [previousFolderId, folderId].filter((candidate): candidate is string => candidate != null),
+        )];
+        const currentlyProtectedIds = (candidates: readonly string[]) => (
+          candidates.filter((candidate) =>
+            foldersRef.current.some((folder) => folder.id === candidate && folder.isProtected),
+          )
+        );
+        const sessionAuthorizedIds = candidateFolderIds.filter((candidate) => isFolderAuthorized(candidate));
 
-      setFolderIdByItemKey((current) => {
-        const next = new Map(current);
-        if (folderId == null) next.delete(itemKey);
-        else next.set(itemKey, folderId);
-        return next;
-      });
-      setFolders((current) =>
-        current.map((folder) => {
-          if (folder.id === persistedPreviousFolderId) {
-            return { ...folder, itemCount: Math.max(0, folder.itemCount - 1) };
-          }
-          if (folder.id === folderId) return { ...folder, itemCount: folder.itemCount + 1 };
-          return folder;
-        }),
-      );
-    },
-    [authorizeFolder, isFolderAuthorized],
+        const persistedPreviousFolderId = await authorizeAndPersistFolderAssignment({
+          candidateFolderIds,
+          authorizationFolderIds: previousFolderId ? [previousFolderId] : [],
+          getProtectedFolderIds: currentlyProtectedIds,
+          sessionAuthorizedFolderIds: sessionAuthorizedIds,
+          requestAuthentication: async (protectedId) => {
+            const target = foldersRef.current.find((folder) => folder.id === protectedId);
+            if (!target) return 'failed';
+            const outcome = await requestFaceId(
+              protectedId,
+              'Autentique para mover este item de ou para uma pasta protegida.',
+              { allowInactiveAfterAuthentication: true },
+            );
+            if (outcome !== 'authenticated') return outcome;
+            const canContinue = canContinueAfterFaceId({
+              outcome,
+              requestEpoch: operationEpoch,
+              currentEpoch: lockEpochRef.current,
+              appState: appStateRef.current,
+              allowInactiveAfterAuthentication: true,
+            });
+            operationFaceIdSucceeded = canContinue;
+            return canContinue ? 'authenticated' : 'cancelled';
+          },
+          isOperationCurrent,
+          persist: (validateBeforeCommit) => setHomeFolderItemAssignment(
+            itemType,
+            itemId,
+            folderId,
+            previousFolderId,
+            validateBeforeCommit,
+          ),
+        });
+        if (persistedPreviousFolderId === folderId) return;
+
+        setFolderIdByItemKey((current) => {
+          const next = new Map(current);
+          if (folderId == null) next.delete(itemKey);
+          else next.set(itemKey, folderId);
+          return next;
+        });
+        setFolders((current) =>
+          current.map((folder) => {
+            if (folder.id === persistedPreviousFolderId) {
+              return { ...folder, itemCount: Math.max(0, folder.itemCount - 1) };
+            }
+            if (folder.id === folderId) return { ...folder, itemCount: folder.itemCount + 1 };
+            return folder;
+          }),
+        );
+      }),
+    [isFolderAuthorized, isReady, requestFaceId],
   );
 
   const value = useMemo(
@@ -497,6 +678,9 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
       unlockedFolderIds,
       isFolderAuthorized,
       authorizeFolder,
+      authorizeFolderAndContinue,
+      selectFolderAfterAuthorization,
+      lockFolder,
       setFolderProtection: changeFolderProtection,
       selectView,
       selectCategory,
@@ -511,6 +695,7 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
     [
       addFolder,
       authorizeFolder,
+      authorizeFolderAndContinue,
       changeFolderProtection,
       removeFolder,
       selection,
@@ -528,6 +713,8 @@ export function LocalHomeFolderProvider({ children }: PropsWithChildren) {
       selectView,
       selectCategory,
       selectFolder,
+      lockFolder,
+      selectFolderAfterAuthorization,
       setItemFolder,
     ],
   );

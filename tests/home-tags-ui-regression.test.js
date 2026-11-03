@@ -35,7 +35,7 @@ describe('saved tag UI integration', () => {
     expect(gallery).toContain('openTagPicker({ itemType, itemId })');
   });
 
-  test('color dots are gated to a specific folder and use existing card/list metadata rows', () => {
+  test('filled label badges are gated to a specific folder and use existing card/list metadata rows', () => {
     const gallery = read('src/components/photos/PhotoMasonryGallery.tsx');
     const gridCard = read('src/components/homeContent/HomeGridCard.tsx');
     const dots = read('src/components/homeContent/HomeTagDots.tsx');
@@ -46,8 +46,19 @@ describe('saved tag UI integration', () => {
     expect(gallery).toContain('tagAssignmentData.scopeKey === tagQueryScopeKey');
     expect(gridCard).toContain('tagDots?: readonly SavedTagAssignment[]');
     expect(gridCard).toContain('<HomeTagDots tags={tagDots} />');
-    expect(dots).toContain('height: 6');
-    expect(dots).toContain('width: 6');
+    expect(gridCard).toContain('height: 16');
+    expect(dots).toContain('tags.slice(0, 2)');
+    expect(dots).toContain('tag.name');
+    expect(dots).toContain('getAccentColorSwatch(tag.color, resolvedMode)');
+    expect(dots).toContain('getAccentColorSwatchForeground(tag.color, resolvedMode)');
+    expect(dots).toContain('borderRadius: 999');
+    expect(dots).toContain('minHeight: 16');
+    expect(dots).toContain('maxWidth = 112');
+    expect(dots).toContain('numberOfLines={1}');
+    expect(dots).toContain('ellipsizeMode="tail"');
+    expect(dots).toContain('accessibilityLabel={`Etiquetas:');
+    expect(dots).not.toContain('height: 6');
+    expect(dots).not.toContain('width: 6');
     expect(presentation).toContain('assignments.slice(0, HOME_FOLDER_TAG_DOT_LIMIT)');
     expect(presentation).toContain('HOME_FOLDER_TAG_DOT_LIMIT = 2');
   });

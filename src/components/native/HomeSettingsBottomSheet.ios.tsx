@@ -14,6 +14,7 @@ import {
   NavigationLink,
   NavigationStack,
   Picker,
+  ScrollView,
   Section,
   Spacer,
   Text,
@@ -43,16 +44,19 @@ import {
   padding,
   pickerStyle,
   tag,
+  textSelection,
   tint,
   textFieldStyle,
 } from '@expo/ui/swift-ui/modifiers';
 import { Alert } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
 import { getFolderAuthenticationFailureMessage } from '@/features/home-folders/folderFaceIdAuthentication';
 import { getHomeFolderNameErrorMessage } from '@/features/home-folders/homeFolderTypes';
 import { getHomeFolderAccentColor } from '@/features/home-folders/homeFolderColor';
+import { saveFolderSettingsName } from '@/features/home-folders/folderSettingsSave';
 import type { HomeFolder } from '@/features/home-folders/homeFolderTypes';
 import {
   createSavedTag,
@@ -71,6 +75,16 @@ import type { AccentColorName } from '@/theme';
 import { getAccentColorTokens } from '@/theme/colors';
 import { useSaveLinkDynamicIsland } from '@/features/dynamic-island/SaveLinkDynamicIslandProvider';
 import { createLiveActivityFailureAlert } from '@/features/dynamic-island/liveActivityFailureAlert';
+import {
+  clearQuickSaveDiagnosticReport,
+  getClipboardURLDetectionSnapshot,
+  getQuickSaveDiagnosticReport,
+  type QuickSaveDiagnosticOperation,
+} from '../../../modules/clipboard-url-detection/src';
+import {
+  formatQuickSaveDiagnosticReport,
+  shareQuickSaveDiagnosticReportFile,
+} from '@/features/dynamic-island/quickSaveDiagnosticReport';
 import { formatStorageBytes } from '@/features/storage/storageUsage';
 import { useStorageUsage } from '@/features/storage/useStorageUsage';
 import {
@@ -263,6 +277,227 @@ function SavedTagFormPage({ draft, onCancel, onSave, onDelete }: {
         <Button label="Cancelar" onPress={onCancel} role="cancel" modifiers={[disabled(isBusy)]} />
         <Button label="Salvar" onPress={() => void save()} modifiers={[disabled(isBusy)]} />
       </Toolbar.Content>
+    </Toolbar>
+  );
+}
+
+const quickSaveDiagnosticEnvironmentLabels: Record<string, string> = {
+  processRole: 'Processo',
+  runtimeOS: 'iOS',
+  target: 'Destino',
+  buildConfiguration: 'Configuração',
+  appVersion: 'Versão do app',
+  appBuild: 'Build',
+  compiledSDK: 'SDK de compilação',
+  xcodeVersion: 'Xcode',
+  xcodeBuild: 'Build do Xcode',
+  applicationState: 'Estado do app',
+  sceneStates: 'Estado da interface',
+  appGroupAvailable: 'App Group disponível',
+};
+
+function QuickSaveDiagnosticOperationView({ operation }: { operation: QuickSaveDiagnosticOperation }) {
+  const { theme } = useAppTheme();
+  const startedAt = new Date(operation.startedAt * 1_000).toLocaleString();
+
+  return (
+    <>
+      <Section title={`Tentativa ${startedAt}`}>
+        <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+          ID técnico: {operation.operationID}
+        </Text>
+        {Object.entries(quickSaveDiagnosticEnvironmentLabels).map(([key, label]) => {
+          const value = operation.environment[key];
+          return value ? (
+            <Text key={key} modifiers={[font({ textStyle: 'footnote' })]}>
+              {label}: {value}
+            </Text>
+          ) : null;
+        })}
+        <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+          URLs, texto copiado, hosts e caminhos não são guardados neste relatório.
+        </Text>
+      </Section>
+      <Section title="Etapas">
+        {operation.events.map((event, index) => {
+          const values = Object.entries(event.values)
+            .map(([key, value]) => `${key}=${value}`)
+            .join(' · ');
+          return (
+            <Text key={`${event.name}-${event.elapsedMilliseconds}-${index}`} modifiers={[font({ textStyle: 'footnote' })]}>
+              {event.elapsedMilliseconds} ms · {event.name}{values ? ` · ${values}` : ''}
+            </Text>
+          );
+        })}
+      </Section>
+    </>
+  );
+}
+
+function QuickSaveDiagnosticsPage() {
+  const { theme } = useAppTheme();
+  const [operations, setOperations] = useState<QuickSaveDiagnosticOperation[]>(
+    () => getQuickSaveDiagnosticReport()?.operations ?? [],
+  );
+  const [patternCheck, setPatternCheck] = useState('Ainda não verificado.');
+  const [actionMessage, setActionMessage] = useState('');
+  const [isExportBusy, setIsExportBusy] = useState(false);
+  const reportText = useMemo(
+    () => formatQuickSaveDiagnosticReport({ schemaVersion: 1, operations }),
+    [operations],
+  );
+
+  const refresh = () => {
+    setOperations(getQuickSaveDiagnosticReport()?.operations ?? []);
+    setActionMessage('');
+  };
+
+  const clear = () => {
+    if (!clearQuickSaveDiagnosticReport()) {
+      Alert.alert('Não foi possível limpar o relatório', 'Tente novamente.');
+      return;
+    }
+    setOperations([]);
+    setPatternCheck('Ainda não verificado.');
+    setActionMessage('Diagnósticos limpos.');
+  };
+
+  const confirmClear = () => Alert.alert(
+    'Limpar diagnósticos?',
+    'As tentativas registradas serão removidas deste dispositivo.',
+    [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Limpar', style: 'destructive', onPress: clear },
+    ],
+  );
+
+  const copyAllDiagnostics = async () => {
+    if (!reportText) {
+      setActionMessage('Não há diagnósticos para copiar.');
+      return;
+    }
+    setIsExportBusy(true);
+    setActionMessage('');
+    try {
+      const copied = await Clipboard.setStringAsync(reportText);
+      if (!copied) throw new Error('clipboard_write_failed');
+      setActionMessage('Todos os diagnósticos foram copiados.');
+    } catch {
+      Alert.alert('Não foi possível copiar os diagnósticos', 'Tente novamente. Os registros foram preservados.');
+    } finally {
+      setIsExportBusy(false);
+    }
+  };
+
+  const shareDiagnostics = async () => {
+    if (!reportText) {
+      setActionMessage('Não há diagnósticos para compartilhar.');
+      return;
+    }
+    setIsExportBusy(true);
+    setActionMessage('');
+    try {
+      const result = await shareQuickSaveDiagnosticReportFile(reportText);
+      if (result.status === 'empty') {
+        setActionMessage('Não há diagnósticos para compartilhar.');
+      } else if (result.status === 'cancelled') {
+        setActionMessage('Compartilhamento cancelado. Os registros foram preservados.');
+      } else if (result.status === 'failed') {
+        Alert.alert('Não foi possível compartilhar o diagnóstico', 'Tente novamente. Os registros foram preservados.');
+      } else {
+        setActionMessage(result.cleanupFailed
+          ? 'Compartilhamento concluído; o arquivo temporário será substituído na próxima exportação.'
+          : 'Menu de compartilhamento concluído. Os registros foram preservados.');
+      }
+    } catch {
+      Alert.alert('Não foi possível compartilhar o diagnóstico', 'Tente novamente. Os registros foram preservados.');
+    } finally {
+      setIsExportBusy(false);
+    }
+  };
+
+  const checkCurrentPattern = async () => {
+    const snapshot = await getClipboardURLDetectionSnapshot();
+    if (!snapshot) {
+      setPatternCheck('Não foi possível ler os metadados do clipboard nesta verificação.');
+      return;
+    }
+    const lastClipboardRead = [...operations].reverse()
+      .flatMap((operation) => operation.events)
+      .find((event) => event.name === 'clipboard.snapshot');
+    const attemptedChangeCount = lastClipboardRead?.values.changeCount;
+    const sameChangeCount = attemptedChangeCount === String(snapshot.changeCount);
+    setPatternCheck(
+      `Agora: changeCount ${snapshot.changeCount}, hasURLs ${snapshot.hasURLItem ? 'sim' : 'não'}, ` +
+      `provável URL ${snapshot.hasProbableWebURL ? 'sim' : 'não'}. ` +
+      (attemptedChangeCount ? (sameChangeCount ? 'Mesmo evento da tentativa.' : 'O clipboard mudou desde a tentativa.') : 'Sem contador registrado na tentativa.'),
+    );
+  };
+
+  return (
+    <Toolbar>
+      <List modifiers={[navigationTitle('Diagnóstico Quick Save'), navigationBarTitleDisplayMode('inline')]}>
+        {operations.length === 0 ? (
+          <Section>
+            <Text modifiers={[foregroundStyle(theme.colors.textSecondary)]}>
+              Nenhuma tentativa registrada nesta instalação.
+            </Text>
+          </Section>
+        ) : [...operations].reverse().map((operation) => (
+          <QuickSaveDiagnosticOperationView key={operation.operationID} operation={operation} />
+        ))}
+        <Section title="Copiar, compartilhar ou consultar">
+          <Button
+            label="Copiar todos os diagnósticos"
+            onPress={() => void copyAllDiagnostics()}
+            modifiers={[disabled(isExportBusy)]}
+          />
+          <Button
+            label="Compartilhar diagnóstico"
+            onPress={() => void shareDiagnostics()}
+            modifiers={[disabled(isExportBusy)]}
+          />
+          <NavigationLink value="quick-save-diagnostics-full-report">
+            <Text>Exibir relatório completo</Text>
+          </NavigationLink>
+          {actionMessage ? (
+            <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+              {actionMessage}
+            </Text>
+          ) : null}
+        </Section>
+        <Section title="Estado da leitura">
+          <Button label="Verificar padrão atual do clipboard" onPress={() => void checkCurrentPattern()} />
+          <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+            Verifica somente metadados; não lê nem mostra o conteúdo copiado.
+          </Text>
+          <Text modifiers={[font({ textStyle: 'footnote' })]}>{patternCheck}</Text>
+          <Button label="Atualizar relatório" onPress={refresh} />
+        </Section>
+        <Section title="Limpar registros">
+          <Button label="Limpar diagnósticos" onPress={confirmClear} role="destructive" />
+        </Section>
+      </List>
+    </Toolbar>
+  );
+}
+
+function QuickSaveDiagnosticFullReportPage() {
+  const { theme } = useAppTheme();
+  const [reportText] = useState(() => formatQuickSaveDiagnosticReport(getQuickSaveDiagnosticReport()));
+
+  return (
+    <Toolbar>
+      <ScrollView modifiers={[navigationTitle('Relatório completo'), navigationBarTitleDisplayMode('inline')]}>
+        <Text modifiers={[
+          font({ textStyle: 'footnote' }),
+          foregroundStyle(theme.colors.textPrimary),
+          padding({ horizontal: theme.spacing.md, vertical: theme.spacing.md }),
+          textSelection(true),
+        ]}>
+          {reportText ?? 'Nenhum diagnóstico registrado nesta instalação.'}
+        </Text>
+      </ScrollView>
     </Toolbar>
   );
 }
@@ -665,12 +900,14 @@ function FolderListPage({ folders, onCreate }: {
 
 function FolderSettingsPage({
   folder,
+  onDone,
   onRename,
   onSetColor,
   onToggleProtection,
   onDelete,
 }: {
   folder: HomeFolder | null;
+  onDone: () => void;
   onRename: (folderId: string, name: string) => Promise<HomeFolder>;
   onSetColor: (folderId: string, color: AccentColorName | null) => Promise<boolean>;
   onToggleProtection: (folder: HomeFolder, nextIsProtected: boolean) => Promise<void>;
@@ -701,23 +938,25 @@ function FolderSettingsPage({
   const saveName = async () => {
     if (pendingOperationRef.current) return;
     const nextName = nameState.get();
-    const normalizedDisplayName = nextName.normalize('NFKC').trim().replace(/\s+/gu, ' ');
-    if (normalizedDisplayName === folder.name) {
-      nameState.set(folder.name);
-      return;
-    }
 
     pendingOperationRef.current = true;
     setPendingOperation('rename');
+    let shouldClose = false;
     try {
-      const updated = await onRename(folder.id, nextName);
-      nameState.set(updated.name);
+      const result = await saveFolderSettingsName({
+        currentName: folder.name,
+        nextName,
+        rename: (name) => onRename(folder.id, name),
+      });
+      nameState.set(result.name);
+      shouldClose = true;
     } catch (error) {
       showFolderFailure(error);
     } finally {
       pendingOperationRef.current = false;
       setPendingOperation(null);
     }
+    if (shouldClose) onDone();
   };
 
   const toggleProtection = async (nextIsProtected: boolean) => {
@@ -1080,60 +1319,60 @@ export default function HomeSettingsBottomSheet({
         >
           <NavigationStack path={path} onPathChange={setPath}>
             <List modifiers={[navigationTitle('Configurações'), navigationBarTitleDisplayMode('inline')]}>
-              <Section>
-                <VStack alignment="leading" spacing={6}>
-                  <HStack alignment="center">
-                    <Text>Dynamic Island</Text>
-                    <Spacer />
-                    <Toggle
-                      isOn={isSaveLinkModeEnabled}
-                      onIsOnChange={(nextValue) => {
-                        if (!isSaveLinkModeAvailable) return;
-                        void setSaveLinkModeEnabled(nextValue).catch((error: unknown) => {
-                          const failure = createLiveActivityFailureAlert(
-                            error,
-                            nextValue ? 'activate' : 'deactivate',
-                          );
-                          Alert.alert(failure.title, failure.message);
-                        });
-                      }}
-                      modifiers={[
-                        accessibilityLabel('Dynamic Island'),
-                        accessibilityValue(
-                          !isSaveLinkModeAvailable
-                            ? 'Indisponível nesta versão do app'
-                            : isSaveLinkModeEnabled ? 'Ativado' : 'Desativado',
-                        ),
-                        disabled(!isSaveLinkModeReady || !isSaveLinkModeAvailable || isSaveLinkModeBusy),
-                      ]}
-                    />
-                  </HStack>
-                  {isSaveLinkModeReady && !isSaveLinkModeAvailable ? (
+              <Section title="Dynamic Island">
+                <HStack alignment="center" spacing={theme.spacing.sm}>
+                  <VStack alignment="leading" spacing={2}>
+                    <Text>Ativar Dynamic Island</Text>
                     <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
-                      Indisponível nesta versão. A preferência será mantida.
+                      Salve links diretamente pela Dynamic Island.
                     </Text>
-                  ) : null}
-                  <HStack alignment="center">
-                    <Text>Links recentes na tela bloqueada</Text>
-                    <Spacer />
-                    <Toggle
-                      isOn={showRecentLinksOnLockScreen}
-                      onIsOnChange={(nextValue) => {
-                        void setShowRecentLinksOnLockScreen(nextValue).catch(() => {
-                          Alert.alert('Não foi possível atualizar a Live Activity', 'A preferência de privacidade foi mantida. Tente novamente.');
-                        });
-                      }}
-                      modifiers={[
-                        accessibilityLabel('Mostrar domínios recentes do Quick Save na tela bloqueada'),
-                        accessibilityValue(showRecentLinksOnLockScreen ? 'Ativado' : 'Desativado'),
-                        disabled(!isRecentLinksSettingReady || !isRecentLinksSettingAvailable || isRecentLinksSettingBusy),
-                      ]}
-                    />
-                  </HStack>
-                  <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
-                    Desativado por padrão. Quando ativado, mostra somente domínios dos três últimos links salvos pelo Quick Save.
-                  </Text>
-                </VStack>
+                  </VStack>
+                  <Spacer />
+                  <Toggle
+                    isOn={isSaveLinkModeEnabled}
+                    onIsOnChange={(nextValue) => {
+                      if (!isSaveLinkModeAvailable) return;
+                      void setSaveLinkModeEnabled(nextValue).catch((error: unknown) => {
+                        const failure = createLiveActivityFailureAlert(
+                          error,
+                          nextValue ? 'activate' : 'deactivate',
+                        );
+                        Alert.alert(failure.title, failure.message);
+                      });
+                    }}
+                    modifiers={[
+                      accessibilityLabel('Ativar Dynamic Island'),
+                      accessibilityValue(
+                        !isSaveLinkModeAvailable
+                          ? 'Indisponível nesta versão do app'
+                          : isSaveLinkModeEnabled ? 'Ativado' : 'Desativado',
+                      ),
+                      disabled(!isSaveLinkModeReady || !isSaveLinkModeAvailable || isSaveLinkModeBusy),
+                    ]}
+                  />
+                </HStack>
+                <HStack alignment="center" spacing={theme.spacing.sm}>
+                  <VStack alignment="leading" spacing={2}>
+                    <Text>Links recentes</Text>
+                    <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+                      Mostra os domínios dos 3 últimos links salvos na Dynamic Island e na tela bloqueada.
+                    </Text>
+                  </VStack>
+                  <Spacer />
+                  <Toggle
+                    isOn={showRecentLinksOnLockScreen}
+                    onIsOnChange={(nextValue) => {
+                      void setShowRecentLinksOnLockScreen(nextValue).catch(() => {
+                        Alert.alert('Não foi possível atualizar a Live Activity', 'A preferência de privacidade foi mantida. Tente novamente.');
+                      });
+                    }}
+                    modifiers={[
+                      accessibilityLabel('Mostrar domínios recentes do Quick Save na tela bloqueada'),
+                      accessibilityValue(showRecentLinksOnLockScreen ? 'Ativado' : 'Desativado'),
+                      disabled(!isRecentLinksSettingReady || !isRecentLinksSettingAvailable || isRecentLinksSettingBusy),
+                    ]}
+                  />
+                </HStack>
               </Section>
               <Section title="Personalização">
                 <NavigationLink value="appearance">
@@ -1196,6 +1435,16 @@ export default function HomeSettingsBottomSheet({
                   </HStack>
                 </NavigationLink>
               </Section>
+              <Section title="Diagnóstico técnico temporário">
+                <NavigationLink value="quick-save-diagnostics">
+                  <VStack alignment="leading" spacing={2}>
+                    <Text>Diagnóstico do Quick Save</Text>
+                    <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(theme.colors.textSecondary)]}>
+                      Consultar processo e leitura do clipboard.
+                    </Text>
+                  </VStack>
+                </NavigationLink>
+              </Section>
             </List>
             <NavigationDestination value="appearance">
               <AppearanceSettingsPage />
@@ -1205,6 +1454,12 @@ export default function HomeSettingsBottomSheet({
             </NavigationDestination>
             <NavigationDestination value="recently-deleted">
               <RecentlyDeletedPage isActive={isPresented && path.at(-1) === 'recently-deleted'} />
+            </NavigationDestination>
+            <NavigationDestination value="quick-save-diagnostics">
+              <QuickSaveDiagnosticsPage key={isPresented && path.at(-1) === 'quick-save-diagnostics' ? 'active' : 'inactive'} />
+            </NavigationDestination>
+            <NavigationDestination value="quick-save-diagnostics-full-report">
+              <QuickSaveDiagnosticFullReportPage key={isPresented && path.at(-1) === 'quick-save-diagnostics-full-report' ? 'active' : 'inactive'} />
             </NavigationDestination>
             <NavigationDestination value="folders">
               <FolderListPage
@@ -1241,6 +1496,9 @@ export default function HomeSettingsBottomSheet({
                     key={folderId}
                     folder={folder}
                     onDelete={confirmDeleteFolder}
+                    onDone={() => setPath((current) => current.at(-1) === routeValue
+                      ? current.slice(0, -1)
+                      : current)}
                     onRename={renameFolderSettings}
                     onSetColor={updateFolderSettingsColor}
                     onToggleProtection={toggleFolderProtection}

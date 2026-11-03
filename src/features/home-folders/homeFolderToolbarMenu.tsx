@@ -21,7 +21,9 @@ export type HomeFolderToolbarMenuProps = {
   folders: readonly HomeFolder[];
   hidden: boolean;
   tintColor: string;
+  canLockCurrentFolder: boolean;
   onOpenFolder: (folderId: string) => void;
+  onLockFolder: (folderId: string) => void;
   onSelectCategory: (category: HomeCategory) => void;
   onSelectHomeView: (view: HomeFolderHomeView) => void;
   onSelectViewMode: (viewMode: HomeViewMode) => void;
@@ -41,7 +43,9 @@ export function createHomeFolderToolbarMenu({
   folders,
   hidden,
   tintColor,
+  canLockCurrentFolder,
   onOpenFolder,
+  onLockFolder,
   onSelectCategory,
   onSelectHomeView,
   onSelectViewMode,
@@ -57,6 +61,14 @@ export function createHomeFolderToolbarMenu({
       separateBackground={false}
       tintColor={tintColor}
     >
+      {currentFolderId && canLockCurrentFolder ? (
+        <Stack.Toolbar.MenuAction
+          icon="lock.fill"
+          onPress={withSelectionHaptic(() => onLockFolder(currentFolderId))}
+        >
+          Bloquear pasta
+        </Stack.Toolbar.MenuAction>
+      ) : null}
       <Stack.Toolbar.MenuAction
         icon="folder"
         isOn={!currentFolderId && !selectedCategory && view === 'all-items'}

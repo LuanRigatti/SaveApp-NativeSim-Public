@@ -15,13 +15,23 @@ import { TEXT_COMPOSER_ROUTE } from '@/features/home-content/textComposerNavigat
 import { useLocalSavedContent } from '@/features/home-content/LocalSavedContentProvider';
 import { useLocalChecklists } from '@/features/home-content/LocalChecklistLibraryProvider';
 import { areHomeFeedSourcesReady } from '@/features/home-content/homeFeed';
-import { prepareClipboardLinkCandidate } from '@/features/home-content/clipboardLinkOffer';
+import {
+  matchesClipboardOfferURL,
+  prepareClipboardLinkCandidate,
+} from '@/features/home-content/clipboardLinkOffer';
 import {
   beginDynamicIslandClipboardFlow,
+  deferClipboardLinkOfferUntilResume,
+  markClipboardLinkChangeCountHandled,
+  markClipboardLinkURLHandled,
   suppressClipboardLinkOfferForChangeCount,
   suppressClipboardLinkOfferUntilClipboardChanges,
   useClipboardLinkOffer,
 } from '@/features/home-content/useClipboardLinkOffer';
+import {
+  getClipboardOfferCorrelationID,
+  traceClipboardOfferEvent,
+} from '@/features/home-content/clipboardLinkOfferState';
 import { useLocalPhotoLibrary } from '@/features/photos/LocalPhotoLibraryProvider';
 import { useLocalDocumentLibrary } from '@/features/documents/LocalDocumentLibraryProvider';
 import HomeFolderFilterButton from '@/features/home-folders/HomeFolderFilterButton';
@@ -41,6 +51,12 @@ import {
   getClipboardURLDetectionSnapshot,
   recordSaveAppDiagnosticEvent,
 } from '../../../modules/clipboard-url-detection/src';
+
+type ClipboardOfferContext = {
+  changeCount: number;
+  detectorInstanceID: string;
+  normalizedURL: string;
+};
 
 export default function HomeScreen() {
   const { resolvedMode, theme } = useAppTheme();
@@ -62,6 +78,12 @@ export default function HomeScreen() {
     refresh: refreshSavedContent,
     consumePendingTextReveal,
   } = useLocalSavedContent();
+  const knownSavedNormalizedURLs = useMemo(
+    () => new Set(contents.flatMap((content) =>
+      content.contentType === 'link' ? [content.normalizedUrl] : [],
+    )),
+    [contents],
+  );
   const {
     checklists,
     isReady: checklistLibraryReady,
@@ -77,14 +99,14 @@ export default function HomeScreen() {
   const { searchQuery } = useHomeSearch();
   const [composerKind, setComposerKind] = useState<HomeComposerKind>(null);
   const [composerInitialLink, setComposerInitialLink] = useState<string | null>(null);
+  const [clipboardOfferContext, setClipboardOfferContext] = useState<ClipboardOfferContext | null>(null);
   const [isClipboardResultAlertActive, setIsClipboardResultAlertActive] = useState(false);
   const [isExternalPickerActive, setIsExternalPickerActive] = useState(false);
   const { isReady: viewModeReady } = useHomeViewMode();
   const {
-    authorizeFolder,
+    authorizeFolderAndContinue,
     folders,
     isAppActive,
-    isFolderAuthorized,
     isReady: homeFoldersReady,
     selectView,
     selection,
@@ -134,12 +156,9 @@ export default function HomeScreen() {
     const folderId = consumePendingFolderOpen();
     if (!folderId) return;
     void (async () => {
-      const outcome = await authorizeFolder(folderId);
-      if (outcome === 'authenticated' && isFolderAuthorized(folderId)) {
-        router.push(getHomeFolderRoute(folderId));
-      }
+      await authorizeFolderAndContinue(folderId, () => router.push(getHomeFolderRoute(folderId)));
     })();
-  }, [authorizeFolder, consumePendingFolderOpen, isFolderAuthorized, router]);
+  }, [authorizeFolderAndContinue, consumePendingFolderOpen, router]);
 
   const runExternalPicker = useCallback(async (picker: () => Promise<unknown>) => {
     setIsExternalPickerActive(true);
@@ -150,17 +169,36 @@ export default function HomeScreen() {
     }
   }, []);
 
-  const handleClipboardLinkCandidate = useCallback((clipboardText: string) => {
+  const handleClipboardLinkCandidate = useCallback((
+    clipboardText: string,
+    changeCount: number,
+    detectorInstanceID: string,
+  ) => {
     const savedNormalizedURLs = new Set(
       contents.flatMap((content) => content.contentType === 'link' ? [content.normalizedUrl] : []),
     );
     const candidate = prepareClipboardLinkCandidate(clipboardText, savedNormalizedURLs);
     if (candidate.status === 'empty') {
       recordSaveAppDiagnosticEvent('clipboard.offer.read_empty');
+      traceClipboardOfferEvent('candidate-rejected', {
+        source: 'home-clipboard-offer',
+        detectorInstanceID,
+        correlationID: getClipboardOfferCorrelationID(changeCount),
+        changeCount,
+        result: 'empty',
+      });
       return;
     }
     if (candidate.status === 'invalid') {
       recordSaveAppDiagnosticEvent('clipboard.offer.candidate_invalid');
+      traceClipboardOfferEvent('candidate-rejected', {
+        source: 'home-clipboard-offer',
+        detectorInstanceID,
+        correlationID: getClipboardOfferCorrelationID(changeCount),
+        changeCount,
+        result: 'invalid',
+      });
+      deferClipboardLinkOfferUntilResume(changeCount);
       setIsClipboardResultAlertActive(true);
       Alert.alert('Link inválido', 'Copie um endereço HTTP ou HTTPS para adicioná-lo ao SaveApp.', [
         { text: 'OK', onPress: () => setIsClipboardResultAlertActive(false) },
@@ -169,6 +207,15 @@ export default function HomeScreen() {
     }
     if (candidate.status === 'duplicate') {
       recordSaveAppDiagnosticEvent('clipboard.offer.candidate_duplicate');
+      traceClipboardOfferEvent('candidate-rejected', {
+        source: 'home-clipboard-offer',
+        detectorInstanceID,
+        correlationID: getClipboardOfferCorrelationID(changeCount),
+        changeCount,
+        result: 'duplicate',
+      });
+      markClipboardLinkURLHandled(candidate.normalizedURL);
+      markClipboardLinkChangeCountHandled(changeCount);
       setIsClipboardResultAlertActive(true);
       Alert.alert('Link já salvo', 'Este link já está na sua biblioteca.', [
         { text: 'OK', onPress: () => setIsClipboardResultAlertActive(false) },
@@ -177,13 +224,50 @@ export default function HomeScreen() {
     }
 
     recordSaveAppDiagnosticEvent('clipboard.offer.candidate_received');
+    traceClipboardOfferEvent('candidate-received', {
+      source: 'home-clipboard-offer',
+      detectorInstanceID,
+      correlationID: getClipboardOfferCorrelationID(changeCount),
+      changeCount,
+      result: 'valid',
+    });
+    setClipboardOfferContext({ changeCount, detectorInstanceID, normalizedURL: candidate.normalizedURL });
     setComposerInitialLink(candidate.normalizedURL);
     setComposerKind('link');
   }, [contents]);
 
+  const handleClipboardLinkSaveSuccess = useCallback(
+    (context: ClipboardOfferContext, submittedValue: string) => {
+      if (matchesClipboardOfferURL(submittedValue, context.normalizedURL)) {
+        markClipboardLinkURLHandled(context.normalizedURL);
+        traceClipboardOfferEvent('clipboard-event-handled', {
+          source: 'home-clipboard-offer',
+          detectorInstanceID: context.detectorInstanceID,
+          correlationID: getClipboardOfferCorrelationID(context.changeCount),
+          changeCount: context.changeCount,
+          result: 'saved',
+        });
+        markClipboardLinkChangeCountHandled(context.changeCount);
+        return;
+      }
+
+      // Saving an edited value does not consume a different link still on the clipboard.
+      traceClipboardOfferEvent('clipboard-event-deferred', {
+        source: 'home-clipboard-offer',
+        detectorInstanceID: context.detectorInstanceID,
+        correlationID: getClipboardOfferCorrelationID(context.changeCount),
+        changeCount: context.changeCount,
+        result: 'saved',
+      });
+      deferClipboardLinkOfferUntilResume(context.changeCount);
+    },
+    [],
+  );
+
   useFocusEffect(
     useCallback(() => {
       recordSaveAppDiagnosticEvent('navigation.home.focused');
+      traceClipboardOfferEvent('home-focused', { source: 'home-detector', focused: true });
       if (favoritesOnly) {
         recordSaveAppDiagnosticEvent('home.filter.favorites');
       } else if (selection.kind === 'folder') {
@@ -240,6 +324,7 @@ export default function HomeScreen() {
   useClipboardLinkOffer({
     enabled: Platform.OS === 'ios',
     canPresent: canOfferClipboardLink,
+    knownSavedNormalizedURLs,
     onSaveCandidate: handleClipboardLinkCandidate,
   });
 
@@ -412,7 +497,23 @@ export default function HomeScreen() {
       <HomeContentComposer
         kind={composerKind}
         initialLink={composerInitialLink}
+        diagnosticSource={clipboardOfferContext ? 'home-clipboard-offer' : 'home-manual'}
+        diagnosticChangeCount={clipboardOfferContext?.changeCount ?? null}
+        diagnosticDetectorInstanceID={clipboardOfferContext?.detectorInstanceID ?? null}
+        onLinkSaveSuccess={clipboardOfferContext
+          ? (submittedValue) => handleClipboardLinkSaveSuccess(clipboardOfferContext, submittedValue)
+          : undefined}
         onClose={() => {
+          if (clipboardOfferContext) {
+            traceClipboardOfferEvent('composer-closed', {
+              source: 'home-clipboard-offer',
+              detectorInstanceID: clipboardOfferContext.detectorInstanceID,
+              correlationID: getClipboardOfferCorrelationID(clipboardOfferContext.changeCount),
+              changeCount: clipboardOfferContext.changeCount,
+            });
+            deferClipboardLinkOfferUntilResume(clipboardOfferContext.changeCount);
+            setClipboardOfferContext(null);
+          }
           setComposerKind(null);
           setComposerInitialLink(null);
         }}

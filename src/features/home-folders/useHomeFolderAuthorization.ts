@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { getHomeFolderItemKey, type HomeFolderItemType } from './homeFolderTypes';
 import { useLocalHomeFolders } from './LocalHomeFolderProvider';
@@ -39,13 +39,16 @@ export function useHomeFolderAuthorization(folderId: string | null): HomeFolderA
   const [statusRecord, setStatusRecord] = useState<{
     key: string;
     status: HomeFolderAuthorizationStatus;
-  }>({ key: statusKey, status: 'checking' });
+  }>({ key: statusKey, status: 'cancelled' });
   const status = isReady && folderId && !folder
     ? 'failed'
-    : !folderId || !isProtected || isAuthorized || statusRecord.key !== statusKey
+    : !isReady
       ? 'checking'
-      : statusRecord.status;
-  const lastAutomaticAttemptRef = useRef<string | null>(null);
+      : !folderId || !isProtected || isAuthorized
+        ? 'checking'
+        : statusRecord.key !== statusKey
+          ? 'cancelled'
+          : statusRecord.status;
 
   const requestAuthorization = useCallback(async (): Promise<FolderAuthenticationOutcome> => {
     if (!folderId) return 'authenticated';
@@ -55,16 +58,6 @@ export function useHomeFolderAuthorization(folderId: string | null): HomeFolderA
     if (outcome !== 'authenticated') setStatusRecord({ key: statusKey, status: outcome });
     return outcome;
   }, [authorizeFolder, folderId, isAppActive, statusKey]);
-
-  useEffect(() => {
-    if (!isReady || !folderId || !folder || !folder.isProtected || isAuthorized) return;
-    if (!isAppActive) return;
-
-    const attemptKey = statusKey;
-    if (lastAutomaticAttemptRef.current === attemptKey) return;
-    lastAutomaticAttemptRef.current = attemptKey;
-    void requestAuthorization();
-  }, [folder, folderId, isAppActive, isAuthorized, isReady, requestAuthorization, statusKey]);
 
   return {
     folderId,

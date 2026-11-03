@@ -60,7 +60,7 @@ describe('native Home shell controls', () => {
 
     expect(menuOpening).not.toMatch(/onPress|onOpenChange|triggerSelectionHaptic/);
     expect(homeToolbarMenuSource).toMatch(/function withSelectionHaptic\(action: \(\) => void\): \(\) => void \{[\s\S]*?triggerSelectionHaptic\(\);[\s\S]*?action\(\);/);
-    expect(homeToolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).toHaveLength(9);
+    expect(homeToolbarMenuSource.match(/onPress=\{withSelectionHaptic\(/g) ?? []).toHaveLength(10);
   });
 
   test('uses a mounted SwiftUI Host and the native settings sheet with folder navigation', () => {

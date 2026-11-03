@@ -5,7 +5,11 @@ describe('native link prompt submission', () => {
     const onFailure = jest.fn();
     const submit = jest.fn(async () => ({ status: 'saved' }));
 
-    await expect(submitLinkFromNativePrompt('https://example.com/story?a=1', submit, onFailure))
+    await expect(submitLinkFromNativePrompt(
+      'https://example.com/story?a=1',
+      submit,
+      onFailure,
+    ))
       .resolves.toBe('saved');
 
     expect(submit).toHaveBeenCalledWith('https://example.com/story?a=1');
@@ -48,9 +52,23 @@ describe('native link prompt submission', () => {
     const onFailure = jest.fn();
 
     await expect(
-      submitLinkFromNativePrompt('https://example.com', async () => ({ status }), onFailure),
+      submitLinkFromNativePrompt(
+        'https://example.com',
+        async () => ({ status }),
+        onFailure,
+      ),
     ).resolves.toBe(status);
 
     expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  test('keeps persistence and clipboard event handling outside this post-submit adapter', async () => {
+    await expect(submitLinkFromNativePrompt(
+      'https://example.com',
+      async () => ({ status: 'failed', message: 'Falha' }),
+      jest.fn(),
+    )).resolves.toBe('failed');
+
+    expect(submitLinkFromNativePrompt.toString()).not.toContain('onSuccess');
   });
 });

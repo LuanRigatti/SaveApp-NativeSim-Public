@@ -88,6 +88,7 @@ import {
 import { triggerSelectionHaptic } from '@/utils/haptics';
 import { NativeCardContextMenu, type NativeCardContextMenuAction } from '@/components/native';
 import HomeFolderIndicator from '@/features/home-folders/HomeFolderIndicator';
+import { getHomeFolderAssignmentAlert } from '@/features/home-folders/folderAssignmentOperations';
 import { HomeFolderAssignmentPicker } from '@/features/home-folders/HomeFolderAssignmentPicker';
 import { useLocalHomeFolders } from '@/features/home-folders/LocalHomeFolderProvider';
 import { getFolderAuthenticationFailureMessage } from '@/features/home-folders/folderFaceIdAuthentication';
@@ -325,50 +326,9 @@ export function PhotoMasonryGallery({
         : folderFilter.kind;
   const previousFolderFilterKeyRef = useRef(currentFolderFilterKey);
   const { fontScale, height: screenHeight, width: screenWidth } = useWindowDimensions();
-  const showGlobalEmptyState = isInitialFeedReady && homeFoldersReady && shouldShowGlobalHomeEmptyState({
-    catalogsLoadedSuccessfully: homeCatalogsLoadedSuccessfully,
-    mediaCount: media.length,
-    savedContentCount: contents.length,
-    documentCount: documents.length,
-    checklistCount: checklists.length,
-    searchQuery,
-    favoritesOnly,
-    folderFilterKind: folderFilter.kind,
-  });
   const listMetrics = getHomeListMetrics(viewMode, fontScale);
   const listRowHeight = listMetrics.rowHeight;
   const listThumbnailSize = listMetrics.thumbnailSize;
-  const galleryContentContainerStyle = useMemo<StyleProp<ViewStyle>>(() => {
-    const baseStyle = viewMode === 'small'
-      ? [contentContainerStyle, { paddingHorizontal: theme.spacing.xs }]
-      : contentContainerStyle;
-    return showGlobalEmptyState ? [baseStyle, { flexGrow: 1 }] : baseStyle;
-  }, [contentContainerStyle, showGlobalEmptyState, theme.spacing.xs, viewMode]);
-  const flattenedContentStyle = StyleSheet.flatten(galleryContentContainerStyle);
-  const fallbackHorizontalPadding = theme.layout.screenHorizontalPadding;
-  const contentLeftPadding = typeof flattenedContentStyle?.paddingLeft === 'number'
-    ? flattenedContentStyle.paddingLeft
-    : typeof flattenedContentStyle?.paddingHorizontal === 'number'
-      ? flattenedContentStyle.paddingHorizontal
-      : fallbackHorizontalPadding;
-  const contentRightPadding = typeof flattenedContentStyle?.paddingRight === 'number'
-    ? flattenedContentStyle.paddingRight
-    : typeof flattenedContentStyle?.paddingHorizontal === 'number'
-      ? flattenedContentStyle.paddingHorizontal
-      : fallbackHorizontalPadding;
-  const gridCardHorizontalMargin = gridCardMode === 'small' ? theme.spacing.xs : theme.spacing.xxs;
-  const gridCardMetrics = useMemo(
-    () => gridCardMode
-      ? getHomeGridCardMetrics(
-          gridCardMode,
-          screenWidth,
-          (contentLeftPadding + contentRightPadding) / 2,
-          gridCardHorizontalMargin,
-          fontScale,
-        )
-      : null,
-    [contentLeftPadding, contentRightPadding, fontScale, gridCardHorizontalMargin, gridCardMode, screenWidth],
-  );
   const supportsAppleZoom = Platform.OS === 'ios' && Number(Platform.Version) >= 18;
   const supportsNativeContextMenu = Platform.OS === 'ios';
   const supportsNativeDocumentContextMenu = Platform.OS === 'ios';
@@ -619,6 +579,48 @@ export function PhotoMasonryGallery({
     () => filterHomeSearchIndex(homeSearchIndex, searchQuery),
     [homeSearchIndex, searchQuery],
   );
+  const showGlobalEmptyState = isInitialFeedReady && homeFoldersReady && shouldShowGlobalHomeEmptyState({
+    catalogsLoadedSuccessfully: homeCatalogsLoadedSuccessfully,
+    visibleItemCount: filteredItems.length,
+    mediaCount: media.length,
+    savedContentCount: contents.length,
+    documentCount: documents.length,
+    checklistCount: checklists.length,
+    searchQuery,
+    favoritesOnly,
+    folderFilterKind: folderFilter.kind,
+  });
+  const galleryContentContainerStyle = useMemo<StyleProp<ViewStyle>>(() => {
+    const baseStyle = viewMode === 'small'
+      ? [contentContainerStyle, { paddingHorizontal: theme.spacing.xs }]
+      : contentContainerStyle;
+    return showGlobalEmptyState ? [baseStyle, { flexGrow: 1 }] : baseStyle;
+  }, [contentContainerStyle, showGlobalEmptyState, theme.spacing.xs, viewMode]);
+  const flattenedContentStyle = StyleSheet.flatten(galleryContentContainerStyle);
+  const fallbackHorizontalPadding = theme.layout.screenHorizontalPadding;
+  const contentLeftPadding = typeof flattenedContentStyle?.paddingLeft === 'number'
+    ? flattenedContentStyle.paddingLeft
+    : typeof flattenedContentStyle?.paddingHorizontal === 'number'
+      ? flattenedContentStyle.paddingHorizontal
+      : fallbackHorizontalPadding;
+  const contentRightPadding = typeof flattenedContentStyle?.paddingRight === 'number'
+    ? flattenedContentStyle.paddingRight
+    : typeof flattenedContentStyle?.paddingHorizontal === 'number'
+      ? flattenedContentStyle.paddingHorizontal
+      : fallbackHorizontalPadding;
+  const gridCardHorizontalMargin = gridCardMode === 'small' ? theme.spacing.xs : theme.spacing.xxs;
+  const gridCardMetrics = useMemo(
+    () => gridCardMode
+      ? getHomeGridCardMetrics(
+          gridCardMode,
+          screenWidth,
+          (contentLeftPadding + contentRightPadding) / 2,
+          gridCardHorizontalMargin,
+          fontScale,
+        )
+      : null,
+    [contentLeftPadding, contentRightPadding, fontScale, gridCardHorizontalMargin, gridCardMode, screenWidth],
+  );
   const showHomeCategoryEmptyState = isInitialFeedReady && homeFoldersReady &&
     folderFilter.kind === 'category' && shouldShowHomeCategoryEmptyState({
       catalogsLoadedSuccessfully: homeCatalogsLoadedSuccessfully,
@@ -747,8 +749,9 @@ export function PhotoMasonryGallery({
     async (itemType: HomeFolderItemType, itemId: number, folderId: string | null) => {
       try {
         await setItemFolder(itemType, itemId, folderId);
-      } catch {
-        Alert.alert('Não foi possível mover o item', 'A pasta atual foi mantida. Tente novamente.');
+      } catch (error) {
+        const failure = getHomeFolderAssignmentAlert(error);
+        if (failure) Alert.alert(failure.title, failure.message);
       }
     },
     [setItemFolder],
@@ -1134,7 +1137,7 @@ export function PhotoMasonryGallery({
                 {getHomeSingleLineTitle(item)}
               </Text>
               {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
-              <HomeTagDots tags={visibleTagDotsForItem(item.mediaType, item.id)} />
+              <HomeTagDots maxWidth={folderName ? '28%' : '32%'} tags={visibleTagDotsForItem(item.mediaType, item.id)} />
             </>
           ) : (
             <View
@@ -1391,7 +1394,7 @@ export function PhotoMasonryGallery({
                 {getHomeSingleLineTitle(item)}
               </Text>
               {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
-              <HomeTagDots tags={visibleTagDotsForItem('link', item.id)} />
+              <HomeTagDots maxWidth={folderName ? '28%' : '32%'} tags={visibleTagDotsForItem('link', item.id)} />
             </LinkCardPressable>
           ) : isListView ? (
             <LinkCardPressable
@@ -1523,7 +1526,7 @@ export function PhotoMasonryGallery({
               {getHomeSingleLineTitle(item)}
             </Text>
             {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
-            <HomeTagDots tags={visibleTagDotsForItem('text', item.id)} />
+            <HomeTagDots maxWidth={folderName ? '28%' : '32%'} tags={visibleTagDotsForItem('text', item.id)} />
           </Pressable>
         ) : isListView ? (
           <Pressable
@@ -1799,7 +1802,7 @@ export function PhotoMasonryGallery({
                 {getHomeSingleLineTitle(document)}
               </Text>
               {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
-              <HomeTagDots tags={visibleTagDotsForItem('document', document.id)} />
+              <HomeTagDots maxWidth={folderName ? '28%' : '32%'} tags={visibleTagDotsForItem('document', document.id)} />
             </>
           ) : (
             <View style={{ flex: 1, gap: theme.spacing.xxs, justifyContent: 'center', minWidth: 0 }}>
@@ -2016,7 +2019,7 @@ export function PhotoMasonryGallery({
             {checklist.title}
           </Text>
           {folderName ? <HomeFolderIndicator flexShrink={0} maxWidth="42%" folderColor={folder?.color ?? null} name={folderName} /> : null}
-          <HomeTagDots tags={visibleTagDotsForItem('checklist', checklist.id)} />
+          <HomeTagDots maxWidth={folderName ? '28%' : '32%'} tags={visibleTagDotsForItem('checklist', checklist.id)} />
           <Text
             ellipsizeMode="tail"
             numberOfLines={1}

@@ -19,7 +19,7 @@ module.exports = {
     splash: {
       image: './assets/splash.png',
       resizeMode: 'contain',
-      backgroundColor: '#F7F8FC',
+      backgroundColor: '#FFFFFF',
     },
     ios: {
       bundleIdentifier: 'com.luanrigatti.saveapp',
@@ -66,8 +66,12 @@ module.exports = {
       [
         'expo-splash-screen',
         {
-          backgroundColor: '#F7F8FC',
+          backgroundColor: '#FFFFFF',
           image: './assets/splash.png',
+          dark: {
+            image: './assets/splash-dark.png',
+            backgroundColor: '#000000',
+          },
           imageWidth: 160,
           resizeMode: 'contain',
         },
